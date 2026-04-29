@@ -1,0 +1,47 @@
+package tui
+
+import (
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+// Internal message types for the TUI.
+
+// SubmitMsg is sent when the user submits chat input.
+type SubmitMsg struct{ Text string }
+
+// TmuxOutputMsg carries new tmux output to the viewer.
+type TmuxOutputMsg struct {
+	Session string
+	Content string
+}
+
+// OrchestratorEventMsg wraps an orchestrator event for the chat pane.
+type OrchestratorEventMsg struct {
+	Type     string // "text", "tool_call", "tool_result", "done"
+	Content  string
+	ToolName string
+}
+
+// SessionListMsg carries the current session list.
+type SessionListMsg struct{ Sessions []string }
+
+// FocusSwitchMsg toggles pane focus.
+type FocusSwitchMsg struct{}
+
+// AgentStatusMsg reports agent status change.
+type AgentStatusMsg struct {
+	Session string
+	Status  string // "ready", "working", "completed", "error"
+}
+
+// tickMsg is used for periodic tmux polling.
+type tickMsg struct{}
+
+// tickCmd returns a command that produces a tickMsg after polling interval.
+func tickCmd() tea.Cmd {
+	return tea.Tick(500, func(time.Time) tea.Msg {
+		return tickMsg{}
+	})
+}
