@@ -221,24 +221,26 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (c ChatModel) View() tea.View {
-	var b strings.Builder
-
 	targetLines := c.height - 3
 
 	log.Printf("[chat/view] height=%d targetLines=%d working=%v msgs=%d",
 		c.height, targetLines, c.working, len(c.messages))
 
-	visible := c.visibleMessages(targetLines)
-	for _, m := range visible {
+	// Render all content into lines, then trim from top to fit.
+	var contentLines []string
+
+	for _, m := range c.messages {
+		var rendered string
 		switch m.Role {
 		case "user":
-			b.WriteString(userMsgStyle.Render("> " + m.Content))
+			rendered = userMsgStyle.Render("> " + m.Content)
 		case "assistant":
-			b.WriteString(assistantMsgStyle.Render(renderMarkdown(m.Content)))
+			rendered = assistantMsgStyle.Render(renderMarkdown(m.Content))
 		case "system":
-			b.WriteString(systemMsgStyle.Render(m.Content))
+			rendered = systemMsgStyle.Render(m.Content)
 		}
-		b.WriteString("\n")
+		contentLines = append(contentLines, strings.Split(rendered, "\n")...)
+		contentLines = append(contentLines, "")
 	}
 
 	if c.working {
@@ -248,14 +250,24 @@ func (c ChatModel) View() tea.View {
 		if label == "" {
 			label = "Thinking"
 		}
-		b.WriteString(toolCallStyle.Render(fmt.Sprintf("%s %s %.0fs", frame, label, elapsed.Seconds())))
-		b.WriteString("\n")
+		contentLines = append(contentLines,
+			toolCallStyle.Render(fmt.Sprintf("%s %s %.0fs", frame, label, elapsed.Seconds())),
+			"",
+		)
 	}
 
-	contentWritten := strings.Count(b.String(), "\n")
-	for contentWritten < targetLines-1 {
-		b.WriteString("\n")
-		contentWritten++
+	// Reserve 1 line for input. Trim from top to show latest content.
+	maxContentLines := targetLines - 1
+	if maxContentLines < 1 {
+		maxContentLines = 1
+	}
+	if len(contentLines) > maxContentLines {
+		contentLines = contentLines[len(contentLines)-maxContentLines:]
+	}
+
+	// Pad to fill available space.
+	for len(contentLines) < maxContentLines {
+		contentLines = append(contentLines, "")
 	}
 
 	cursorLine := "> " + c.input
@@ -269,9 +281,9 @@ func (c ChatModel) View() tea.View {
 		}
 		cursorLine = "> " + before + ch + after
 	}
-	b.WriteString(chatInputStyle.Render(cursorLine))
+	contentLines = append(contentLines, chatInputStyle.Render(cursorLine))
 
-	return tea.NewView(b.String())
+	return tea.NewView(strings.Join(contentLines, "\n"))
 }
 
 func renderMarkdown(text string) string {
@@ -286,26 +298,7 @@ func renderMarkdown(text string) string {
 	return strings.TrimSpace(rendered)
 }
 
-func (c ChatModel) visibleMessages(maxLines int) []ChatMessage {
-	if len(c.messages) == 0 {
-		return nil
-	}
-	available := maxLines - 2
-	if available < 1 {
-		available = 1
-	}
-	var result []ChatMessage
-	lines := 0
-	for i := len(c.messages) - 1; i >= 0; i-- {
-		msgLines := strings.Count(c.messages[i].Content, "\n") + 1
-		if lines+msgLines > available && len(result) > 0 {
-			break
-		}
-		lines += msgLines
-		result = append([]ChatMessage{c.messages[i]}, result...)
-	}
-	return result
-}
+
 
 func (c *ChatModel) SetFocused(f bool) {
 	c.focused = f
