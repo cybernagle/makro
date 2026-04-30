@@ -13,7 +13,7 @@ type Config struct {
 	LLMProvider     string `json:"llm_provider"`
 	LLMModel        string `json:"llm_model"`
 	LLMAPIKey       string `json:"-"`
-	LLMBaseURL      string `json:"-"`
+	LLMBaseURL      string `json:"llm_base_url,omitempty"`
 	TmuxSocketPath  string `json:"tmux_socket_path"`
 	DataDir         string `json:"data_dir"`
 	ChatHistoryPath string `json:"chat_history_path"`
@@ -64,9 +64,11 @@ func Load() (*Config, error) {
 	// BigModel (智谱AI) uses OpenAI-compatible protocol at a different path.
 	if strings.Contains(cfg.LLMBaseURL, "bigmodel") {
 		rewritten := strings.Replace(cfg.LLMBaseURL, "/api/anthropic", "/api/coding/paas/v4", 1)
-		log.Printf("[config] BigModel detected, switching to OpenAI protocol: %s", rewritten)
-		cfg.LLMBaseURL = rewritten
-		cfg.LLMProvider = "openai"
+		if rewritten != cfg.LLMBaseURL {
+			log.Printf("[config] BigModel detected, switching to OpenAI protocol: %s", rewritten)
+			cfg.LLMBaseURL = rewritten
+			cfg.LLMProvider = "openai"
+		}
 	}
 
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {

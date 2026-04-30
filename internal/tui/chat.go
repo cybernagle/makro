@@ -182,16 +182,19 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return c, tea.Quit
 		default:
-			s := msg.String()
-			if s == "space" {
-				s = " "
+			text := msg.Text
+			if text == "" {
+				s := msg.String()
+				if s == "space" {
+					text = " "
+				} else if utf8.RuneCountInString(s) == 1 {
+					text = s
+				}
 			}
-			// Only insert actual text characters, not symbolic key names
-			// like "ctrl+a", "pgup", "f1", etc.
-			if utf8.RuneCountInString(s) == 1 {
+			if text != "" {
 				pos := c.cursorByteIdx()
-				c.input = c.input[:pos] + s + c.input[pos:]
-				c.cursor++
+				c.input = c.input[:pos] + text + c.input[pos:]
+				c.cursor += utf8.RuneCountInString(text)
 			}
 		}
 
