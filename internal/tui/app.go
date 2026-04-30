@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"os"
 	"fmt"
 	"log"
 	"strings"
@@ -35,6 +36,7 @@ type AppModel struct {
 	sendFn       func(tea.Msg)
 	lastOutput   *string
 	configInfo   string
+	welcomed     bool
 }
 
 type tmuxClient interface {
@@ -152,7 +154,7 @@ func (a AppModel) View() tea.View {
 	chatW := a.width * 2 / 5
 	chatView := a.chat.View()
 	chatContent := fmt.Sprintf("%s\n%s", chatTitle.Render("Chat"), chatView.Content)
-	chatPane := chatStyle.Width(chatW).Height(a.height).Render(chatContent)
+	chatPane := chatStyle.Width(chatW).Height(a.height - 2).Render(chatContent)
 
 	viewerStyle, viewerTitle := PaneStyles(a.focus == FocusViewer)
 	viewerW := a.width - chatW - 2
@@ -161,7 +163,7 @@ func (a AppModel) View() tea.View {
 		viewerTitle.Render(fmt.Sprintf("Sessions %s", a.viewer.ActiveSession())),
 		viewerView.Content,
 	)
-	viewerPane := viewerStyle.Width(viewerW).Height(a.height).Render(viewerContent)
+	viewerPane := viewerStyle.Width(viewerW).Height(a.height - 2).Render(viewerContent)
 
 	joined := lipgloss.JoinHorizontal(lipgloss.Top, chatPane, viewerPane)
 
@@ -173,6 +175,17 @@ func (a AppModel) View() tea.View {
 	joinedLines := strings.Count(joined, "\n") + 1
 	log.Printf("[tui/view] term=%dx%d chatContent=%d chatPane=%d viewerContent=%d viewerPane=%d joined=%d",
 		a.width, a.height, chatLines, chatPaneLines, viewerLines, viewerPaneLines, joinedLines)
+
+	// Dump raw strings for diagnosis (first frame only).
+	if !a.welcomed {
+		a.welcomed = true
+		go func() {
+			os.WriteFile("/tmp/fingersaver_chatContent.txt", []byte(chatContent), 0644)
+			os.WriteFile("/tmp/fingersaver_chatPane.txt", []byte(chatPane), 0644)
+			os.WriteFile("/tmp/fingersaver_viewerContent.txt", []byte(viewerContent), 0644)
+			os.WriteFile("/tmp/fingersaver_viewerPane.txt", []byte(viewerPane), 0644)
+		}()
+	}
 
 	v := tea.NewView(joined)
 	v.AltScreen = true

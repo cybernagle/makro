@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -24,20 +25,24 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 type spinnerTickMsg time.Time
 type cursorBlinkMsg time.Time
 
-func (c ChatModel) newMDRenderer() *glamour.TermRenderer {
-	w := c.width - 4 // pane inner width minus border and padding
-	if w < 40 {
-		w = 40
-	}
-	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(w),
-	)
-	if err != nil {
-		log.Printf("[chat] glamour init error: %v", err)
-		return nil
-	}
-	return r
+var (
+	mdOnce     sync.Once
+	mdRenderer *glamour.TermRenderer
+)
+
+func getMDRenderer() *glamour.TermRenderer {
+	mdOnce.Do(func() {
+		r, err := glamour.NewTermRenderer(
+			glamour.WithStandardStyle("dark"),
+			glamour.WithWordWrap(0),
+		)
+		if err != nil {
+			log.Printf("[chat] glamour init error: %v", err)
+			return
+		}
+		mdRenderer = r
+	})
+	return mdRenderer
 }
 
 type ChatModel struct {
@@ -232,7 +237,7 @@ func (c ChatModel) View() tea.View {
 			if m.Streaming {
 				rendered = assistantMsgStyle.Render(m.Content)
 			} else {
-				rendered = assistantMsgStyle.Render(c.renderMarkdown(m.Content))
+				rendered = assistantMsgStyle.Render(renderMarkdown(m.Content))
 			}
 		case "system":
 			rendered = systemMsgStyle.Render(m.Content)
@@ -295,8 +300,8 @@ func (c ChatModel) View() tea.View {
 	return tea.NewView(output)
 }
 
-func (c ChatModel) renderMarkdown(text string) string {
-	r := c.newMDRenderer()
+func renderMarkdown(text string) string {
+	r := getMDRenderer()
 	if r == nil {
 		return text
 	}
