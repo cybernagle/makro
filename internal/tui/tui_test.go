@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/naglezhang/fingersaver/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -113,6 +114,6 @@ func TestMapTmuxKey(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
-	assert.Equal(t, "short", truncate("short", 10))
-	assert.Equal(t, "0123456789...", truncate("0123456789012345", 10))
+	assert.Equal(t, "short", util.Truncate("short", 10))
+	assert.Equal(t, "0123456789...", util.Truncate("0123456789012345", 10))
 }

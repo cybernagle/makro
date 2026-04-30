@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/naglezhang/fingersaver/internal/util"
+
 	"github.com/naglezhang/fingersaver/internal/tmux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -178,6 +180,6 @@ func TestAllToolsCount(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
-	assert.Equal(t, "short", truncate("short", 10))
-	assert.Equal(t, "a very long string i...", truncate("a very long string indeed", 20))
+	assert.Equal(t, "short", util.Truncate("short", 10))
+	assert.Equal(t, "a very long string i...", util.Truncate("a very long string indeed", 20))
 }

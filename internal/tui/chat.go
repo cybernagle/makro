@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/naglezhang/fingersaver/internal/util"
 )
 
 type ChatMessage struct {
@@ -83,7 +84,7 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Type == "text" {
 			c.appendMessage("assistant", msg.Content)
 		} else if msg.Type == "tool_result" {
-			c.appendMessage("system", fmt.Sprintf("[%s] %s", msg.ToolName, truncate(msg.Content, 200)))
+			c.appendMessage("system", fmt.Sprintf("[%s] %s", msg.ToolName, util.Truncate(msg.Content, 200)))
 		}
 	}
 
@@ -178,10 +179,3 @@ func (c *ChatModel) LoadHistory() error {
 	return nil
 }
 
-func truncate(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen]) + "..."
-}

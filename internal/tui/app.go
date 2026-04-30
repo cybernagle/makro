@@ -31,6 +31,7 @@ type AppModel struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	sendFn       func(tea.Msg)
+	lastOutput   string
 }
 
 type tmuxClient interface {
@@ -94,12 +95,13 @@ func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, a.pollTmux())
 		cmds = append(cmds, tickCmd())
 
-		case combinedTmuxMsg:
-			a.viewer.AppendOutput(msg.session, msg.output)
-			m2, cmd2 := a.viewer.Update(SessionListMsg{Sessions: msg.sessions})
-			a.viewer = m2.(ViewerModel)
-			cmds = append(cmds, cmd2)
+	case combinedTmuxMsg:
+		a.viewer.AppendOutput(msg.session, msg.output)
+		m2, cmd2 := a.viewer.Update(SessionListMsg{Sessions: msg.sessions})
+		a.viewer = m2.(ViewerModel)
+		cmds = append(cmds, cmd2)
 
+		return a, tea.Batch(cmds...)
 	case OrchestratorEventMsg:
 		m, cmd := a.chat.Update(msg)
 		a.chat = m.(ChatModel)
@@ -203,7 +205,8 @@ func (a AppModel) pollTmux() tea.Cmd {
 				pane := s.ActivePane()
 				if pane != nil && pane.ID != "" {
 					cmd := tmux.CapturePaneCmd(pane.ID)
-					if out, err := a.tmuxClient.Exec(cmd); err == nil && out != "" {
+					if out, err := a.tmuxClient.Exec(cmd); err == nil && out != "" && out != a.lastOutput {
+							a.lastOutput = out
 						return combinedTmuxMsg{
 							sessions: names,
 							output:   out,

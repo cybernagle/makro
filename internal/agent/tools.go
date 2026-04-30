@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/naglezhang/fingersaver/internal/tmux"
+	"github.com/naglezhang/fingersaver/internal/util"
 )
 
 type Tool struct {
@@ -84,9 +85,9 @@ func NewSwitchSessionTool(tc TmuxClient) Tool {
 				return "", fmt.Errorf("session %q not found", name)
 			}
 			if _, err := tc.Exec(tmux.SwitchClientCmd(name)); err != nil {
-					return "", fmt.Errorf("switch to %q: %w", name, err)
-				}
-				return fmt.Sprintf("Switched to session %q.", name), nil
+				return "", fmt.Errorf("switch to %q: %w", name, err)
+			}
+			return fmt.Sprintf("Switched to session %q.", name), nil
 		},
 	}
 }
@@ -134,7 +135,7 @@ func NewSendToSessionTool(tc TmuxClient) Tool {
 			if err != nil {
 				return "", fmt.Errorf("send enter to %q: %w", name, err)
 			}
-			return fmt.Sprintf("Sent to %q: %s", name, truncate(message, 50)), nil
+			return fmt.Sprintf("Sent to %q: %s", name, util.Truncate(message, 50)), nil
 		},
 	}
 }
@@ -174,10 +175,3 @@ func AllTools(tc TmuxClient) []Tool {
 	}
 }
 
-func truncate(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen]) + "..."
-}

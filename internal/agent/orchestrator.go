@@ -88,11 +88,7 @@ func (o *Orchestrator) SetCommandRegistry(cr *CommandRegistry) {
 }
 
 func (o *Orchestrator) Messages() []llm.Message {
-	o.msgMu.Lock()
-	defer o.msgMu.Unlock()
-	cp := make([]llm.Message, len(o.messages))
-	copy(cp, o.messages)
-	return cp
+	return o.snapshotMessages()
 }
 
 func (o *Orchestrator) Hooks() *HookManager {
