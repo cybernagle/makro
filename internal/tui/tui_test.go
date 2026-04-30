@@ -75,8 +75,8 @@ func TestViewerModelAppend(t *testing.T) {
 	v.AppendOutput("auth", "line 2\n")
 
 	assert.Equal(t, "auth", v.ActiveSession())
-	assert.Contains(t, v.sessions["auth"], "line 1")
-	assert.Contains(t, v.sessions["auth"], "line 2")
+	// AppendOutput replaces (capture-pane returns full screen each time).
+	assert.Equal(t, "line 2\n", v.sessions["auth"])
 }
 
 func TestViewerModelView(t *testing.T) {

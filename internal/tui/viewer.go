@@ -168,5 +168,9 @@ func (v *ViewerModel) ActiveSession() string     { return v.active }
 func (v *ViewerModel) SetActiveSession(s string) { v.active = s }
 
 func (v *ViewerModel) AppendOutput(session, content string) {
-	v.appendAndTrim(session, content)
+	// capture-pane returns the full screen each time; replace, don't append.
+	v.sessions[session] = content
+	if v.active == "" {
+		v.active = session
+	}
 }
