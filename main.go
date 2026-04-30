@@ -56,6 +56,7 @@ func main() {
 
 	// Create and run TUI.
 	app := tui.NewAppModel(orch, tc)
+	app.SetConfigInfo(cfg.Summary())
 
 	// Set up chat history persistence.
 	if cfg.ChatHistoryPath != "" {

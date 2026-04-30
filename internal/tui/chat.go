@@ -14,13 +14,17 @@ type ChatMessage struct {
 }
 
 type ChatModel struct {
-	messages []ChatMessage
-	input    string
-	width    int
-	height   int
-	focused  bool
-	cursor   int
-	history  *ChatHistory
+	messages   []ChatMessage
+	input      string
+	width      int
+	height     int
+	focused    bool
+	cursor     int
+	history    *ChatHistory
+	working    bool
+	workingMsg string
+	inputHistory []string
+	historyIdx int
 }
 
 func NewChatModel() ChatModel {
@@ -50,8 +54,12 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return c, nil
 			}
 			text := c.input
+			c.inputHistory = append(c.inputHistory, text)
+			c.historyIdx = len(c.inputHistory)
 			c.input = ""
 			c.cursor = 0
+			c.working = true
+			c.workingMsg = "Thinking..."
 			c.appendMessage("user", text)
 			return c, func() tea.Msg { return SubmitMsg{Text: text} }
 		case "backspace":
@@ -71,20 +79,46 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if c.cursor < len(c.input) {
 				c.cursor++
 			}
+		case "up":
+			if c.historyIdx > 0 {
+				c.historyIdx--
+				c.input = c.inputHistory[c.historyIdx]
+				c.cursor = len(c.input)
+			}
+		case "down":
+			if c.historyIdx < len(c.inputHistory)-1 {
+				c.historyIdx++
+				c.input = c.inputHistory[c.historyIdx]
+			} else if c.historyIdx < len(c.inputHistory) {
+				c.historyIdx = len(c.inputHistory)
+				c.input = ""
+			}
+			c.cursor = len(c.input)
 		case "ctrl+c":
 			return c, tea.Quit
 		default:
-			if msg.Code != 0 && msg.String() != "" && len(msg.String()) == 1 {
-				c.input = c.input[:c.cursor] + msg.String() + c.input[c.cursor:]
-				c.cursor++
+			s := msg.String()
+			if s != "" {
+				c.input = c.input[:c.cursor] + s + c.input[c.cursor:]
+				c.cursor += len(s)
 			}
 		}
 
 	case OrchestratorEventMsg:
-		if msg.Type == "text" {
+		switch msg.Type {
+		case "text":
 			c.appendMessage("assistant", msg.Content)
-		} else if msg.Type == "tool_result" {
+			c.working = false
+		case "tool_call":
+			c.working = true
+			c.workingMsg = fmt.Sprintf("Calling %s...", msg.ToolName)
+		case "tool_result":
 			c.appendMessage("system", fmt.Sprintf("[%s] %s", msg.ToolName, util.Truncate(msg.Content, 200)))
+			c.working = true
+			c.workingMsg = "Thinking..."
+		case "done":
+			c.working = false
+			c.workingMsg = ""
 		}
 	}
 
@@ -112,15 +146,30 @@ func (c ChatModel) View() tea.View {
 		b.WriteString("\n")
 	}
 
+	// Working indicator.
+	if c.working {
+		b.WriteString(toolCallStyle.Render(c.workingMsg))
+		b.WriteString("\n")
+	}
+
 	linesUsed := len(visible)
+	if c.working {
+		linesUsed++
+	}
 	for i := linesUsed; i < msgHeight; i++ {
 		b.WriteString("\n")
 	}
 
 	b.WriteString(strings.Repeat("─", max(c.width-2, 1)) + "\n")
 
-	prompt := "> "
-	cursorLine := prompt + c.input
+	// Input line with cursor.
+	cursorLine := "> " + c.input
+	if c.focused && !c.working {
+		// Show block cursor at position.
+		before := c.input[:c.cursor]
+		after := c.input[c.cursor:]
+		cursorLine = "> " + before + "█" + after
+	}
 	b.WriteString(chatInputStyle.Render(cursorLine))
 
 	return tea.NewView(b.String())
@@ -178,4 +227,3 @@ func (c *ChatModel) LoadHistory() error {
 	c.messages = msgs
 	return nil
 }
-

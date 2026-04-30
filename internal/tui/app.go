@@ -31,7 +31,9 @@ type AppModel struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	sendFn       func(tea.Msg)
-	lastOutput   string
+	lastOutput   *string
+	configInfo   string
+	welcomed     bool
 }
 
 type tmuxClient interface {
@@ -42,14 +44,19 @@ type tmuxClient interface {
 func NewAppModel(orch *agent.Orchestrator, tc tmuxClient) AppModel {
 	ctx, cancel := context.WithCancel(context.Background())
 	return AppModel{
-		chat:         NewChatModel(),
-		viewer:       NewViewerModel(),
-		focus:        FocusChat,
+		chat:       NewChatModel(),
+		viewer:     NewViewerModel(),
+		focus:      FocusChat,
 		orchestrator: orch,
-		tmuxClient:   tc,
-		ctx:          ctx,
-		cancel:       cancel,
+		tmuxClient: tc,
+		ctx:        ctx,
+		cancel:     cancel,
+		lastOutput: new(string),
 	}
+}
+
+func (a *AppModel) SetConfigInfo(info string) {
+	a.configInfo = info
 }
 
 func (a AppModel) Init() tea.Cmd {
@@ -136,7 +143,9 @@ func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (a AppModel) View() tea.View {
 	if a.width == 0 {
-		return tea.NewView("Loading...")
+		v := tea.NewView("Loading...")
+		v.AltScreen = true
+		return v
 	}
 
 	chatStyle, chatTitle := PaneStyles(a.focus == FocusChat)
@@ -155,7 +164,9 @@ func (a AppModel) View() tea.View {
 	viewerPane := viewerStyle.Width(viewerW).Height(a.height).Render(viewerContent)
 
 	joined := lipgloss.JoinHorizontal(lipgloss.Top, chatPane, viewerPane)
-	return tea.NewView(joined)
+	v := tea.NewView(joined)
+	v.AltScreen = true
+	return v
 }
 
 func (a *AppModel) processOrchestratorInput(text string) {
@@ -205,8 +216,8 @@ func (a AppModel) pollTmux() tea.Cmd {
 				pane := s.ActivePane()
 				if pane != nil && pane.ID != "" {
 					cmd := tmux.CapturePaneCmd(pane.ID)
-					if out, err := a.tmuxClient.Exec(cmd); err == nil && out != "" && out != a.lastOutput {
-							a.lastOutput = out
+					if out, err := a.tmuxClient.Exec(cmd); err == nil && out != "" && out != *a.lastOutput {
+							*a.lastOutput = out
 						return combinedTmuxMsg{
 							sessions: names,
 							output:   out,
@@ -242,6 +253,7 @@ func mapTmuxKey(key string) string {
 	mappings := map[string]string{
 		"up": "Up", "down": "Down", "left": "Left", "right": "Right",
 		"space": "Space",
+		"[": "", "]": "",
 	}
 	if mapped, ok := mappings[key]; ok {
 		return mapped

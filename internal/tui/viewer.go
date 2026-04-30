@@ -13,7 +13,7 @@ type ViewerModel struct {
 	width      int
 	height     int
 	focused    bool
-	scrollback int // max lines to keep per session
+	scrollback int
 }
 
 func NewViewerModel() ViewerModel {
@@ -34,30 +34,10 @@ func (v ViewerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v.height = msg.Height
 
 	case TmuxOutputMsg:
-		buf := v.sessions[msg.Session]
-		buf += msg.Content
-		// Trim to scrollback limit.
-		if lines := strings.Split(buf, "\n"); len(lines) > v.scrollback {
-			buf = strings.Join(lines[len(lines)-v.scrollback:], "\n")
-		}
-		v.sessions[msg.Session] = buf
-		// Auto-switch to session with new output.
-		if v.active == "" {
-			v.active = msg.Session
-		}
+		v.appendAndTrim(msg.Session, msg.Content)
 
 	case SessionListMsg:
-		// Remove buffers for sessions that no longer exist.
-		activeSet := make(map[string]bool, len(msg.Sessions))
-		for _, s := range msg.Sessions {
-			activeSet[s] = true
-		}
-		for name := range v.sessions {
-			if !activeSet[name] {
-				delete(v.sessions, name)
-			}
-		}
-		// Auto-select first session if none active.
+		v.pruneSessions(msg.Sessions)
 		if v.active == "" && len(msg.Sessions) > 0 {
 			v.active = msg.Sessions[0]
 		}
@@ -66,43 +46,120 @@ func (v ViewerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !v.focused {
 			return v, nil
 		}
-		// Forward keystrokes to tmux (handled by AppModel).
+		v.handleKey(msg.String())
 	}
+
 	return v, nil
 }
 
 func (v ViewerModel) View() tea.View {
-	var content string
-	if v.active != "" {
-		content = v.sessions[v.active]
+	var b strings.Builder
+
+	// Session tabs.
+	if len(v.sessionList()) > 0 {
+		b.WriteString(v.renderTabs())
+		b.WriteString("\n")
 	}
 
-	// Trim to visible area.
+	content := v.sessions[v.active]
 	lines := strings.Split(content, "\n")
-	visibleHeight := v.height - 4
+	visibleHeight := v.height - 5
 	if visibleHeight < 1 {
 		visibleHeight = 1
 	}
 
-	// Show the last N lines.
 	start := len(lines) - visibleHeight
 	if start < 0 {
 		start = 0
 	}
 	visible := lines[start:]
 
-	var b strings.Builder
-	for _, l := range visible {
-		b.WriteString(viewerContentStyle.Render(l))
-		b.WriteString("\n")
-	}
+	// Render entire block once.
+	b.WriteString(viewerContentStyle.Render(strings.Join(visible, "\n")))
 
-	// Fill remaining space.
 	for i := len(visible); i < visibleHeight; i++ {
 		b.WriteString("\n")
 	}
 
 	return tea.NewView(b.String())
+}
+
+func (v *ViewerModel) renderTabs() string {
+	sessions := v.sessionList()
+	var parts []string
+	for _, s := range sessions {
+		if s == v.active {
+			parts = append(parts, viewerTitleStyle.Render("["+s+"]"))
+		} else {
+			parts = append(parts, statusStyle.Render(" "+s+" "))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func (v *ViewerModel) handleKey(key string) {
+	switch key {
+	case "[", "left":
+		v.switchSession(-1)
+	case "]", "right":
+		v.switchSession(1)
+	}
+}
+
+func (v *ViewerModel) switchSession(dir int) {
+	sessions := v.sessionList()
+	if len(sessions) == 0 {
+		return
+	}
+	idx := 0
+	for i, s := range sessions {
+		if s == v.active {
+			idx = i
+			break
+		}
+	}
+	idx += dir
+	if idx < 0 {
+		idx = len(sessions) - 1
+	} else if idx >= len(sessions) {
+		idx = 0
+	}
+	v.active = sessions[idx]
+}
+
+func (v *ViewerModel) sessionList() []string {
+	if len(v.sessions) == 0 {
+		return nil
+	}
+	// SessionListMsg prunes removed sessions, so map keys are current.
+	names := make([]string, 0, len(v.sessions))
+	for name := range v.sessions {
+		names = append(names, name)
+	}
+	return names
+}
+
+func (v *ViewerModel) appendAndTrim(session, content string) {
+	buf := v.sessions[session] + content
+	if lines := strings.Split(buf, "\n"); len(lines) > v.scrollback {
+		buf = strings.Join(lines[len(lines)-v.scrollback:], "\n")
+	}
+	v.sessions[session] = buf
+	if v.active == "" {
+		v.active = session
+	}
+}
+
+func (v *ViewerModel) pruneSessions(active []string) {
+	activeSet := make(map[string]bool, len(active))
+	for _, s := range active {
+		activeSet[s] = true
+	}
+	for name := range v.sessions {
+		if !activeSet[name] {
+			delete(v.sessions, name)
+		}
+	}
 }
 
 func (v *ViewerModel) SetFocused(f bool)         { v.focused = f }
@@ -111,13 +168,5 @@ func (v *ViewerModel) ActiveSession() string     { return v.active }
 func (v *ViewerModel) SetActiveSession(s string) { v.active = s }
 
 func (v *ViewerModel) AppendOutput(session, content string) {
-	buf := v.sessions[session]
-	buf += content
-	if lines := strings.Split(buf, "\n"); len(lines) > v.scrollback {
-		buf = strings.Join(lines[len(lines)-v.scrollback:], "\n")
-	}
-	v.sessions[session] = buf
-	if v.active == "" {
-		v.active = session
-	}
+	v.appendAndTrim(session, content)
 }

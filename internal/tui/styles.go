@@ -4,50 +4,68 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// Color palette — neutral zinc base with a single teal accent.
 var (
-	// Base styles.
+	colorBase      = lipgloss.Color("252") // light text
+	colorDim       = lipgloss.Color("243") // muted text
+	colorAccent    = lipgloss.Color("37")  // teal — borders, user messages, focus
+	colorSecondary = lipgloss.Color("180") // warm gold — viewer title
+	colorError     = lipgloss.Color("167") // soft red
+	colorSuccess   = lipgloss.Color("142") // muted green
+	colorPaneBg    = lipgloss.Color("234") // dark bg for panes
+)
+
+var (
 	borderStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240"))
+			BorderForeground(lipgloss.Color("240")).
+			Background(colorPaneBg)
 
 	focusedBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("86")) // cyan-green when focused
+				BorderForeground(colorAccent).
+				Background(colorPaneBg)
 
-	// Chat pane.
 	chatTitleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("86"))
+			Foreground(colorAccent)
 
-	chatInputStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("254"))
-
-	userMsgStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("86"))
-
-	assistantMsgStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("254"))
-
-	systemMsgStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("243"))
-
-	// Viewer pane.
 	viewerTitleStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("213")) // pink
+				Foreground(colorSecondary)
 
 	viewerContentStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("252"))
+				Foreground(colorBase)
 
-	// Status bar.
+	chatInputStyle = lipgloss.NewStyle().
+			Foreground(colorBase)
+
+	userMsgStyle = lipgloss.NewStyle().
+			Foreground(colorAccent).
+			Bold(true)
+
+	assistantMsgStyle = lipgloss.NewStyle().
+				Foreground(colorBase)
+
+	systemMsgStyle = lipgloss.NewStyle().
+			Foreground(colorDim)
+
+	toolCallStyle = lipgloss.NewStyle().
+			Foreground(colorSecondary).
+			Italic(true)
+
 	statusStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("243"))
+			Foreground(colorDim)
+
+	statusBarStyle = lipgloss.NewStyle().
+			Foreground(colorDim).
+			Background(lipgloss.Color("236"))
 )
 
-// PaneStyles returns styles for a pane based on focus state.
+// PaneStyles returns (border, title) styles based on focus state.
 func PaneStyles(focused bool) (lipgloss.Style, lipgloss.Style) {
 	if focused {
 		return focusedBorderStyle, chatTitleStyle
 	}
-	return borderStyle, chatTitleStyle
+	return borderStyle, viewerTitleStyle
 }
