@@ -223,9 +223,6 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (c ChatModel) View() tea.View {
 	targetLines := c.height - 3
 
-	log.Printf("[chat/view] height=%d targetLines=%d working=%v msgs=%d",
-		c.height, targetLines, c.working, len(c.messages))
-
 	// Render all content into lines, then trim from top to fit.
 	var contentLines []string
 
@@ -281,6 +278,9 @@ func (c ChatModel) View() tea.View {
 		contentLines = append(contentLines, "")
 	}
 
+	log.Printf("[chat/view] height=%d targetLines=%d contentLines=%d/%d maxContent=%d working=%v msgs=%d",
+		c.height, targetLines, len(contentLines), maxContentLines, maxContentLines, c.working, len(c.messages))
+
 	cursorLine := "> " + c.input
 	if c.focused && !c.working {
 		pos := c.cursorByteIdx()
@@ -294,7 +294,10 @@ func (c ChatModel) View() tea.View {
 	}
 	contentLines = append(contentLines, chatInputStyle.Render(cursorLine))
 
-	return tea.NewView(strings.Join(contentLines, "\n"))
+	output := strings.Join(contentLines, "\n")
+	outputLines := strings.Count(output, "\n") + 1
+	log.Printf("[chat/view] outputLines=%d targetLines=%d", outputLines, targetLines)
+	return tea.NewView(output)
 }
 
 func renderMarkdown(text string) string {
