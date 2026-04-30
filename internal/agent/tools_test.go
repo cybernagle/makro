@@ -107,7 +107,7 @@ func TestSwitchSessionTool(t *testing.T) {
 		"name": "target",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, result, "Switched")
+	assert.Equal(t, "target", result)
 }
 
 func TestSwitchSessionNotFound(t *testing.T) {

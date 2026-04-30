@@ -117,6 +117,10 @@ func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return a, tea.Batch(cmds...)
 	case OrchestratorEventMsg:
+		// When switch_session tool completes, update viewer active session.
+		if msg.Type == "tool_result" && msg.ToolName == "switch_session" && msg.Content != "" {
+			a.viewer.SetActiveSession(msg.Content)
+		}
 		m, cmd := a.chat.Update(msg)
 		a.chat = m.(ChatModel)
 		cmds = append(cmds, cmd)

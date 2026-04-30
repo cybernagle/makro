@@ -84,10 +84,9 @@ func NewSwitchSessionTool(tc TmuxClient) Tool {
 			if s == nil {
 				return "", fmt.Errorf("session %q not found", name)
 			}
-			if _, err := tc.Exec(tmux.SwitchClientCmd(name)); err != nil {
-				return "", fmt.Errorf("switch to %q: %w", name, err)
-			}
-			return fmt.Sprintf("Switched to session %q.", name), nil
+			// No switch-client needed — viewer active session is updated
+			// by app.go when it processes the switch_session tool result.
+			return name, nil
 		},
 	}
 }
