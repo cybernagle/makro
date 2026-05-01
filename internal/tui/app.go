@@ -98,11 +98,10 @@ func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, a.pollTmux())
 		cmds = append(cmds, tickCmd())
 
-	case combinedTmuxMsg:
-		a.lastOutput[msg.session] = msg.output
-		// Prune lastOutput entries for sessions that no longer exist.
-		activeSet := make(map[string]struct{}, len(msg.sessions))
-		for _, s := range msg.sessions {
+	case SessionListMsg:
+		// Prune lastOutput entries for removed sessions.
+		activeSet := make(map[string]struct{}, len(msg.Sessions))
+		for _, s := range msg.Sessions {
 			activeSet[s] = struct{}{}
 		}
 		for s := range a.lastOutput {
@@ -110,6 +109,9 @@ func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				delete(a.lastOutput, s)
 			}
 		}
+
+	case combinedTmuxMsg:
+		a.lastOutput[msg.session] = msg.output
 		a.viewer.AppendOutput(msg.session, msg.output)
 		m2, cmd2 := a.viewer.Update(SessionListMsg{Sessions: msg.sessions})
 		a.viewer = m2.(ViewerModel)

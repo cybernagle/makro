@@ -46,6 +46,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Discard log output early to prevent any log writes to stderr
+	// (including from config.Load) from corrupting the Bubbletea TUI.
+	log.SetOutput(io.Discard)
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -62,7 +66,6 @@ func main() {
 
 	// Set up debug log to file; discard log output if file creation fails
 	// to prevent log writes to stderr from corrupting the Bubbletea TUI.
-	log.SetOutput(io.Discard)
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err == nil {
 		logFile, err := os.Create(filepath.Join(cfg.DataDir, "debug.log"))
 		if err == nil {
