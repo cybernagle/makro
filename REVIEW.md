@@ -30,4 +30,11 @@
 | 13 | detect.go:75 | ServerInfo/DetectServer defined in multiple files | ✅ fixed — moved ServerInfo to detect_types.go | TBD |
 | 14 | app.go:52 | CommandRegistry.List() nondeterministic order | ✅ fixed — sort cmds by Name | TBD |
 | 15 | styles.go:63 | Indentation not gofmt-aligned | ✅ fixed — ran gofmt | TBD |
-| 16 | chat.go:165 | extractMention duplicates agent.ExtractMention | ✅ fixed — removed local copy, use agent.ExtractMention | TBD |
+| 16 | chat.go:165 | extractMention duplicates agent.ExtractMention | ✅ fixed — removed local copy, use agent.ExtractMention | b967bfd |
+
+## Round 5 — 3 comments
+| # | File | Issue | Status | Commit |
+|---|------|-------|--------|--------|
+| 17 | main.go:176 | ReadString error ignored (re-raise on shifted line) | ✅ fixed — handle error, default to detected server | TBD |
+| 18 | chat.go:235 | Double @prefix when user explicitly types @mention with sticky target | ✅ fixed — only prepend if input doesn't start with @ | TBD |
+| 19 | detect_test.go:28 | Test file calls unix-only functions, won't compile on Windows | ✅ fixed — added //go:build !windows tag | TBD |

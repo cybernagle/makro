@@ -169,7 +169,12 @@ func resolveTmuxServer(cfg *config.Config, chatMode bool) (string, bool, error) 
 			fmt.Fprintf(os.Stderr, "Found tmux server (%s, %d sessions). Use it? [Y/n]: ",
 				info.SocketPath, len(info.Sessions))
 			reader := bufio.NewReader(os.Stdin)
-			line, _ := reader.ReadString('\n')
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				// EOF or I/O error — default to using detected server.
+				log.Printf("[main] stdin read error (%v), using detected server", err)
+				return info.SocketPath, false, nil
+			}
 			line = strings.TrimSpace(strings.ToLower(line))
 			if line == "" || line == "y" || line == "yes" {
 				log.Printf("[main] using existing tmux server: %s", info.SocketPath)

@@ -223,8 +223,8 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return c, nil
 			}
 			text := c.input
-			// Prepend sticky session target if set.
-			if c.targetSession != "" {
+			// Prepend sticky session target only if input does not already start with @.
+			if c.targetSession != "" && !strings.HasPrefix(strings.TrimSpace(c.input), "@") {
 				text = "@" + c.targetSession + " " + text
 			}
 			// Extract and set sticky session from @mention in input.
