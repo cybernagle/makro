@@ -11,7 +11,7 @@ import (
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	assert.Equal(t, "anthropic", cfg.LLMProvider)
+	assert.Equal(t, "", cfg.LLMProvider) // auto-detected during Load/validate
 	assert.NotEmpty(t, cfg.DataDir)
 	assert.NotEmpty(t, cfg.TmuxSocketPath)
 	assert.NotEmpty(t, cfg.ChatHistoryPath)

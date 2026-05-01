@@ -31,7 +31,7 @@ func DefaultConfig() *Config {
 	home := homeDir()
 	dataDir := filepath.Join(home, ".fingersaver")
 	return &Config{
-		LLMProvider:     "anthropic",
+		LLMProvider:     "",
 		LLMModel:        "",
 		TmuxSocketPath:  filepath.Join(dataDir, "tmux.sock"),
 		DataDir:         dataDir,
@@ -108,6 +108,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 
 	if v := os.Getenv("ANTHROPIC_BASE_URL"); v != "" {
+		c.LLMBaseURL = v
+	}
+	if v := os.Getenv("OPENAI_BASE_URL"); v != "" {
 		c.LLMBaseURL = v
 	}
 	if v := os.Getenv("FINGERSAVER_LLM_BASE_URL"); v != "" {
@@ -195,6 +198,9 @@ func (c *Config) loadClaudeDefaults() {
 }
 
 func (c *Config) validate() error {
+	if c.LLMProvider == "" {
+		c.LLMProvider = "anthropic"
+	}
 	if c.LLMProvider != "anthropic" && c.LLMProvider != "openai" {
 		return fmt.Errorf("unsupported llm_provider: %s (must be anthropic or openai)", c.LLMProvider)
 	}
@@ -206,7 +212,7 @@ func (c *Config) validate() error {
 // can display the key status even when no key is set.
 func (c *Config) ValidateAPIKey() error {
 	if c.LLMAPIKey == "" {
-		return fmt.Errorf("no API key found: set ANTHROPIC_API_KEY/OPENAI_API_KEY or configure ~/.claude/settings.json")
+		return fmt.Errorf("no API key found: set ANTHROPIC_API_KEY/OPENAI_API_KEY or configure %s", filepath.Join(c.ClaudeDir, "settings.json"))
 	}
 	return nil
 }

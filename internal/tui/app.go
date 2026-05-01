@@ -56,7 +56,7 @@ func NewAppModel(orch *agent.Orchestrator, tc tmuxClient) AppModel {
 }
 
 func (a AppModel) Init() tea.Cmd {
-	return tickCmd()
+	return tea.Batch(tickCmd(), cursorBlinkCmd())
 }
 
 func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
