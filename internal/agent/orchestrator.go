@@ -92,6 +92,13 @@ func (o *Orchestrator) SetCommandRegistry(cr *CommandRegistry) {
 	o.commands = cr
 }
 
+func (o *Orchestrator) Commands() []*SlashCommand {
+	if o.commands == nil {
+		return nil
+	}
+	return o.commands.List()
+}
+
 func (o *Orchestrator) Messages() []llm.Message {
 	return o.snapshotMessages()
 }

@@ -129,3 +129,41 @@ go test ./... -tags=integration -v
 | `internal/llm` | Multi-provider streaming with tool use |
 | `internal/adapters` | Per-agent CLI invocation, output parsing, stop config |
 | `internal/config` | XDG-compatible config, .claude fallback, env overrides |
+
+## Pre-Commit Checklist
+
+Before every commit, verify:
+
+- [ ] `go vet ./...` passes
+- [ ] `gofmt -l .` shows no unformatted files
+- [ ] `go test ./...` passes
+- [ ] If chat input handler changed: table-driven test covers runes, paste, symbolic keys, multi-byte Unicode
+- [ ] If new map/goroutine/channel added: Stop/Close cleanup path is complete
+- [ ] If config loading changed: provider detection priority chain is correct (CLI > env > config file > claude settings > default)
+- [ ] New features have tests with real assertions (not just checking initial state)
+- [ ] Log output truncates sensitive data, never logs API keys or full user input
+
+## PR Guidelines
+
+- Keep PRs under ~15 files or ~500 additions for effective review
+- Split large changes into focused PRs (e.g. config changes separate from TUI changes)
+
+### Review Tracking with REVIEW.md
+
+For every PR, maintain a `REVIEW.md` file at the repo root:
+
+1. **When PR is created**: Create `REVIEW.md` with the PR title
+2. **When review comments arrive**: Add each comment as a row in the current round's table with status `pending`
+3. **Before fixing**: Review the full table to avoid re-breaking earlier fixes
+4. **After fixing**: Update status to `✅ fixed` with the commit hash
+5. **Before merge**: Confirm all rows are `✅ fixed`, then delete `REVIEW.md`
+
+Format:
+```markdown
+# PR #N: Title
+
+## Round 1 — N comments
+| # | File | Issue | Status | Commit |
+|---|------|-------|--------|--------|
+| 1 | path:line | Description | ✅/⏳ | abc1234 |
+```

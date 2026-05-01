@@ -10,15 +10,14 @@ import (
 )
 
 func TestNewClient(t *testing.T) {
-	c := NewClient("/tmp/test.sock")
+	c := NewClient("/tmp/test.sock", true)
 	assert.Equal(t, "/tmp/test.sock", c.socketPath)
 	assert.NotNil(t, c.notifs)
 	assert.NotNil(t, c.state)
 }
 
 func TestClientStartTwice(t *testing.T) {
-	c := NewClient(t.TempDir() + "/test.sock")
-	// Can't start without tmux, but we can test the double-start guard.
+	c := NewClient(t.TempDir()+"/test.sock", true)
 	// Set running=true manually to simulate.
 	c.mu.Lock()
 	c.running = true
@@ -32,26 +31,26 @@ func TestClientStartTwice(t *testing.T) {
 }
 
 func TestClientSendNotRunning(t *testing.T) {
-	c := NewClient(t.TempDir() + "/test.sock")
+	c := NewClient(t.TempDir()+"/test.sock", true)
 	err := c.SendCommand("list-sessions")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not running")
 }
 
 func TestClientStopNotRunning(t *testing.T) {
-	c := NewClient(t.TempDir() + "/test.sock")
+	c := NewClient(t.TempDir()+"/test.sock", true)
 	err := c.Stop()
 	assert.NoError(t, err)
 }
 
 func TestClientNotificationChannel(t *testing.T) {
-	c := NewClient(t.TempDir() + "/test.sock")
+	c := NewClient(t.TempDir()+"/test.sock", true)
 	ch := c.Notifications()
 	assert.NotNil(t, ch)
 }
 
 func TestClientStateMirror(t *testing.T) {
-	c := NewClient(t.TempDir() + "/test.sock")
+	c := NewClient(t.TempDir()+"/test.sock", true)
 	s := c.State()
 	require.NotNil(t, s)
 	assert.Empty(t, s.Sessions())
@@ -117,7 +116,7 @@ func TestStateMirrorFromRealSequence(t *testing.T) {
 
 func TestClientContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	c := NewClient(t.TempDir() + "/test.sock")
+	c := NewClient(t.TempDir()+"/test.sock", true)
 
 	// Start a goroutine that would be reading notifications.
 	done := make(chan struct{})

@@ -8,8 +8,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"charm.land/glamour/v2"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
+	"github.com/naglezhang/fingersaver/internal/agent"
 	"github.com/naglezhang/fingersaver/internal/util"
 )
 
@@ -17,6 +18,16 @@ type ChatMessage struct {
 	Role      string
 	Content   string
 	Streaming bool
+}
+
+type CommandSuggestion struct {
+	Name        string
+	Description string
+}
+
+type Suggestion struct {
+	Text        string
+	Description string
 }
 
 // spinnerFrames are the animation frames for the working indicator.
@@ -60,6 +71,10 @@ type ChatModel struct {
 	inputHistory  []string
 	historyIdx    int
 	cursorVisible bool
+	targetSession string
+	commands      []CommandSuggestion
+	sessions      []string
+	selectedSugg  int
 }
 
 func NewChatModel() ChatModel {
@@ -98,6 +113,43 @@ func cursorBlinkCmd() tea.Cmd {
 	return tea.Tick(530*time.Millisecond, func(t time.Time) tea.Msg { return cursorBlinkMsg(t) })
 }
 
+// currentSuggestions returns filtered suggestions based on the current input.
+// Returns nil when no suggestions should be shown.
+func (c ChatModel) currentSuggestions() []Suggestion {
+	if c.targetSession != "" {
+		return nil
+	}
+
+	if strings.HasPrefix(c.input, "/") {
+		prefix := c.input[1:]
+		var result []Suggestion
+		for _, cmd := range c.commands {
+			if strings.HasPrefix(cmd.Name, prefix) {
+				result = append(result, Suggestion{
+					Text:        "/" + cmd.Name + " ",
+					Description: cmd.Description,
+				})
+			}
+		}
+		return result
+	}
+
+	if strings.HasPrefix(c.input, "@") {
+		prefix := c.input[1:]
+		var result []Suggestion
+		for _, s := range c.sessions {
+			if strings.HasPrefix(s, prefix) {
+				result = append(result, Suggestion{
+					Text: "@" + s + " ",
+				})
+			}
+		}
+		return result
+	}
+
+	return nil
+}
+
 func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -124,13 +176,65 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return c, nil
 		}
 		c.cursorVisible = true
+
+		// Suggestion navigation when suggestions are visible.
+		suggs := c.currentSuggestions()
+		if len(suggs) > 0 {
+			switch msg.String() {
+			case "up":
+				if c.selectedSugg > 0 {
+					c.selectedSugg--
+				}
+				return c, nil
+			case "down":
+				if c.selectedSugg < len(suggs)-1 {
+					c.selectedSugg++
+				}
+				return c, nil
+			case "tab":
+				if c.selectedSugg >= len(suggs) {
+					c.selectedSugg = len(suggs) - 1
+				}
+				s := suggs[c.selectedSugg]
+				// For @ completions, set sticky target instead of filling input.
+				if strings.HasPrefix(s.Text, "@") {
+					name := strings.TrimSpace(strings.TrimPrefix(s.Text, "@"))
+					if name != "" {
+						c.targetSession = name
+						c.input = ""
+						c.cursor = 0
+						c.selectedSugg = 0
+						return c, nil
+					}
+				}
+				c.input = s.Text
+				c.cursor = utf8.RuneCountInString(c.input)
+				c.selectedSugg = 0
+				return c, nil
+			case "esc":
+				c.selectedSugg = 0
+				return c, nil
+			}
+		}
+
 		switch msg.String() {
 		case "enter":
 			if c.working || strings.TrimSpace(c.input) == "" {
 				return c, nil
 			}
 			text := c.input
-			c.inputHistory = append(c.inputHistory, text)
+			// Prepend sticky session target only if input does not already start with @.
+			if c.targetSession != "" && !strings.HasPrefix(strings.TrimSpace(c.input), "@") {
+				text = "@" + c.targetSession + " " + text
+			}
+			// Extract and set sticky session from @mention in input.
+			if c.targetSession == "" && strings.HasPrefix(strings.TrimSpace(c.input), "@") {
+				sessionName, _ := agent.ExtractMention(text)
+				if sessionName != "" {
+					c.targetSession = sessionName
+				}
+			}
+			c.inputHistory = append(c.inputHistory, c.input)
 			c.historyIdx = len(c.inputHistory)
 			c.input = ""
 			c.cursor = 0
@@ -149,6 +253,8 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				prevPos := runeIdxToByte(c.input, c.cursor-1)
 				c.input = c.input[:prevPos] + c.input[pos:]
 				c.cursor--
+			} else if c.cursor == 0 && c.input == "" && c.targetSession != "" {
+				c.targetSession = ""
 			}
 		case "delete":
 			if c.cursor < c.runeCount() {
@@ -179,6 +285,11 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				c.input = ""
 			}
 			c.cursor = c.runeCount()
+		case "esc":
+			if c.targetSession != "" {
+				c.targetSession = ""
+				return c, nil
+			}
 		case "ctrl+c":
 			return c, tea.Quit
 		default:
@@ -195,6 +306,7 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				pos := c.cursorByteIdx()
 				c.input = c.input[:pos] + text + c.input[pos:]
 				c.cursor += utf8.RuneCountInString(text)
+				c.selectedSugg = 0
 			}
 		}
 
@@ -237,8 +349,6 @@ func (c ChatModel) View() tea.View {
 		case "user":
 			rendered = userMsgStyle.Render("> " + m.Content)
 		case "assistant":
-			// Skip markdown rendering for streaming messages to avoid
-			// unstable output from glamour on incomplete markdown.
 			if m.Streaming {
 				rendered = assistantMsgStyle.Render(m.Content)
 			} else {
@@ -248,7 +358,6 @@ func (c ChatModel) View() tea.View {
 			rendered = systemMsgStyle.Render(m.Content)
 		}
 		lines := strings.Split(rendered, "\n")
-		// Drop trailing empty element from split if rendered ended with \n.
 		if len(lines) > 0 && lines[len(lines)-1] == "" {
 			lines = lines[:len(lines)-1]
 		}
@@ -269,32 +378,81 @@ func (c ChatModel) View() tea.View {
 		)
 	}
 
-	// Reserve 1 line for input. Trim from top to show latest content.
-	maxContentLines := targetLines - 1
+	// Reserve lines for input and optional suggestions.
+	suggs := c.currentSuggestions()
+	suggLines := len(suggs)
+	if suggLines > 5 {
+		suggLines = 5
+	}
+	reserveLines := 1 + suggLines // input + suggestions
+	if len(c.sessions) > 0 {
+		reserveLines++ // session status bar
+	}
+
+	maxContentLines := targetLines - reserveLines
 	if maxContentLines < 1 {
 		maxContentLines = 1
 	}
 	if len(contentLines) > maxContentLines {
 		contentLines = contentLines[len(contentLines)-maxContentLines:]
 	}
-
-	// Pad to fill available space.
 	for len(contentLines) < maxContentLines {
 		contentLines = append(contentLines, "")
 	}
 
-	cursorLine := "> " + c.input
-	if c.focused && !c.working {
-		pos := c.cursorByteIdx()
-		before := c.input[:pos]
-		after := c.input[pos:]
-		ch := "█"
-		if !c.cursorVisible {
-			ch = " "
+	// Render suggestions.
+	if len(suggs) > 0 {
+		maxShow := 5
+		if len(suggs) < maxShow {
+			maxShow = len(suggs)
 		}
-		cursorLine = "> " + before + ch + after
+		for i := 0; i < maxShow; i++ {
+			s := suggs[i]
+			line := "  " + s.Text
+			if s.Description != "" {
+				line += "  " + s.Description
+			}
+			if i == c.selectedSugg {
+				contentLines = append(contentLines, suggestionHighlightStyle.Render(line))
+			} else {
+				contentLines = append(contentLines, suggestionStyle.Render(line))
+			}
+		}
 	}
-	contentLines = append(contentLines, chatInputStyle.Render(cursorLine))
+
+	// Session status bar.
+	if len(c.sessions) > 0 {
+		bar := statusStyle.Render("sessions: " + strings.Join(c.sessions, " | "))
+		contentLines = append(contentLines, bar)
+	}
+
+	// Input line.
+	prefix := "> "
+	if c.targetSession != "" {
+		prefix = statusStyle.Render("@" + c.targetSession + " (Esc) > ")
+	}
+	if c.input == "" && c.targetSession == "" && !c.working {
+		displayInput := ""
+		if len(c.sessions) == 0 {
+			displayInput = statusStyle.Render("Type /create <name> to start a session...")
+		} else {
+			displayInput = statusStyle.Render("Type @ to mention session, / for commands...")
+		}
+		contentLines = append(contentLines, chatInputStyle.Render(prefix+displayInput))
+	} else {
+		cursorLine := prefix + c.input
+		if c.focused && !c.working {
+			pos := c.cursorByteIdx()
+			before := c.input[:pos]
+			after := c.input[pos:]
+			ch := "█"
+			if !c.cursorVisible {
+				ch = " "
+			}
+			cursorLine = prefix + before + ch + after
+		}
+		contentLines = append(contentLines, chatInputStyle.Render(cursorLine))
+	}
 
 	output := strings.Join(contentLines, "\n")
 	return tea.NewView(output)
@@ -311,8 +469,6 @@ func renderMarkdown(text string) string {
 	}
 	return strings.TrimSpace(rendered)
 }
-
-
 
 func (c *ChatModel) SetFocused(f bool) {
 	c.focused = f
@@ -364,4 +520,16 @@ func (c *ChatModel) LoadHistory() error {
 	}
 	c.messages = msgs
 	return nil
+}
+
+func (c *ChatModel) SetCommands(cmds []CommandSuggestion) {
+	c.commands = cmds
+}
+
+func (c *ChatModel) SetSessions(sessions []string) {
+	c.sessions = sessions
+}
+
+func (c *ChatModel) TargetSession() string {
+	return c.targetSession
 }

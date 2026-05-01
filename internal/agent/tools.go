@@ -173,4 +173,3 @@ func AllTools(tc TmuxClient) []Tool {
 		NewReadSessionOutputTool(tc),
 	}
 }
-

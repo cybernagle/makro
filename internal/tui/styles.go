@@ -54,6 +54,13 @@ var (
 
 	statusStyle = lipgloss.NewStyle().
 			Foreground(colorDim)
+
+	suggestionStyle = lipgloss.NewStyle().
+			Foreground(colorDim)
+
+	suggestionHighlightStyle = lipgloss.NewStyle().
+					Foreground(colorAccent).
+					Bold(true)
 )
 
 // BorderStyle returns the border style based on focus state.

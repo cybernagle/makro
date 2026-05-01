@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -43,15 +44,24 @@ type tmuxClient interface {
 
 func NewAppModel(orch *agent.Orchestrator, tc tmuxClient) AppModel {
 	ctx, cancel := context.WithCancel(context.Background())
+	chat := NewChatModel()
+	if orch != nil {
+		var cmds []CommandSuggestion
+		for _, c := range orch.Commands() {
+			cmds = append(cmds, CommandSuggestion{Name: c.Name, Description: c.Description})
+		}
+		sort.Slice(cmds, func(i, j int) bool { return cmds[i].Name < cmds[j].Name })
+		chat.SetCommands(cmds)
+	}
 	return AppModel{
-		chat:       NewChatModel(),
-		viewer:     NewViewerModel(),
-		focus:      FocusChat,
+		chat:         chat,
+		viewer:       NewViewerModel(),
+		focus:        FocusChat,
 		orchestrator: orch,
-		tmuxClient: tc,
-		ctx:        ctx,
-		cancel:     cancel,
-		lastOutput: make(map[string]string),
+		tmuxClient:   tc,
+		ctx:          ctx,
+		cancel:       cancel,
+		lastOutput:   make(map[string]string),
 	}
 }
 
@@ -73,7 +83,7 @@ func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		switch msg.String() {
-		case "tab":
+		case "ctrl+o":
 			if a.focus == FocusChat {
 				a.focus = FocusViewer
 				a.chat.SetFocused(false)
@@ -90,6 +100,12 @@ func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case SubmitMsg:
+		// Auto-switch viewer to @mentioned session.
+		if strings.HasPrefix(msg.Text, "@") {
+			if fields := strings.Fields(msg.Text[1:]); len(fields) > 0 && fields[0] != "" {
+				a.viewer.SetActiveSession(fields[0])
+			}
+		}
 		if a.orchestrator != nil {
 			go a.processOrchestratorInput(msg.Text)
 		}
@@ -109,10 +125,12 @@ func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				delete(a.lastOutput, s)
 			}
 		}
+		a.chat.SetSessions(msg.Sessions)
 
 	case combinedTmuxMsg:
 		a.lastOutput[msg.session] = msg.output
 		a.viewer.AppendOutput(msg.session, msg.output)
+		a.chat.SetSessions(msg.sessions)
 		m2, cmd2 := a.viewer.Update(SessionListMsg{Sessions: msg.sessions})
 		a.viewer = m2.(ViewerModel)
 		cmds = append(cmds, cmd2)

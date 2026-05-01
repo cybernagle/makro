@@ -19,7 +19,7 @@ func testClient(t *testing.T) *Client {
 	// Use /tmp for short socket paths (macOS has a ~104 char limit for UNIX sockets).
 	socketPath := filepath.Join("/tmp", fmt.Sprintf("fs-test-%d.sock", time.Now().UnixNano()))
 	t.Cleanup(func() { os.Remove(socketPath) })
-	client := NewClient(socketPath)
+	client := NewClient(socketPath, true)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	t.Cleanup(cancel)
@@ -32,7 +32,7 @@ func testClient(t *testing.T) *Client {
 func TestIntegrationClientStartsAndStops(t *testing.T) {
 	socketPath := filepath.Join("/tmp", fmt.Sprintf("fs-stop-%d.sock", time.Now().UnixNano()))
 	t.Cleanup(func() { os.Remove(socketPath) })
-	client := NewClient(socketPath)
+	client := NewClient(socketPath, true)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

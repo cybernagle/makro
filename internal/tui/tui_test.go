@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/naglezhang/fingersaver/internal/agent"
 	"github.com/naglezhang/fingersaver/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -324,4 +325,194 @@ func TestChatModelStreamingFlushOnDone(t *testing.T) {
 	m, _ = c.Update(OrchestratorEventMsg{Type: "done"})
 	c = m.(ChatModel)
 	assert.False(t, c.messages[0].Streaming)
+}
+
+// --- / command autocomplete ---
+
+func TestChatModelSlashSuggestions(t *testing.T) {
+	c := NewChatModel()
+	c.SetSize(80, 24)
+	c.SetCommands([]CommandSuggestion{
+		{Name: "create", Description: "Create session"},
+		{Name: "switch", Description: "Switch session"},
+		{Name: "kill", Description: "Kill session"},
+	})
+
+	// Type "/" — should show all commands.
+	c.input = "/"
+	suggs := c.currentSuggestions()
+	assert.Len(t, suggs, 3)
+	assert.Equal(t, "/create ", suggs[0].Text)
+}
+
+func TestChatModelSlashFilterByPrefix(t *testing.T) {
+	c := NewChatModel()
+	c.SetSize(80, 24)
+	c.SetCommands([]CommandSuggestion{
+		{Name: "create", Description: "Create session"},
+		{Name: "switch", Description: "Switch session"},
+		{Name: "kill", Description: "Kill session"},
+	})
+
+	// Type "/c" -> should only suggest "create".
+	c.input = "/c"
+	c.cursor = 2
+	suggs := c.currentSuggestions()
+	require.Len(t, suggs, 1)
+	assert.Equal(t, "/create ", suggs[0].Text)
+}
+
+func TestChatModelAtSuggestions(t *testing.T) {
+	c := NewChatModel()
+	c.SetSize(80, 24)
+	c.SetSessions([]string{"auth", "api", "worker"})
+
+	// Type "@" -> all sessions.
+	c.input = "@"
+	c.cursor = 1
+	suggs := c.currentSuggestions()
+	require.Len(t, suggs, 3)
+	assert.Equal(t, "@auth ", suggs[0].Text)
+
+	// Type "@a" -> filtered.
+	c.input = "@a"
+	c.cursor = 2
+	suggs = c.currentSuggestions()
+	require.Len(t, suggs, 2)
+}
+
+// --- Tab completion for @ sets sticky session ---
+
+func TestChatModelAtTabSetsStickySession(t *testing.T) {
+	c := NewChatModel()
+	c.SetSize(80, 24)
+	c.SetSessions([]string{"auth"})
+
+	c.input = "@a"
+	c.cursor = 2
+	c.selectedSugg = 0
+
+	suggs := c.currentSuggestions()
+	require.Len(t, suggs, 1)
+
+	// Tab selects the @auth suggestion and sets sticky target.
+	m, _ := c.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	c = m.(ChatModel)
+
+	assert.Equal(t, "auth", c.targetSession)
+	assert.Equal(t, "", c.input)
+	assert.Equal(t, 0, c.cursor)
+}
+
+// --- Sticky session behavior ---
+
+func TestChatModelStickySessionPrepends(t *testing.T) {
+	c := NewChatModel()
+	c.SetSize(80, 24)
+	c.targetSession = "auth"
+	c.input = "check status"
+
+	m, cmd := c.Update(tea.KeyPressMsg{Code: 13}) // enter
+	c = m.(ChatModel)
+	require.NotNil(t, cmd)
+	assert.Equal(t, "@auth check status", c.messages[0].Content)
+	assert.Empty(t, c.input)
+}
+
+func TestChatModelStickySessionClearedByBackspace(t *testing.T) {
+	c := NewChatModel()
+	c.SetSize(80, 24)
+	c.targetSession = "auth"
+	c.input = ""
+	c.cursor = 0
+
+	// Backspace on empty input clears targetSession.
+	m, _ := c.Update(tea.KeyPressMsg{Code: 127}) // backspace
+	c = m.(ChatModel)
+	assert.Equal(t, "", c.targetSession)
+}
+
+func TestChatModelStickySessionClearedByEscape(t *testing.T) {
+	c := NewChatModel()
+	c.SetSize(80, 24)
+	c.targetSession = "auth"
+
+	m, _ := c.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	c = m.(ChatModel)
+	assert.Equal(t, "", c.targetSession)
+}
+
+func TestChatModelNoSuggestionsWhenStickySet(t *testing.T) {
+	c := NewChatModel()
+	c.SetSize(80, 24)
+	c.SetSessions([]string{"auth"})
+	c.targetSession = "auth"
+	c.input = "@"
+	c.cursor = 1
+
+	suggs := c.currentSuggestions()
+	assert.Nil(t, suggs)
+}
+
+// --- ExtractMention ---
+
+func TestExtractMention(t *testing.T) {
+	name, text := agent.ExtractMention("@auth hello")
+	assert.Equal(t, "auth", name)
+	assert.Equal(t, "hello", text)
+
+	name, text = agent.ExtractMention("@auth")
+	assert.Equal(t, "auth", name)
+	assert.Equal(t, "", text)
+
+	name, text = agent.ExtractMention("no mention")
+	assert.Equal(t, "", name)
+	assert.Equal(t, "no mention", text)
+}
+
+// --- Suggestion navigation ---
+
+func TestChatModelSuggestionUpDown(t *testing.T) {
+	c := NewChatModel()
+	c.SetSize(80, 24)
+	c.SetCommands([]CommandSuggestion{
+		{Name: "create", Description: "Create"},
+		{Name: "switch", Description: "Switch"},
+		{Name: "kill", Description: "Kill"},
+	})
+	c.input = "/"
+	c.cursor = 1
+	c.selectedSugg = 0
+
+	// Down -> index 1.
+	m, _ := c.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	c = m.(ChatModel)
+	assert.Equal(t, 1, c.selectedSugg)
+
+	// Down -> index 2.
+	m, _ = c.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	c = m.(ChatModel)
+	assert.Equal(t, 2, c.selectedSugg)
+
+	// Up -> index 1.
+	m, _ = c.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	c = m.(ChatModel)
+	assert.Equal(t, 1, c.selectedSugg)
+}
+
+func TestChatModelSuggestionTabCompletes(t *testing.T) {
+	c := NewChatModel()
+	c.SetSize(80, 24)
+	c.SetCommands([]CommandSuggestion{
+		{Name: "create", Description: "Create"},
+	})
+	c.input = "/"
+	c.cursor = 1
+	c.selectedSugg = 0
+
+	// Tab completes to "/create ".
+	m, _ := c.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	c = m.(ChatModel)
+	assert.Equal(t, "/create ", c.input)
+	assert.Equal(t, 8, c.cursor)
 }

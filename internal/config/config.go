@@ -14,6 +14,7 @@ type Config struct {
 	LLMModel        string `json:"llm_model"`
 	LLMAPIKey       string `json:"-"`
 	LLMBaseURL      string `json:"llm_base_url,omitempty"`
+	TmuxMode        string `json:"tmux_mode"` // "auto", "dedicated", "shared"
 	TmuxSocketPath  string `json:"tmux_socket_path"`
 	DataDir         string `json:"data_dir"`
 	ChatHistoryPath string `json:"chat_history_path"`
@@ -33,6 +34,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		LLMProvider:     "",
 		LLMModel:        "",
+		TmuxMode:        "auto",
 		TmuxSocketPath:  filepath.Join(dataDir, "tmux.sock"),
 		DataDir:         dataDir,
 		ChatHistoryPath: filepath.Join(dataDir, "chat.md"),
@@ -86,6 +88,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("FINGERSAVER_LLM_MODEL"); v != "" {
 		c.LLMModel = v
+	}
+	if v := os.Getenv("FINGERSAVER_TMUX_MODE"); v != "" {
+		c.TmuxMode = v
 	}
 	if v := os.Getenv("FINGERSAVER_DATA_DIR"); v != "" {
 		c.DataDir = v
@@ -215,6 +220,11 @@ func (c *Config) validate() error {
 	if c.LLMProvider != "anthropic" && c.LLMProvider != "openai" {
 		return fmt.Errorf("unsupported llm_provider: %s (must be anthropic or openai)", c.LLMProvider)
 	}
+	switch c.TmuxMode {
+	case "auto", "dedicated", "shared":
+	default:
+		return fmt.Errorf("unsupported tmux_mode: %s (must be auto, dedicated, or shared)", c.TmuxMode)
+	}
 	return nil
 }
 
@@ -238,6 +248,7 @@ func (c *Config) Summary() string {
 		sb.WriteString(fmt.Sprintf("  Base URL:    %s\n", c.LLMBaseURL))
 	}
 	sb.WriteString(fmt.Sprintf("  Tmux Socket: %s\n", c.TmuxSocketPath))
+	sb.WriteString(fmt.Sprintf("  Tmux Mode:   %s\n", c.TmuxMode))
 	return sb.String()
 }
 

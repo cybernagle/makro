@@ -26,6 +26,7 @@ type TmuxClient interface {
 // we use direct CLI commands and poll for output.
 type Client struct {
 	socketPath string
+	owned      bool
 	notifs     chan Notification
 	state      *StateMirror
 	cancel     context.CancelFunc
@@ -33,9 +34,10 @@ type Client struct {
 	running    bool
 }
 
-func NewClient(socketPath string) *Client {
+func NewClient(socketPath string, owned bool) *Client {
 	return &Client{
 		socketPath: socketPath,
+		owned:      owned,
 		notifs:     make(chan Notification, 256),
 		state:      NewStateMirror(),
 	}
@@ -54,10 +56,12 @@ func (c *Client) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	// Start the dedicated tmux server.
-	startCmd := exec.CommandContext(ctx, "tmux", "-S", c.socketPath, "start-server")
-	if err := startCmd.Run(); err != nil {
-		// Server may already be running, try to continue.
+	// Start the dedicated tmux server (only for owned servers).
+	if c.owned {
+		startCmd := exec.CommandContext(ctx, "tmux", "-S", c.socketPath, "start-server")
+		if err := startCmd.Run(); err != nil {
+			// Server may already be running, try to continue.
+		}
 	}
 
 	c.running = true
@@ -96,9 +100,11 @@ func (c *Client) Stop() error {
 
 	close(c.notifs)
 
-	// Kill the dedicated tmux server and remove the socket.
-	exec.Command("tmux", "-S", c.socketPath, "kill-server").Run()
-	os.Remove(c.socketPath)
+	// Only kill owned servers; shared servers are left running.
+	if c.owned {
+		exec.Command("tmux", "-S", c.socketPath, "kill-server").Run()
+		os.Remove(c.socketPath)
+	}
 
 	return nil
 }

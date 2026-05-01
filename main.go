@@ -86,8 +86,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Start tmux client.
-	tc := tmux.NewClient(cfg.TmuxSocketPath)
+	// Resolve tmux server: detect, prompt, or create dedicated.
+	socketPath, owned, err := resolveTmuxServer(cfg, *chatMode)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	tc := tmux.NewClient(socketPath, owned)
 	if err := tc.Start(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting tmux: %v\n", err)
 		os.Exit(1)
@@ -138,6 +143,61 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// resolveTmuxServer determines which tmux server to use based on config.
+// Returns the socket path and whether FingerSaver owns the server.
+func resolveTmuxServer(cfg *config.Config, chatMode bool) (string, bool, error) {
+	switch cfg.TmuxMode {
+	case "dedicated":
+		return cfg.TmuxSocketPath, true, nil
+	case "shared":
+		info := tmux.DetectServer()
+		if info == nil {
+			return "", false, fmt.Errorf("tmux_mode=shared but no running tmux server found")
+		}
+		log.Printf("[main] using shared tmux server: %s", info.SocketPath)
+		return info.SocketPath, false, nil
+	case "auto":
+		info := tmux.DetectServer()
+		if info == nil {
+			log.Printf("[main] no existing tmux server, creating dedicated one")
+			return cfg.TmuxSocketPath, true, nil
+		}
+		// Interactive prompt if stdin is a terminal and not in chat mode.
+		if isTerminal(os.Stdin) && !chatMode {
+			fmt.Fprintf(os.Stderr, "Found tmux server (%s, %d sessions). Use it? [Y/n]: ",
+				info.SocketPath, len(info.Sessions))
+			reader := bufio.NewReader(os.Stdin)
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				// EOF or I/O error — default to using detected server.
+				log.Printf("[main] stdin read error (%v), using detected server", err)
+				return info.SocketPath, false, nil
+			}
+			line = strings.TrimSpace(strings.ToLower(line))
+			if line == "" || line == "y" || line == "yes" {
+				log.Printf("[main] using existing tmux server: %s", info.SocketPath)
+				return info.SocketPath, false, nil
+			}
+		} else {
+			// Non-interactive: auto-use the detected server.
+			log.Printf("[main] auto-detected tmux server: %s", info.SocketPath)
+			return info.SocketPath, false, nil
+		}
+		log.Printf("[main] user chose dedicated server")
+		return cfg.TmuxSocketPath, true, nil
+	default:
+		return cfg.TmuxSocketPath, true, nil
+	}
+}
+
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 // runChat runs a simple CLI chat loop for e2e testing without TUI.
