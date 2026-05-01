@@ -391,20 +391,16 @@ func TestChatModelAtTabSetsStickySession(t *testing.T) {
 	c.cursor = 2
 	c.selectedSugg = 0
 
-	m, _ := c.Update(tea.KeyPressMsg{Text: ""}) // simulate via string
-	// Use the key string "tab"
-	_ = m
-
-	// Manually test: tab on @ suggestion sets targetSession.
-	c.input = "@a"
-	c.cursor = 2
-	c.selectedSugg = 0
 	suggs := c.currentSuggestions()
 	require.Len(t, suggs, 1)
 
-	// Simulate tab key press — bubbletea v2 may use different key representation.
-	// Test the logic directly by calling what the handler does.
-	assert.Equal(t, "", c.targetSession)
+	// Tab selects the @auth suggestion and sets sticky target.
+	m, _ := c.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	c = m.(ChatModel)
+
+	assert.Equal(t, "auth", c.targetSession)
+	assert.Equal(t, "", c.input)
+	assert.Equal(t, 0, c.cursor)
 }
 
 // --- Sticky session behavior ---
@@ -415,17 +411,11 @@ func TestChatModelStickySessionPrepends(t *testing.T) {
 	c.targetSession = "auth"
 	c.input = "check status"
 
-	// Submit — text should be prepended with @auth.
-	var capturedText string
-	origSendFn := func(msg tea.Msg) {}
-	_ = origSendFn
-	// We'll check by looking at the message appended.
 	m, cmd := c.Update(tea.KeyPressMsg{Code: 13}) // enter
 	c = m.(ChatModel)
 	require.NotNil(t, cmd)
 	assert.Equal(t, "@auth check status", c.messages[0].Content)
 	assert.Empty(t, c.input)
-	_ = capturedText
 }
 
 func TestChatModelStickySessionClearedByBackspace(t *testing.T) {

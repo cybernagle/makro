@@ -8,8 +8,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"charm.land/glamour/v2"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
 	"github.com/naglezhang/fingersaver/internal/util"
 )
 
@@ -206,6 +206,9 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return c, nil
 			case "tab", "enter":
+				if c.selectedSugg >= len(suggs) {
+					c.selectedSugg = len(suggs) - 1
+				}
 				s := suggs[c.selectedSugg]
 				// For @ completions, set sticky target instead of filling input.
 				if strings.HasPrefix(s.Text, "@") {
