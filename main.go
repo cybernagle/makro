@@ -198,7 +198,7 @@ FLAGS
   --chat          CLI chat mode (no TUI, for e2e testing)
 
 CONFIGURATION
-  FingerSaver reads from ~/.claude/settings.json automatically:
+  FingerSaver reads from Claude settings (claude_dir/settings.json):
   - ANTHROPIC_AUTH_TOKEN  -> API key
   - ANTHROPIC_BASE_URL   -> Custom API endpoint
   - ANTHROPIC_DEFAULT_SONNET_MODEL -> Model name
