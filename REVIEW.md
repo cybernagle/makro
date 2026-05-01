@@ -1,0 +1,20 @@
+# PR #2: Add tmux server selection and chat autocomplete
+
+## Round 1 — 6 comments
+| # | File | Issue | Status | Commit |
+|---|------|-------|--------|--------|
+| 1 | chat.go:224 | selectedSugg out of range — clamp before indexing | ✅ fixed | d2d23f4 |
+| 2 | tui_test.go:407 | Tab test has no real assertion — doesn't simulate Tab | ✅ fixed | d2d23f4 |
+| 3 | tui_test.go:428 | Leftover unused scaffolding (capturedText, origSendFn) | ✅ fixed | d2d23f4 |
+| 4 | main.go:173 | ReadString error ignored in interactive prompt | ✅ fixed | d2d23f4 |
+| 5 | client.go:107 | Channel close race — Stop() closes notifs while goroutines active | ✅ fixed | d2d23f4 |
+| 6 | styles.go:63 | Inconsistent indentation — needs gofmt | ✅ fixed | d2d23f4 |
+
+## Round 2 — 5 comments
+| # | File | Issue | Status | Commit |
+|---|------|-------|--------|--------|
+| 7 | detect_test.go:38 | TestDetectServerNone missing nil assertion | ✅ fixed | d00e750 |
+| 8 | chat.go:401 | Status bar line not reserved in layout calculation | ✅ fixed | d00e750 |
+| 9 | chat.go:208 | Enter triggers autocomplete — blocks message submit | ✅ fixed | d00e750 |
+| 10 | app.go:104 | @auth without space doesn't switch viewer | ✅ fixed | d00e750 |
+| 11 | detect.go:56 | os.Getuid() fails on Windows — add build tags | ✅ fixed | d00e750 |
