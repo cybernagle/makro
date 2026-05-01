@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -49,6 +50,7 @@ func NewAppModel(orch *agent.Orchestrator, tc tmuxClient) AppModel {
 		for _, c := range orch.Commands() {
 			cmds = append(cmds, CommandSuggestion{Name: c.Name, Description: c.Description})
 		}
+		sort.Slice(cmds, func(i, j int) bool { return cmds[i].Name < cmds[j].Name })
 		chat.SetCommands(cmds)
 	}
 	return AppModel{

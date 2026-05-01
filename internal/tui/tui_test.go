@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/naglezhang/fingersaver/internal/agent"
 	"github.com/naglezhang/fingersaver/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -456,15 +457,15 @@ func TestChatModelNoSuggestionsWhenStickySet(t *testing.T) {
 // --- ExtractMention ---
 
 func TestExtractMention(t *testing.T) {
-	name, text := extractMention("@auth hello")
+	name, text := agent.ExtractMention("@auth hello")
 	assert.Equal(t, "auth", name)
 	assert.Equal(t, "hello", text)
 
-	name, text = extractMention("@auth")
+	name, text = agent.ExtractMention("@auth")
 	assert.Equal(t, "auth", name)
 	assert.Equal(t, "", text)
 
-	name, text = extractMention("no mention")
+	name, text = agent.ExtractMention("no mention")
 	assert.Equal(t, "", name)
 	assert.Equal(t, "no mention", text)
 }

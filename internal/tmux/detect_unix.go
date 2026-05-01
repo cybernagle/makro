@@ -11,12 +11,6 @@ import (
 	"time"
 )
 
-// ServerInfo describes a detected tmux server.
-type ServerInfo struct {
-	SocketPath string
-	Sessions   []string
-}
-
 // DetectServer attempts to find a running tmux server.
 // Returns nil if no server is found.
 func DetectServer() *ServerInfo {

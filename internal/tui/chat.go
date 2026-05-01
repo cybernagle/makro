@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
+	"github.com/naglezhang/fingersaver/internal/agent"
 	"github.com/naglezhang/fingersaver/internal/util"
 )
 
@@ -149,21 +150,6 @@ func (c ChatModel) currentSuggestions() []Suggestion {
 	return nil
 }
 
-// extractMention extracts @session-name from input and returns
-// the session name and remaining text.
-func extractMention(input string) (sessionName string, text string) {
-	input = strings.TrimSpace(input)
-	if !strings.HasPrefix(input, "@") {
-		return "", input
-	}
-	rest := input[1:]
-	name, remaining, found := strings.Cut(rest, " ")
-	if !found {
-		return name, ""
-	}
-	return name, strings.TrimSpace(remaining)
-}
-
 func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -243,7 +229,7 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// Extract and set sticky session from @mention in input.
 			if c.targetSession == "" && strings.HasPrefix(strings.TrimSpace(c.input), "@") {
-				sessionName, _ := extractMention(text)
+				sessionName, _ := agent.ExtractMention(text)
 				if sessionName != "" {
 					c.targetSession = sessionName
 				}

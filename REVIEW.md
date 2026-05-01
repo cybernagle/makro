@@ -18,3 +18,16 @@
 | 9 | chat.go:208 | Enter triggers autocomplete — blocks message submit | ✅ fixed | d00e750 |
 | 10 | app.go:104 | @auth without space doesn't switch viewer | ✅ fixed | d00e750 |
 | 11 | detect.go:56 | os.Getuid() fails on Windows — add build tags | ✅ fixed | d00e750 |
+
+## Round 3 — 1 comment
+| # | File | Issue | Status | Commit |
+|---|------|-------|--------|--------|
+| 12 | detect.go:10 | Duplicate symbol: detect.go vs detect_unix.go | ✅ N/A — detect.go already renamed, no duplicate | — |
+
+## Round 4 — 4 comments
+| # | File | Issue | Status | Commit |
+|---|------|-------|--------|--------|
+| 13 | detect.go:75 | ServerInfo/DetectServer defined in multiple files | ✅ fixed — moved ServerInfo to detect_types.go | TBD |
+| 14 | app.go:52 | CommandRegistry.List() nondeterministic order | ✅ fixed — sort cmds by Name | TBD |
+| 15 | styles.go:63 | Indentation not gofmt-aligned | ✅ fixed — ran gofmt | TBD |
+| 16 | chat.go:165 | extractMention duplicates agent.ExtractMention | ✅ fixed — removed local copy, use agent.ExtractMention | TBD |
