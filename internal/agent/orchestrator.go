@@ -53,6 +53,7 @@ type Orchestrator struct {
 	messages     []llm.Message
 	systemPrompt string
 	model        string
+	callTimeout  time.Duration
 }
 
 func NewOrchestrator(provider llm.Provider, tc TmuxClient, hooks *HookManager, tools []Tool) *Orchestrator {
@@ -66,12 +67,12 @@ func NewOrchestrator(provider llm.Provider, tc TmuxClient, hooks *HookManager, t
 	}
 
 	return &Orchestrator{
-		provider:     provider,
-		tc:           tc,
-		tools:        tools,
-		toolMap:      toolMap,
-		hooks:        hooks,
-		systemPrompt: defaultSystemPrompt(),
+		provider:    provider,
+		tc:          tc,
+		tools:       tools,
+		toolMap:     toolMap,
+		hooks:       hooks,
+		callTimeout: 60 * time.Second,
 	}
 }
 
@@ -81,6 +82,10 @@ func (o *Orchestrator) SetSystemPrompt(prompt string) {
 
 func (o *Orchestrator) SetModel(model string) {
 	o.model = model
+}
+
+func (o *Orchestrator) SetCallTimeout(d time.Duration) {
+	o.callTimeout = d
 }
 
 func (o *Orchestrator) SetCommandRegistry(cr *CommandRegistry) {
@@ -220,7 +225,7 @@ func (o *Orchestrator) handleLLM(ctx context.Context, ch chan<- OrchestratorEven
 		log.Printf("[orchestrator] LLM call iteration=%d messages=%d", i, len(msgs))
 
 		// Timeout each LLM call to avoid hanging forever.
-		streamCtx, streamCancel := context.WithTimeout(ctx, 60*time.Second)
+		streamCtx, streamCancel := context.WithTimeout(ctx, o.callTimeout)
 		stream, err := o.provider.Stream(streamCtx, msgs, opts)
 		if err != nil {
 			streamCancel()

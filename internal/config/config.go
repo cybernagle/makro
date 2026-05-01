@@ -61,13 +61,15 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	// BigModel (智谱AI) uses OpenAI-compatible protocol at a different path.
+	// BigModel uses OpenAI-compatible protocol.
 	if strings.Contains(cfg.LLMBaseURL, "bigmodel") {
+		cfg.LLMProvider = "openai"
 		rewritten := strings.Replace(cfg.LLMBaseURL, "/api/anthropic", "/api/coding/paas/v4", 1)
 		if rewritten != cfg.LLMBaseURL {
-			log.Printf("[config] BigModel detected, switching to OpenAI protocol: %s", rewritten)
+			log.Printf("[config] BigModel detected, switching to OpenAI protocol and rewriting base URL: %s", rewritten)
 			cfg.LLMBaseURL = rewritten
-			cfg.LLMProvider = "openai"
+		} else {
+			log.Printf("[config] BigModel detected, switching to OpenAI protocol")
 		}
 	}
 
@@ -102,6 +104,15 @@ func (c *Config) applyEnvOverrides() {
 		c.LLMAPIKey = os.Getenv("ANTHROPIC_API_KEY")
 	case "openai":
 		c.LLMAPIKey = os.Getenv("OPENAI_API_KEY")
+	default:
+		// Provider not set yet — try both and auto-detect.
+		if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
+			c.LLMAPIKey = v
+			c.LLMProvider = "anthropic"
+		} else if v := os.Getenv("OPENAI_API_KEY"); v != "" {
+			c.LLMAPIKey = v
+			c.LLMProvider = "openai"
+		}
 	}
 	if v := os.Getenv("FINGERSAVER_LLM_API_KEY"); v != "" {
 		c.LLMAPIKey = v

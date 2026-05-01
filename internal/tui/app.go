@@ -185,14 +185,30 @@ func (a AppModel) View() tea.View {
 	return v
 }
 
-// trimToLines truncates s to at most maxLines lines by removing from the top.
+// trimToLines truncates s to at most maxLines lines while preserving the
+// first and last lines (rendered pane border/header and border/footer).
 func trimToLines(s string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
 	lines := strings.Split(s, "\n")
 	if len(lines) <= maxLines {
 		return s
 	}
-	// Keep bottom border + content, drop overflow from top.
-	return strings.Join(lines[len(lines)-maxLines:], "\n")
+	if maxLines == 1 {
+		return lines[0]
+	}
+	// Reserve first and last lines (borders), trim inner content from top.
+	inner := lines[1 : len(lines)-1]
+	budget := maxLines - 2
+	if len(inner) > budget {
+		inner = inner[len(inner)-budget:]
+	}
+	result := make([]string, 0, 2+len(inner))
+	result = append(result, lines[0])
+	result = append(result, inner...)
+	result = append(result, lines[len(lines)-1])
+	return strings.Join(result, "\n")
 }
 
 func (a *AppModel) processOrchestratorInput(text string) {

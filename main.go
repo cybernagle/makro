@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -59,7 +60,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Set up debug log to file.
+	// Set up debug log to file; discard log output if file creation fails
+	// to prevent log writes to stderr from corrupting the Bubbletea TUI.
+	log.SetOutput(io.Discard)
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err == nil {
 		logFile, err := os.Create(filepath.Join(cfg.DataDir, "debug.log"))
 		if err == nil {

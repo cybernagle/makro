@@ -49,7 +49,7 @@ Phase 1: config ████████
 
 1. **Initialize Go module**
    - `go mod init github.com/naglezhang/fingersaver`
-   - Go 1.22+ in go.mod
+   - Go 1.26.1+ in go.mod
    - Run `go mod tidy` after adding deps in later steps
 
 2. **Create `internal/config/config.go`**
