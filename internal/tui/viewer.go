@@ -108,27 +108,31 @@ func (v ViewerModel) View() tea.View {
 	}
 	visible := lines[start:]
 
-	// Wrap each line to content width to prevent horizontal overflow. (⏺, ⏵ etc.) don't misalign the border.
 	contentW := v.width - 2
 	if contentW < 1 {
 		contentW = 1
 	}
-	wrappedCount := 0
+	renderedCount := 0
 	for _, line := range visible {
-		for _, wl := range wrapLineToWidth(line, contentW) {
-			b.WriteString(viewerContentStyle.Render(wl))
+		if v.compact {
+			for _, wl := range wrapLineToWidth(line, contentW) {
+				b.WriteString(viewerContentStyle.Render(wl))
+				b.WriteString("\n")
+				renderedCount++
+			}
+		} else {
+			b.WriteString(viewerContentStyle.Render(truncateLineToWidth(line, contentW)))
 			b.WriteString("\n")
-			wrappedCount++
+			renderedCount++
 		}
-		if wrappedCount >= visibleHeight {
+		if renderedCount >= visibleHeight {
 			break
 		}
 	}
 
-	for i := wrappedCount; i < visibleHeight; i++ {
+	for i := renderedCount; i < visibleHeight; i++ {
 		b.WriteString("\n")
 	}
-
 	return tea.NewView(b.String())
 }
 
@@ -244,8 +248,45 @@ func (v *ViewerModel) AppendOutput(session, content string) {
 }
 
 // truncateLineToWidth truncates a line to maxW visual columns, preserving
-// ANSI escape sequences. Uses go-runewidth for accurate width measurement
-// of emoji and special glyphs.
+// ANSI escape sequences.
+func truncateLineToWidth(s string, maxW int) string {
+	var b strings.Builder
+	w := 0
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' {
+			j := i + 1
+			if j < len(s) && s[j] == '[' {
+				j++
+				for j < len(s) && s[j] >= 0x20 && s[j] <= 0x3F {
+					j++
+				}
+				if j < len(s) && s[j] >= 0x40 && s[j] <= 0x7E {
+					j++
+				}
+			} else if j < len(s) {
+				j++
+			}
+			b.WriteString(s[i:j])
+			i = j
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		rw := rw.RuneWidth(r)
+		if w+rw > maxW {
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+		i += size
+	}
+	for w < maxW {
+		b.WriteByte(' ')
+		w++
+	}
+	return b.String()
+}
+
 func wrapLineToWidth(s string, maxW int) []string {
 	var lines []string
 	var b strings.Builder
