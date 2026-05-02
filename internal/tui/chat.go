@@ -483,7 +483,12 @@ func renderMarkdown(text string) string {
 
 func (c *ChatModel) trimHistory() {
 	if len(c.inputHistory) > maxInputHistory {
-		c.inputHistory = c.inputHistory[len(c.inputHistory)-maxInputHistory:]
+		trimmed := len(c.inputHistory) - maxInputHistory
+		c.inputHistory = c.inputHistory[trimmed:]
+		c.historyIdx -= trimmed
+		if c.historyIdx < 0 {
+			c.historyIdx = 0
+		}
 	}
 }
 

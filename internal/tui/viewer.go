@@ -238,8 +238,9 @@ func (v *ViewerModel) SetActiveSession(s string) { v.active = s }
 
 func (v *ViewerModel) AppendOutput(session, content string) {
 	// capture-pane returns the full screen each time; replace, don't append.
+	changed := v.sessions[session] != content
 	v.sessions[session] = content
-	if session == v.active && v.scrollOffset > 0 {
+	if changed && session == v.active {
 		v.scrollOffset = 0
 	}
 	if v.active == "" {
