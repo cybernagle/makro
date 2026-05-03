@@ -71,6 +71,15 @@ Deploy the current branch to production.`,
 				Prompt:      "Deploy the current branch to production.",
 			},
 		},
+		{
+			name: "malformed YAML frontmatter returns error",
+			input: `---
+name: review
+description: [
+---
+Body here.`,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

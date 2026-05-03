@@ -54,7 +54,7 @@ func splitFrontmatter(content string) (*frontmatter, string, bool) {
 
 	fm := &frontmatter{}
 	if err := yaml.Unmarshal([]byte(fmText), fm); err != nil {
-		return fm, body, true
+		return nil, "", false
 	}
 	return fm, body, true
 }
