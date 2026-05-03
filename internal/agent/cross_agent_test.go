@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/naglezhang/fingersaver/internal/agent/tools"
 	"github.com/naglezhang/fingersaver/internal/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,17 +22,14 @@ func TestCrossAgentRelay(t *testing.T) {
 			},
 		},
 	}
-	orch := NewOrchestrator(mp, mc, NewHookManager(), AllTools(mc))
+	orch := NewOrchestrator(mp, mc, NewHookManager(), tools.AllTools(mc, nil))
 
 	err := orch.CrossAgentRelay(context.Background(), "auth", "frontend",
 		"Summarize the output from this agent in one line.")
 	require.NoError(t, err)
 
-	// Verify the send-keys command was executed.
-	// Debug: print all executed commands.
 	t.Logf("Executed commands: %v", mc.executed)
 
-	// Verify send-keys was called with the summary.
 	found := false
 	for _, cmd := range mc.executed {
 		if len(cmd) >= 18 && cmd[:18] == "send-keys -t front" && cmd != "send-keys -t frontend Enter" {

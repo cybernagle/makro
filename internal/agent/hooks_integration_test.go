@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/naglezhang/fingersaver/internal/agent/tools"
 	"github.com/naglezhang/fingersaver/internal/llm"
 
 	"github.com/stretchr/testify/assert"
@@ -26,7 +27,6 @@ func TestOrchestratorAfterToolCallHook(t *testing.T) {
 		},
 	}
 	hm := NewHookManager()
-	// Register an after-tool-call hook that modifies the result.
 	hm.Register(Hook{
 		Type: HookAfterToolCall,
 		Name: "modifier",
@@ -35,7 +35,7 @@ func TestOrchestratorAfterToolCallHook(t *testing.T) {
 		},
 	})
 
-	orch := NewOrchestrator(mp, mc, hm, AllTools(mc))
+	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil))
 
 	events, err := orch.ProcessInput(context.Background(), "list sessions")
 	require.NoError(t, err)
@@ -73,7 +73,7 @@ func TestOrchestratorBeforeToolCallBlock(t *testing.T) {
 		},
 	})
 
-	orch := NewOrchestrator(mp, mc, hm, AllTools(mc))
+	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil))
 
 	events, err := orch.ProcessInput(context.Background(), "list sessions")
 	require.NoError(t, err)
@@ -110,7 +110,6 @@ func TestOrchestratorAgentStopHook(t *testing.T) {
 		},
 	})
 
-	// Fire the stop hook manually (simulates adapter detecting completion).
 	_, err := hm.Fire(context.Background(), HookAgentStop, "session-auth")
 	require.NoError(t, err)
 	assert.True(t, stopped)

@@ -45,6 +45,7 @@ type AppModel struct {
 	sendFn       func(tea.Msg)
 	lastOutput   map[string]string
 	lastSessions []string
+	guardian     *agent.GuardianManager
 }
 
 type tmuxClient interface {
@@ -52,7 +53,7 @@ type tmuxClient interface {
 	State() *tmux.StateMirror
 }
 
-func NewAppModel(orch *agent.Orchestrator, tc tmuxClient) AppModel {
+func NewAppModel(orch *agent.Orchestrator, tc tmuxClient, guardian *agent.GuardianManager) AppModel {
 	ctx, cancel := context.WithCancel(context.Background())
 	chat := NewChatModel()
 	if orch != nil {
@@ -72,6 +73,7 @@ func NewAppModel(orch *agent.Orchestrator, tc tmuxClient) AppModel {
 		ctx:          ctx,
 		cancel:       cancel,
 		lastOutput:   make(map[string]string),
+		guardian:     guardian,
 	}
 }
 
@@ -119,6 +121,11 @@ func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case QuitRequestMsg:
 		a.cancel()
 		return a, tea.Quit
+
+	case CancelRequestMsg:
+		if a.orchestrator != nil {
+			a.orchestrator.Cancel()
+		}
 
 	case SubmitMsg:
 		// Handle layout commands locally.
@@ -194,6 +201,12 @@ func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.viewer.SetActiveSession(msg.Content)
 			delete(a.lastOutput, msg.Content)
 		}
+		m, cmd := a.chat.Update(msg)
+		a.chat = m.(ChatModel)
+		cmds = append(cmds, cmd)
+		return a, tea.Batch(cmds...)
+
+	case GuardianEventMsg:
 		m, cmd := a.chat.Update(msg)
 		a.chat = m.(ChatModel)
 		cmds = append(cmds, cmd)
@@ -313,17 +326,17 @@ func trimToLines(s string, maxLines int) string {
 	if len(lines) <= maxLines {
 		return s
 	}
-	if maxLines == 1 {
-		return lines[0]
+	if maxLines <= 2 {
+		return strings.Join(lines[:maxLines], "\n")
 	}
-	// Reserve first and last lines (borders), trim inner content from top.
-	inner := lines[1 : len(lines)-1]
-	budget := maxLines - 2
+	// Reserve first 2 lines (border + title) and last line (border), trim inner content from top.
+	inner := lines[2 : len(lines)-1]
+	budget := maxLines - 3
 	if len(inner) > budget {
 		inner = inner[len(inner)-budget:]
 	}
-	result := make([]string, 0, 2+len(inner))
-	result = append(result, lines[0])
+	result := make([]string, 0, 3+len(inner))
+	result = append(result, lines[0], lines[1])
 	result = append(result, inner...)
 	result = append(result, lines[len(lines)-1])
 	return strings.Join(result, "\n")
@@ -373,34 +386,43 @@ func (a AppModel) pollTmux() tea.Cmd {
 	if a.tmuxClient == nil {
 		return nil
 	}
+	// Snapshot values before entering goroutine to avoid concurrent map access.
+	lastOutputSnap := make(map[string]string, len(a.lastOutput))
+	for k, v := range a.lastOutput {
+		lastOutputSnap[k] = v
+	}
+	activeSnap := a.viewer.ActiveSession()
+	lastSessionsSnap := a.lastSessions
+
 	return func() tea.Msg {
 		state := a.tmuxClient.State()
 		if state == nil {
 			return nil
 		}
 		sessions := state.Sessions()
-		names := make([]string, len(sessions))
-		for i, s := range sessions {
-			names[i] = s.Name
+		names := make([]string, 0, len(sessions))
+		for _, s := range sessions {
+			if s != nil {
+				names = append(names, s.Name)
+			}
 		}
 		sort.Strings(names)
 
 		// Capture output from active session.
-		active := a.viewer.ActiveSession()
-		if active != "" {
-			cmd := tmux.CapturePaneCmd(active)
-			last := a.lastOutput[active]
+		if activeSnap != "" {
+			cmd := tmux.CapturePaneCmd(activeSnap)
+			last := lastOutputSnap[activeSnap]
 			if out, err := a.tmuxClient.Exec(cmd); err == nil && out != "" && strings.TrimSpace(out) != strings.TrimSpace(last) {
 				return combinedTmuxMsg{
 					sessions: names,
 					output:   out,
-					session:  active,
+					session:  activeSnap,
 				}
 			}
 		}
 
 		// Only send update if sessions actually changed.
-		if !sessionsChanged(a.lastSessions, names) {
+		if !sessionsChanged(lastSessionsSnap, names) {
 			return nil
 		}
 		return SessionListMsg{Sessions: names}
@@ -427,6 +449,11 @@ func sessionsChanged(a, b []string) bool {
 
 func (a *AppModel) SetSendFn(fn func(tea.Msg)) {
 	a.sendFn = fn
+	if a.guardian != nil {
+		a.guardian.SetSendEvent(func(session, content string) {
+			fn(GuardianEventMsg{Session: session, Content: content})
+		})
+	}
 }
 
 func (a *AppModel) SetLayout(l Layout) {
@@ -436,6 +463,9 @@ func (a *AppModel) SetLayout(l Layout) {
 }
 
 func (a *AppModel) recalcSizes() {
+	if a.width == 0 || a.height == 0 {
+		return
+	}
 	if a.layout == LayoutPhone {
 		viewerH := a.height * 3 / 5
 		chatH := a.height - viewerH

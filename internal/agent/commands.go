@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/naglezhang/fingersaver/internal/agent/tools"
 )
 
 type SlashCommand struct {
@@ -15,13 +17,15 @@ type SlashCommand struct {
 
 type CommandRegistry struct {
 	commands map[string]*SlashCommand
-	tc       TmuxClient
+	tc       tools.TmuxClient
+	guardian tools.Guardian
 }
 
-func NewCommandRegistry(tc TmuxClient) *CommandRegistry {
+func NewCommandRegistry(tc tools.TmuxClient, guardian tools.Guardian) *CommandRegistry {
 	cr := &CommandRegistry{
 		commands: make(map[string]*SlashCommand),
 		tc:       tc,
+		guardian: guardian,
 	}
 	cr.registerDefaults()
 	return cr
@@ -35,7 +39,7 @@ func (cr *CommandRegistry) registerDefaults() {
 			if len(args) < 1 {
 				return "", fmt.Errorf("usage: /create <name> [working-dir]")
 			}
-			tool := NewCreateSessionTool(cr.tc)
+			tool := tools.NewCreateSessionTool(cr.tc)
 			toolArgs := map[string]any{"name": args[0]}
 			if len(args) > 1 {
 				toolArgs["working_dir"] = args[1]
@@ -50,7 +54,7 @@ func (cr *CommandRegistry) registerDefaults() {
 			if len(args) < 1 {
 				return "", fmt.Errorf("usage: /switch <name>")
 			}
-			tool := NewSwitchSessionTool(cr.tc)
+			tool := tools.NewSwitchSessionTool(cr.tc)
 			return tool.Execute(ctx, map[string]any{"name": args[0]})
 		},
 	})
@@ -61,7 +65,7 @@ func (cr *CommandRegistry) registerDefaults() {
 			if len(args) < 1 {
 				return "", fmt.Errorf("usage: /kill <name>")
 			}
-			tool := NewKillSessionTool(cr.tc)
+			tool := tools.NewKillSessionTool(cr.tc)
 			return tool.Execute(ctx, map[string]any{"name": args[0]})
 		},
 	})
@@ -69,7 +73,7 @@ func (cr *CommandRegistry) registerDefaults() {
 		Name: "list", Usage: "/list",
 		Description: "List all sessions",
 		Execute: func(ctx context.Context, args []string) (string, error) {
-			tool := NewListSessionsTool(cr.tc)
+			tool := tools.NewListSessionsTool(cr.tc)
 			return tool.Execute(ctx, nil)
 		},
 	})
@@ -83,6 +87,39 @@ func (cr *CommandRegistry) registerDefaults() {
 				sb.WriteString(fmt.Sprintf("  %-30s %s\n", cmd.Usage, cmd.Description))
 			}
 			return sb.String(), nil
+		},
+	})
+
+	cr.Register(&SlashCommand{
+		Name:        "watch",
+		Usage:       "/watch <session> | /watch stop [session] | /watch list",
+		Description: "Start or stop session guardian (auto-approve/reject agent confirmations)",
+		Execute: func(ctx context.Context, args []string) (string, error) {
+			if cr.guardian == nil {
+				return "", fmt.Errorf("guardian not available")
+			}
+			if len(args) == 0 {
+				return "", fmt.Errorf("usage: /watch <session> | /watch stop [session] | /watch list")
+			}
+			switch args[0] {
+			case "stop":
+				if len(args) > 1 {
+					return "", cr.guardian.Stop(args[1])
+				}
+				cr.guardian.StopAll()
+				return "All guardians stopped.", nil
+			case "list":
+				active := cr.guardian.ActiveGuardians()
+				if len(active) == 0 {
+					return "No active guardians.", nil
+				}
+				return "Watching: " + strings.Join(active, ", "), nil
+			default:
+				if err := cr.guardian.Watch(ctx, args[0]); err != nil {
+					return "", err
+				}
+				return fmt.Sprintf("Guardian started for %q", args[0]), nil
+			}
 		},
 	})
 }

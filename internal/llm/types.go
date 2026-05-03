@@ -68,6 +68,13 @@ type StreamEvent struct {
 	Err            error
 }
 
+// CompleteResult holds the non-streaming LLM response.
+type CompleteResult struct {
+	Content    string
+	ToolCalls  []ToolCall
+	StopReason string
+}
+
 type GenerateOptions struct {
 	Model        string
 	MaxTokens    int

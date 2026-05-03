@@ -9,7 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/naglezhang/fingersaver/internal/agent/tools"
 	"github.com/naglezhang/fingersaver/internal/llm"
+	"github.com/naglezhang/fingersaver/internal/util"
 )
 
 type OrchestratorEventType int
@@ -44,9 +46,10 @@ type OrchestratorEvent struct {
 
 type Orchestrator struct {
 	provider     llm.Provider
-	tc           TmuxClient
-	tools        []Tool
-	toolMap      map[string]Tool
+	tc           tools.TmuxClient
+	guardian     tools.Guardian
+	toolList     []tools.Tool
+	toolMap      map[string]tools.Tool
 	commands     *CommandRegistry
 	hooks        *HookManager
 	msgMu        sync.Mutex
@@ -54,11 +57,13 @@ type Orchestrator struct {
 	systemPrompt string
 	model        string
 	callTimeout  time.Duration
+	cancelMu     sync.Mutex
+	cancelFn     context.CancelFunc
 }
 
-func NewOrchestrator(provider llm.Provider, tc TmuxClient, hooks *HookManager, tools []Tool) *Orchestrator {
-	toolMap := make(map[string]Tool, len(tools))
-	for _, t := range tools {
+func NewOrchestrator(provider llm.Provider, tc tools.TmuxClient, hooks *HookManager, toolList []tools.Tool) *Orchestrator {
+	toolMap := make(map[string]tools.Tool, len(toolList))
+	for _, t := range toolList {
 		toolMap[t.Name] = t
 	}
 
@@ -69,7 +74,7 @@ func NewOrchestrator(provider llm.Provider, tc TmuxClient, hooks *HookManager, t
 	return &Orchestrator{
 		provider:    provider,
 		tc:          tc,
-		tools:       tools,
+		toolList:    toolList,
 		toolMap:     toolMap,
 		hooks:       hooks,
 		callTimeout: 60 * time.Second,
@@ -82,6 +87,10 @@ func (o *Orchestrator) SetSystemPrompt(prompt string) {
 
 func (o *Orchestrator) SetModel(model string) {
 	o.model = model
+}
+
+func (o *Orchestrator) SetGuardian(gm tools.Guardian) {
+	o.guardian = gm
 }
 
 func (o *Orchestrator) SetCallTimeout(d time.Duration) {
@@ -107,6 +116,15 @@ func (o *Orchestrator) Hooks() *HookManager {
 	return o.hooks
 }
 
+// Cancel aborts the current in-progress LLM/tool call chain.
+func (o *Orchestrator) Cancel() {
+	o.cancelMu.Lock()
+	defer o.cancelMu.Unlock()
+	if o.cancelFn != nil {
+		o.cancelFn()
+	}
+}
+
 func (o *Orchestrator) appendMessage(msg llm.Message) {
 	o.msgMu.Lock()
 	o.messages = append(o.messages, msg)
@@ -124,7 +142,6 @@ func (o *Orchestrator) snapshotMessages() []llm.Message {
 // CrossAgentRelay reads output from sourceSession, asks the LLM to summarize,
 // and sends the summary to targetSession.
 func (o *Orchestrator) CrossAgentRelay(ctx context.Context, sourceSession, targetSession, prompt string) error {
-	// Read source session output.
 	readTool, ok := o.toolMap["read_session_output"]
 	if !ok {
 		return fmt.Errorf("read_session_output tool not found")
@@ -134,12 +151,11 @@ func (o *Orchestrator) CrossAgentRelay(ctx context.Context, sourceSession, targe
 		return fmt.Errorf("read %s: %w", sourceSession, err)
 	}
 
-	// Ask LLM to summarize/extract.
 	relayPrompt := fmt.Sprintf("%s\n\nAgent output:\n%s", prompt, output)
 	o.appendMessage(llm.Message{Role: llm.RoleUser, Content: relayPrompt})
 
 	opts := o.buildOptions()
-	opts.Tools = nil // No tool calls needed for relay.
+	opts.Tools = nil
 
 	stream, err := o.provider.Stream(ctx, o.snapshotMessages(), opts)
 	if err != nil {
@@ -156,7 +172,6 @@ func (o *Orchestrator) CrossAgentRelay(ctx context.Context, sourceSession, targe
 		}
 	}
 
-	// Send summary to target session.
 	sendTool, ok := o.toolMap["send_to_session"]
 	if !ok {
 		return fmt.Errorf("send_to_session tool not found")
@@ -169,12 +184,18 @@ func (o *Orchestrator) CrossAgentRelay(ctx context.Context, sourceSession, targe
 }
 
 func (o *Orchestrator) ProcessInput(ctx context.Context, input string) (<-chan OrchestratorEvent, error) {
+	// Create a cancellable context for this request so Cancel() can stop it.
+	ctx, cancel := context.WithCancel(ctx)
+	o.cancelMu.Lock()
+	o.cancelFn = cancel
+	o.cancelMu.Unlock()
+
 	ch := make(chan OrchestratorEvent, 64)
 
-	// Route: slash command.
 	if strings.HasPrefix(strings.TrimSpace(input), "/") && o.commands != nil {
 		go func() {
 			defer close(ch)
+			defer cancel()
 			result, err := o.commands.Execute(ctx, input)
 			if err != nil {
 				ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("Error: %v", err)}
@@ -186,19 +207,24 @@ func (o *Orchestrator) ProcessInput(ctx context.Context, input string) (<-chan O
 		return ch, nil
 	}
 
-	// Route: @mention.
 	sessionName, text := ExtractMention(input)
 	if sessionName != "" {
 		go func() {
 			defer close(ch)
+			defer cancel()
 			o.handleMention(ctx, ch, sessionName, text)
 		}()
 		return ch, nil
 	}
 
-	// Route: natural language to LLM.
 	go func() {
 		defer close(ch)
+		defer cancel()
+		defer func() {
+			o.cancelMu.Lock()
+			o.cancelFn = nil
+			o.cancelMu.Unlock()
+		}()
 		o.handleLLM(ctx, ch, input)
 	}()
 
@@ -206,7 +232,7 @@ func (o *Orchestrator) ProcessInput(ctx context.Context, input string) (<-chan O
 }
 
 func (o *Orchestrator) handleMention(ctx context.Context, ch chan<- OrchestratorEvent, sessionName, text string) {
-	tool := NewSendToSessionTool(o.tc)
+	tool := tools.NewSendToSessionTool(o.tc, o.guardian)
 	result, err := tool.Execute(ctx, map[string]any{
 		"name":    sessionName,
 		"message": text,
@@ -220,105 +246,76 @@ func (o *Orchestrator) handleMention(ctx context.Context, ch chan<- Orchestrator
 }
 
 func (o *Orchestrator) handleLLM(ctx context.Context, ch chan<- OrchestratorEvent, input string) {
-	const maxToolIterations = 10
-
 	o.appendMessage(llm.Message{Role: llm.RoleUser, Content: input})
 
 	opts := o.buildOptions()
 	log.Printf("[orchestrator] handleLLM start inputLen=%d model=%s", len(input), opts.Model)
 
-	for i := 0; i < maxToolIterations; i++ {
-		msgs := o.snapshotMessages()
-		log.Printf("[orchestrator] LLM call iteration=%d messages=%d", i, len(msgs))
+	const maxToolIterations = 20
 
-		// Timeout each LLM call to avoid hanging forever.
-		streamCtx, streamCancel := context.WithTimeout(ctx, o.callTimeout)
-		stream, err := o.provider.Stream(streamCtx, msgs, opts)
+	for i := 0; i < maxToolIterations; i++ {
+		if ctx.Err() != nil {
+			log.Printf("[orchestrator] handleLLM cancelled")
+			ch <- OrchestratorEvent{Type: EventText, Content: "Cancelled."}
+			ch <- OrchestratorEvent{Type: EventDone}
+			return
+		}
+
+		msgs := o.snapshotMessages()
+		log.Printf("[orchestrator] LLM call messages=%d", len(msgs))
+
+		callCtx, callCancel := context.WithTimeout(ctx, o.callTimeout)
+		log.Printf("[orchestrator] starting LLM complete timeout=%s ctx_err=%v", o.callTimeout, ctx.Err())
+		result, err := o.provider.Complete(callCtx, msgs, opts)
+		callCancel()
 		if err != nil {
-			streamCancel()
-			log.Printf("[orchestrator] LLM stream error: %v", err)
+			log.Printf("[orchestrator] LLM complete error: %v", err)
 			ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("LLM error: %v", err)}
 			ch <- OrchestratorEvent{Type: EventDone}
 			return
 		}
 
-		var textParts strings.Builder
-		var toolCalls []llm.ToolCall
-		activeToolCalls := make(map[string]*llm.ToolCall)
-		eventCount := 0
+		log.Printf("[orchestrator] complete done text_len=%d tools=%d stop=%s", len(result.Content), len(result.ToolCalls), result.StopReason)
 
-		for event := range stream {
-			eventCount++
-			switch event.Type {
-			case llm.EventTextDelta:
-				textParts.WriteString(event.Text)
-				ch <- OrchestratorEvent{Type: EventText, Content: event.Text}
-
-			case llm.EventToolCallStart:
-				tc := &llm.ToolCall{ID: event.ToolCallID, Name: event.ToolCallName}
-				activeToolCalls[event.ToolCallID] = tc
-				log.Printf("[orchestrator] tool_call_start name=%s", event.ToolCallName)
-
-			case llm.EventToolCallDelta:
-				if tc, ok := activeToolCalls[event.ToolCallID]; ok {
-					tc.Arguments += event.ArgumentsDelta
-				}
-
-			case llm.EventDone:
-				// Finalize active tool calls.
-				for _, tc := range activeToolCalls {
-					toolCalls = append(toolCalls, *tc)
-				}
-				log.Printf("[orchestrator] stream done events=%d text=%d tools=%d", eventCount, textParts.Len(), len(toolCalls))
-
-			case llm.EventError:
-				log.Printf("[orchestrator] stream error event: %v", event.Err)
-				ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("Stream error: %v", event.Err)}
-				ch <- OrchestratorEvent{Type: EventDone}
-				streamCancel()
-				return
-			}
+		if result.Content != "" {
+			ch <- OrchestratorEvent{Type: EventText, Content: result.Content}
 		}
 
-		streamCancel()
+		o.appendMessage(llm.Message{
+			Role:      llm.RoleAssistant,
+			Content:   result.Content,
+			ToolCalls: result.ToolCalls,
+		})
 
-		// Add assistant message to history.
-		assistantMsg := llm.Message{Role: llm.RoleAssistant}
-		if textParts.Len() > 0 {
-			assistantMsg.Content = textParts.String()
-		}
-		assistantMsg.ToolCalls = toolCalls
-		o.appendMessage(assistantMsg)
-
-		// If no tool calls, we're done.
-		if len(toolCalls) == 0 {
-			log.Printf("[orchestrator] handleLLM done text_len=%d", textParts.Len())
+		if len(result.ToolCalls) == 0 {
+			log.Printf("[orchestrator] handleLLM done text_len=%d", len(result.Content))
 			ch <- OrchestratorEvent{Type: EventDone}
 			return
 		}
 
-		// Execute tool calls and collect results.
 		var toolResults []llm.ToolResult
-		for _, tc := range toolCalls {
+		for _, tc := range result.ToolCalls {
+			if ctx.Err() != nil {
+				log.Printf("[orchestrator] handleLLM cancelled before tool %s", tc.Name)
+				ch <- OrchestratorEvent{Type: EventText, Content: "Cancelled."}
+				ch <- OrchestratorEvent{Type: EventDone}
+				return
+			}
 			log.Printf("[orchestrator] executing tool name=%s", tc.Name)
 			ch <- OrchestratorEvent{Type: EventToolCall, ToolName: tc.Name, ToolArgs: parseJSONArgs(tc.Arguments)}
 
-			result := o.executeTool(ctx, tc)
-			toolResults = append(toolResults, result)
+			toolResult := o.executeTool(ctx, tc)
+			toolResults = append(toolResults, toolResult)
 
-			log.Printf("[orchestrator] tool result name=%s len=%d isError=%v", tc.Name, len(result.Content), result.IsError)
-			ch <- OrchestratorEvent{Type: EventToolResult, ToolName: tc.Name, Content: result.Content, ToolResult: result.Content}
+			log.Printf("[orchestrator] tool result name=%s len=%d isError=%v", tc.Name, len(toolResult.Content), toolResult.IsError)
+			ch <- OrchestratorEvent{Type: EventToolResult, ToolName: tc.Name, Content: toolResult.Content, ToolResult: toolResult.Content}
 		}
 
-		// Add tool results to history.
 		o.appendMessage(llm.Message{Role: llm.RoleTool, ToolResults: toolResults})
 
-		// Reset opts — tools and system prompt only sent on first call.
 		opts = o.buildOptions()
-		opts.Tools = nil // Subsequent calls don't need tool definitions re-sent.
 	}
 
-	// Iteration cap reached.
 	log.Printf("[orchestrator] handleLLM hit max iterations=%d", maxToolIterations)
 	ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("Reached maximum tool iterations (%d). Stopping.", maxToolIterations)}
 	ch <- OrchestratorEvent{Type: EventDone}
@@ -332,7 +329,6 @@ func (o *Orchestrator) executeTool(ctx context.Context, tc llm.ToolCall) llm.Too
 
 	args := parseJSONArgs(tc.Arguments)
 
-	// Fire before-tool-call hooks.
 	result, err := o.hooks.Fire(ctx, HookBeforeToolCall, args)
 	if err != nil {
 		return llm.ToolResult{CallID: tc.ID, Content: fmt.Sprintf("Hook error: %v", err), IsError: true}
@@ -346,7 +342,6 @@ func (o *Orchestrator) executeTool(ctx context.Context, tc llm.ToolCall) llm.Too
 		return llm.ToolResult{CallID: tc.ID, Content: err.Error(), IsError: true}
 	}
 
-	// Fire after-tool-call hooks — can modify result.
 	afterResult, err := o.hooks.Fire(ctx, HookAfterToolCall, output)
 	if err != nil {
 		return llm.ToolResult{CallID: tc.ID, Content: fmt.Sprintf("After-hook error: %v", err), IsError: true}
@@ -355,12 +350,12 @@ func (o *Orchestrator) executeTool(ctx context.Context, tc llm.ToolCall) llm.Too
 		output = modified.ModifiedResult
 	}
 
-	return llm.ToolResult{CallID: tc.ID, Content: output}
+	return llm.ToolResult{CallID: tc.ID, Content: util.Truncate(output, 3000)}
 }
 
 func (o *Orchestrator) buildOptions() llm.GenerateOptions {
-	tools := make([]llm.ToolDefinition, len(o.tools))
-	for i, t := range o.tools {
+	defs := make([]llm.ToolDefinition, len(o.toolList))
+	for i, t := range o.toolList {
 		params := map[string]any{"type": "object", "properties": map[string]any{}}
 		required := []string{}
 		for _, p := range t.Parameters {
@@ -376,7 +371,7 @@ func (o *Orchestrator) buildOptions() llm.GenerateOptions {
 			params["required"] = required
 		}
 
-		tools[i] = llm.ToolDefinition{
+		defs[i] = llm.ToolDefinition{
 			Name:        t.Name,
 			Description: t.Description,
 			Parameters:  params,
@@ -385,7 +380,7 @@ func (o *Orchestrator) buildOptions() llm.GenerateOptions {
 
 	return llm.GenerateOptions{
 		MaxTokens:    4096,
-		Tools:        tools,
+		Tools:        defs,
 		SystemPrompt: o.systemPrompt,
 		Model:        o.model,
 	}
@@ -394,14 +389,19 @@ func (o *Orchestrator) buildOptions() llm.GenerateOptions {
 func parseJSONArgs(raw string) map[string]any {
 	args := make(map[string]any)
 	if err := json.Unmarshal([]byte(raw), &args); err != nil && raw != "" && raw != "{}" {
-		// Return what we can; caller checks required params individually.
 		args["_parse_error"] = err.Error()
 	}
 	return args
 }
 
-func defaultSystemPrompt() string {
+func DefaultSystemPrompt() string {
 	return `You are FingerSaver, a coding agent orchestrator. You manage multiple tmux sessions running coding agents like Claude Code and GitHub Copilot.
+
+CRITICAL RULES:
+- ALWAYS use tools to perform actions. NEVER just describe what you will do.
+- To relay information between sessions: first read_session_output, then send_to_session with the actual content.
+- When the user asks you to send content to a session, call send_to_session with the full content as the message argument. Do NOT just say you will send it — actually call the tool.
+- Be concise in responses.
 
 Available tools:
 - list_sessions: List all tmux sessions
@@ -410,6 +410,17 @@ Available tools:
 - kill_session: Kill a session (args: name)
 - send_to_session: Send text to a session (args: name, message)
 - read_session_output: Read a session's current output (args: name)
+- read_structured_output: Parse session output into structured JSON with status, messages, errors, files (args: name)
+- relay_message: Relay structured message between sessions with source summary (args: from_session, to_session, message_type, content)
+- save_context: Save session snapshot to disk (args: name, label)
+- restore_context: Restore saved context to a session (args: name, source_session, label)
+- wait_until_idle: Poll a session until agent is idle (args: session_name, timeout_seconds)
+- set_state: Persist key-value state (args: key, value)
+- get_state: Read key-value state (args: key)
+- watch_session: Start a guardian that monitors a session for confirmation prompts and auto-responds (args: name)
+- unwatch_session: Stop watching a session (args: name)
+- list_watchers: List all sessions being watched
 
-When the user refers to a session by name (e.g., "check the auth service"), use switch_session and read_session_output to understand the state. Be concise in your responses.`
+When the user refers to a session by name (e.g., "check the auth service"), use switch_session and read_session_output to understand the state.
+When the user asks you to "watch" or "monitor" a session, use watch_session. Multiple sessions can be watched simultaneously.`
 }

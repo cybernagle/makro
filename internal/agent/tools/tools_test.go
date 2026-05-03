@@ -1,14 +1,14 @@
-package agent
+package tools
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
-	"github.com/naglezhang/fingersaver/internal/util"
-
 	"github.com/naglezhang/fingersaver/internal/tmux"
+	"github.com/naglezhang/fingersaver/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -135,7 +135,7 @@ func TestKillSessionTool(t *testing.T) {
 func TestSendToSessionTool(t *testing.T) {
 	mc := newMockTmuxClient()
 
-	tool := NewSendToSessionTool(mc)
+	tool := NewSendToSessionTool(mc, nil)
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"name":    "target",
 		"message": "echo hello",
@@ -146,14 +146,14 @@ func TestSendToSessionTool(t *testing.T) {
 
 func TestSendToSessionMissingArgs(t *testing.T) {
 	mc := newMockTmuxClient()
-	tool := NewSendToSessionTool(mc)
+	tool := NewSendToSessionTool(mc, nil)
 	_, err := tool.Execute(context.Background(), map[string]any{"name": "x"})
 	assert.Error(t, err)
 }
 
 func TestReadSessionOutputTool(t *testing.T) {
 	mc := newMockTmuxClient()
-	mc.results[fmt.Sprintf("capture-pane -t %s -p", "reader")] = "line1\nline2\nline3"
+	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "reader")] = "line1\nline2\nline3"
 
 	tool := NewReadSessionOutputTool(mc)
 	result, err := tool.Execute(context.Background(), map[string]any{
@@ -161,6 +161,40 @@ func TestReadSessionOutputTool(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Contains(t, result, "line1")
+	assert.Contains(t, result, `"total_lines":3`)
+	assert.Contains(t, result, `"has_more":false`)
+}
+
+func TestReadSessionOutputPaging(t *testing.T) {
+	mc := newMockTmuxClient()
+	var lines []string
+	for i := 1; i <= 10; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "pager")] = strings.Join(lines, "\n")
+
+	tool := NewReadSessionOutputTool(mc)
+
+	// Page 1: last 3 lines (offset=0, lines=3)
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"name":   "pager",
+		"lines":  float64(3),
+		"offset": float64(0),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result, "line 10")
+	assert.Contains(t, result, `"total_lines":10`)
+	assert.Contains(t, result, `"has_more":true`)
+
+	// Page 2: lines 4-6 from end (offset=3, lines=3)
+	result, err = tool.Execute(context.Background(), map[string]any{
+		"name":   "pager",
+		"lines":  float64(3),
+		"offset": float64(3),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result, "line 7")
+	assert.Contains(t, result, `"has_more":true`)
 }
 
 func TestReadSessionOutputEmpty(t *testing.T) {
@@ -175,8 +209,35 @@ func TestReadSessionOutputEmpty(t *testing.T) {
 
 func TestAllToolsCount(t *testing.T) {
 	mc := newMockTmuxClient()
-	tools := AllTools(mc)
-	assert.Len(t, tools, 6)
+	ts := AllTools(mc, nil)
+	assert.Len(t, ts, 13)
+}
+
+func TestReadStructuredOutputTool(t *testing.T) {
+	mc := newMockTmuxClient()
+	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "dev")] = "⏺ I'll fix the auth bug.\n⏺ Read file: internal/auth/handler.go\n> check status\n⏺ All tests pass."
+
+	tool := NewReadStructuredOutputTool(mc)
+	result, err := tool.Execute(context.Background(), map[string]any{"name": "dev"})
+	require.NoError(t, err)
+	assert.Contains(t, result, `"status"`)
+	assert.Contains(t, result, `"thinking"`)
+	assert.Contains(t, result, `internal/auth/handler.go`)
+	assert.Contains(t, result, `check status`)
+}
+
+func TestParseStructuredOutputWaitingInput(t *testing.T) {
+	raw := "⏺ Do you want to proceed with this change?\n❯ 1. Yes\n  2. No"
+	out := parseStructuredOutput(raw)
+	assert.Equal(t, "waiting_input", out.Status)
+	assert.NotNil(t, out.PendingConfirmation)
+	assert.Equal(t, "yes_no", out.PendingConfirmation.Type)
+}
+
+func TestParseStructuredOutputError(t *testing.T) {
+	raw := "⏺ Running… go test ./...\nFAIL: TestAuth\nError: test failed"
+	out := parseStructuredOutput(raw)
+	assert.True(t, len(out.Errors) > 0)
 }
 
 func TestTruncate(t *testing.T) {

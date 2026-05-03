@@ -4,6 +4,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/naglezhang/fingersaver/internal/util"
+
 	tea "charm.land/bubbletea/v2"
 	rw "github.com/mattn/go-runewidth"
 )
@@ -19,6 +21,10 @@ type ViewerModel struct {
 	compact      bool // phone layout: filter noise lines
 	scrollOffset int  // lines scrolled up from the bottom
 }
+
+// viewerReservedLines is the number of lines reserved for non-content UI
+// elements (status bar + top/bottom padding + tab bar).
+const viewerReservedLines = 3
 
 func NewViewerModel() ViewerModel {
 	return ViewerModel{
@@ -68,7 +74,24 @@ func (v ViewerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	v.clampScrollOffset()
 	return v, nil
+}
+
+func (v *ViewerModel) clampScrollOffset() {
+	if v.scrollOffset < 0 {
+		v.scrollOffset = 0
+	}
+	if v.height <= viewerReservedLines {
+		return
+	}
+	maxOff := len(strings.Split(v.sessions[v.active], "\n")) - (v.height - viewerReservedLines)
+	if maxOff < 0 {
+		maxOff = 0
+	}
+	if v.scrollOffset > maxOff {
+		v.scrollOffset = maxOff
+	}
 }
 
 func (v ViewerModel) View() tea.View {
@@ -83,10 +106,10 @@ func (v ViewerModel) View() tea.View {
 	content := v.sessions[v.active]
 	lines := strings.Split(content, "\n")
 	if v.compact {
-		lines = filterNoiseLines(lines)
+		lines = util.FilterNoiseLines(lines)
 	}
 
-	visibleHeight := v.height - 5
+	visibleHeight := v.height - viewerReservedLines
 	if visibleHeight < 1 {
 		visibleHeight = 1
 	}
@@ -99,7 +122,6 @@ func (v ViewerModel) View() tea.View {
 	}
 	if offset > maxOff {
 		offset = maxOff
-		v.scrollOffset = maxOff
 	}
 
 	start := len(lines) - visibleHeight - offset
@@ -134,38 +156,6 @@ func (v ViewerModel) View() tea.View {
 		b.WriteString("\n")
 	}
 	return tea.NewView(b.String())
-}
-
-// isNoiseLine returns true for lines that carry no useful content.
-func isNoiseLine(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" {
-		return true
-	}
-	// Pure separator lines: box-drawing, dashes, equals, tildes.
-	for _, r := range trimmed {
-		if 0x2500 <= r && r <= 0x257F {
-			continue
-		}
-		if r == '─' || r == '━' || r == '│' || r == '┃' {
-			continue
-		}
-		if r == '-' || r == '=' || r == '~' || r == '*' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func filterNoiseLines(lines []string) []string {
-	filtered := make([]string, 0, len(lines))
-	for _, l := range lines {
-		if !isNoiseLine(l) {
-			filtered = append(filtered, l)
-		}
-	}
-	return filtered
 }
 
 func (v *ViewerModel) renderTabs() string {

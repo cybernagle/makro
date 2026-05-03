@@ -15,6 +15,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/naglezhang/fingersaver/internal/agent"
+	"github.com/naglezhang/fingersaver/internal/agent/tools"
 	"github.com/naglezhang/fingersaver/internal/config"
 	"github.com/naglezhang/fingersaver/internal/llm"
 	"github.com/naglezhang/fingersaver/internal/tmux"
@@ -107,11 +108,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create orchestrator.
+	// Create guardian manager and orchestrator.
 	hm := agent.NewHookManager()
-	orch := agent.NewOrchestrator(provider, tc, hm, agent.AllTools(tc))
-	orch.SetCommandRegistry(agent.NewCommandRegistry(tc))
+	gm := agent.NewGuardianManager(provider, tc, cfg.LLMModel)
+	orch := agent.NewOrchestrator(provider, tc, hm, tools.AllTools(tc, gm))
+	orch.SetCommandRegistry(agent.NewCommandRegistry(tc, gm))
 	orch.SetModel(cfg.LLMModel)
+	orch.SetGuardian(gm)
+	orch.SetSystemPrompt(agent.DefaultSystemPrompt())
 
 	if *chatMode {
 		runChat(ctx, orch)
@@ -119,7 +123,7 @@ func main() {
 	}
 
 	// Create and run TUI.
-	app := tui.NewAppModel(orch, tc)
+	app := tui.NewAppModel(orch, tc, gm)
 	if *phoneLayout {
 		app.SetLayout(tui.LayoutPhone)
 	}

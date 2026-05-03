@@ -5,9 +5,10 @@ import (
 	"fmt"
 )
 
-// Provider is the interface for LLM providers with streaming support.
+// Provider is the interface for LLM providers.
 type Provider interface {
 	Stream(ctx context.Context, messages []Message, opts GenerateOptions) (<-chan StreamEvent, error)
+	Complete(ctx context.Context, messages []Message, opts GenerateOptions) (*CompleteResult, error)
 	Name() string
 }
 

@@ -48,6 +48,9 @@ var (
 	systemMsgStyle = lipgloss.NewStyle().
 			Foreground(colorDim)
 
+	guardianMsgStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("184"))
+
 	toolCallStyle = lipgloss.NewStyle().
 			Foreground(colorSecondary).
 			Italic(true)

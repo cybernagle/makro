@@ -61,7 +61,7 @@ func TestExtractMention(t *testing.T) {
 
 func TestCommandRegistryExecute(t *testing.T) {
 	mc := newMockTmuxClient()
-	cr := NewCommandRegistry(mc)
+	cr := NewCommandRegistry(mc, nil)
 
 	result, err := cr.Execute(nil, "/help")
 	assert.NoError(t, err)
@@ -71,7 +71,7 @@ func TestCommandRegistryExecute(t *testing.T) {
 
 func TestCommandRegistryUnknown(t *testing.T) {
 	mc := newMockTmuxClient()
-	cr := NewCommandRegistry(mc)
+	cr := NewCommandRegistry(mc, nil)
 
 	_, err := cr.Execute(nil, "/unknown")
 	assert.Error(t, err)
@@ -80,7 +80,7 @@ func TestCommandRegistryUnknown(t *testing.T) {
 
 func TestCommandRegistryNotSlashCommand(t *testing.T) {
 	mc := newMockTmuxClient()
-	cr := NewCommandRegistry(mc)
+	cr := NewCommandRegistry(mc, nil)
 
 	_, err := cr.Execute(nil, "hello")
 	assert.Error(t, err)

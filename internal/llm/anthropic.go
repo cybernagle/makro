@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -102,6 +103,39 @@ func (p *AnthropicProvider) Stream(ctx context.Context, messages []Message, opts
 	return ch, nil
 }
 
+func (p *AnthropicProvider) Complete(ctx context.Context, messages []Message, opts GenerateOptions) (*CompleteResult, error) {
+	params, err := p.buildParams(messages, opts)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic: build params: %w", err)
+	}
+
+	start := time.Now()
+	log.Printf("[llm/anthropic] complete start model=%s", params.Model)
+
+	msg, err := p.client.Messages.New(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic complete: %w", err)
+	}
+
+	log.Printf("[llm/anthropic] complete done elapsed=%s stop_reason=%s", time.Since(start).Round(time.Millisecond), msg.StopReason)
+
+	result := &CompleteResult{StopReason: string(msg.StopReason)}
+	for _, block := range msg.Content {
+		switch b := block.AsAny().(type) {
+		case anthropic.TextBlock:
+			result.Content += b.Text
+		case anthropic.ToolUseBlock:
+			args, _ := json.Marshal(b.Input)
+			result.ToolCalls = append(result.ToolCalls, ToolCall{
+				ID:        b.ID,
+				Name:      b.Name,
+				Arguments: string(args),
+			})
+		}
+	}
+
+	return result, nil
+}
 func (p *AnthropicProvider) buildParams(messages []Message, opts GenerateOptions) (anthropic.MessageNewParams, error) {
 	params := anthropic.MessageNewParams{
 		Model:     opts.Model,

@@ -18,6 +18,7 @@ type ChatMessage struct {
 	Role      string
 	Content   string
 	Streaming bool
+	rendered  string
 }
 
 type CommandSuggestion struct {
@@ -222,6 +223,7 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				c.inputHistory = append(c.inputHistory, input)
 				c.historyIdx = len(c.inputHistory)
 				c.textInput.Reset()
+				c.trimHistory()
 				return c, func() tea.Msg { return SubmitMsg{Text: trimmed} }
 			}
 			text := input
@@ -263,6 +265,9 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				c.textInput.Reset()
 			}
 		case "ctrl+c":
+			if c.working {
+				return c, func() tea.Msg { return CancelRequestMsg{} }
+			}
 			if time.Since(c.lastCtrlC) > 2*time.Second {
 				c.ctrlCCount = 0
 			}
@@ -339,19 +344,34 @@ func (c ChatModel) View() tea.View {
 	// Render all content into lines, then trim from top to fit.
 	var contentLines []string
 
-	for _, m := range c.messages {
+	for i := range c.messages {
+		m := &c.messages[i]
 		var rendered string
 		switch m.Role {
 		case "user":
-			rendered = userMsgStyle.Render("> " + m.Content)
+			if m.rendered == "" {
+				m.rendered = userMsgStyle.Render("> " + m.Content)
+			}
+			rendered = m.rendered
 		case "assistant":
 			if m.Streaming {
 				rendered = assistantMsgStyle.Render(m.Content)
 			} else {
-				rendered = assistantMsgStyle.Render(renderMarkdown(m.Content))
+				if m.rendered == "" {
+					m.rendered = assistantMsgStyle.Render(renderMarkdown(m.Content))
+				}
+				rendered = m.rendered
 			}
 		case "system":
-			rendered = systemMsgStyle.Render(m.Content)
+			if m.rendered == "" {
+				m.rendered = systemMsgStyle.Render(m.Content)
+			}
+			rendered = m.rendered
+		case "guardian":
+			if m.rendered == "" {
+				m.rendered = guardianMsgStyle.Render(m.Content)
+			}
+			rendered = m.rendered
 		}
 		lines := strings.Split(rendered, "\n")
 		if len(lines) > 0 && lines[len(lines)-1] == "" {
@@ -488,6 +508,9 @@ func (c *ChatModel) trimHistory() {
 		c.historyIdx -= trimmed
 		if c.historyIdx < 0 {
 			c.historyIdx = 0
+		}
+		if c.historyIdx > len(c.inputHistory) {
+			c.historyIdx = len(c.inputHistory)
 		}
 	}
 }

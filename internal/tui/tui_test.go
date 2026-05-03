@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -517,7 +519,7 @@ func TestChatModelSuggestionTabCompletes(t *testing.T) {
 // --- Phone layout ---
 
 func TestAppModelPhoneLayoutView(t *testing.T) {
-	a := NewAppModel(nil, nil)
+	a := NewAppModel(nil, nil, nil)
 	a.layout = LayoutPhone
 	a.width = 60
 	a.height = 40
@@ -531,7 +533,7 @@ func TestAppModelPhoneLayoutView(t *testing.T) {
 }
 
 func TestAppModelLayoutSwitchCommand(t *testing.T) {
-	a := NewAppModel(nil, nil)
+	a := NewAppModel(nil, nil, nil)
 	a.width = 120
 	a.height = 40
 	a.recalcSizes()
@@ -551,7 +553,7 @@ func TestAppModelLayoutSwitchCommand(t *testing.T) {
 }
 
 func TestAppModelAutoDetectNarrow(t *testing.T) {
-	a := NewAppModel(nil, nil)
+	a := NewAppModel(nil, nil, nil)
 
 	// Narrow terminal triggers phone layout.
 	m, _ := a.Update(tea.WindowSizeMsg{Width: 60, Height: 40})
@@ -561,7 +563,7 @@ func TestAppModelAutoDetectNarrow(t *testing.T) {
 }
 
 func TestAppModelAutoRevertWide(t *testing.T) {
-	a := NewAppModel(nil, nil)
+	a := NewAppModel(nil, nil, nil)
 
 	// Narrow -> phone layout.
 	m, _ := a.Update(tea.WindowSizeMsg{Width: 60, Height: 40})
@@ -575,7 +577,7 @@ func TestAppModelAutoRevertWide(t *testing.T) {
 }
 
 func TestAppModelExplicitLayoutNotOverridden(t *testing.T) {
-	a := NewAppModel(nil, nil)
+	a := NewAppModel(nil, nil, nil)
 	a.layout = LayoutPhone
 	a.layoutExplicit = true
 	a.width = 120
@@ -618,4 +620,80 @@ func TestChatModelLayoutCommandNoWorkingState(t *testing.T) {
 	submit, ok := msg.(SubmitMsg)
 	require.True(t, ok)
 	assert.Equal(t, "/layout phone", submit.Text)
+}
+
+// --- Regression: history cap at 1000/1001 boundary ---
+
+func TestChatModelHistoryCapBoundary(t *testing.T) {
+	c := NewChatModel()
+	c.SetSize(80, 24)
+
+	// Fill history to exactly maxInputHistory.
+	for i := 0; i < maxInputHistory; i++ {
+		c.textInput.SetValue(fmt.Sprintf("msg-%04d", i))
+		m, _ := c.Update(tea.KeyPressMsg{Code: 13}) // enter
+		c = m.(ChatModel)
+		c.working = false
+	}
+
+	assert.Equal(t, maxInputHistory, len(c.inputHistory))
+	assert.Equal(t, maxInputHistory, c.historyIdx)
+
+	// Submit one more to trigger trim.
+	c.textInput.SetValue("overflow")
+	m, _ := c.Update(tea.KeyPressMsg{Code: 13}) // enter
+	c = m.(ChatModel)
+	c.working = false
+
+	assert.Equal(t, maxInputHistory, len(c.inputHistory))
+	assert.Equal(t, maxInputHistory, c.historyIdx)
+
+	// Up should navigate to the last entry ("overflow") without panic.
+	m, _ = c.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	c = m.(ChatModel)
+	assert.Equal(t, "overflow", c.textInput.Value())
+
+	// Up again -> "msg-0999" (second-to-last after trim removed msg-0000).
+	m, _ = c.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	c = m.(ChatModel)
+	assert.Equal(t, "msg-0999", c.textInput.Value())
+
+	// Down back to overflow.
+	m, _ = c.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	c = m.(ChatModel)
+	assert.Equal(t, "overflow", c.textInput.Value())
+
+	// Down past end -> cleared.
+	m, _ = c.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	c = m.(ChatModel)
+	assert.Equal(t, "", c.textInput.Value())
+}
+
+// --- Regression: viewer scroll position preserved on unchanged content ---
+
+func TestViewerModelScrollPreservedOnUnchangedContent(t *testing.T) {
+	v := NewViewerModel()
+	v.SetSize(80, 30)
+
+	// Generate enough lines to scroll.
+	var lines []string
+	for i := 0; i < 50; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	content := strings.Join(lines, "\n")
+	v.AppendOutput("sess", content)
+	v.order = []string{"sess"}
+	v.active = "sess"
+
+	// Simulate user scrolling up.
+	v.scrollOffset = 10
+	assert.Equal(t, 10, v.scrollOffset)
+
+	// Re-send identical content — scrollOffset should be preserved.
+	v.AppendOutput("sess", content)
+	assert.Equal(t, 10, v.scrollOffset, "scrollOffset should not reset when content is unchanged")
+
+	// Send different content — scrollOffset should reset.
+	v.AppendOutput("sess", content+"\nnew line")
+	assert.Equal(t, 0, v.scrollOffset, "scrollOffset should reset when content changes")
 }

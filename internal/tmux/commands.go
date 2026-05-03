@@ -36,6 +36,14 @@ func SendEnterCmd(sessionName string) string {
 	return fmt.Sprintf("send-keys -t %s Enter", quoteArg(sessionName))
 }
 
+func SendEscapeCmd(sessionName string) string {
+	return fmt.Sprintf("send-keys -t %s Escape", quoteArg(sessionName))
+}
+
+func SendCJCmd(sessionName string) string {
+	return fmt.Sprintf("send-keys -t %s C-j", quoteArg(sessionName))
+}
+
 func RenameSessionCmd(oldName, newName string) string {
 	return fmt.Sprintf("rename-session -t %s %s", quoteArg(oldName), quoteArg(newName))
 }
@@ -50,6 +58,18 @@ func ListWindowsCmd(sessionName string) string {
 
 func CapturePaneCmd(paneID string) string {
 	return fmt.Sprintf("capture-pane -t %s -p", quoteArg(paneID))
+}
+
+// CapturePaneRangeCmd captures lines from -startFromEnd to -endFromEnd
+// (measured from the bottom of the scrollback). -S -N means N lines back from
+// the bottom of history; -E -M means M lines back from the cursor.
+func CapturePaneRangeCmd(paneID string, startFromEnd, endFromEnd int) string {
+	return fmt.Sprintf("capture-pane -t %s -p -S -%d -E -%d", quoteArg(paneID), startFromEnd, endFromEnd)
+}
+
+// CapturePaneAllCmd captures the entire scrollback history.
+func CapturePaneAllCmd(paneID string) string {
+	return fmt.Sprintf("capture-pane -t %s -p -S -", quoteArg(paneID))
 }
 
 func SetWindowSizeCmd(sessionName string, width, height int) string {

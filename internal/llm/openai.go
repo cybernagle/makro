@@ -105,6 +105,42 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message, opts Ge
 	return ch, nil
 }
 
+func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, opts GenerateOptions) (*CompleteResult, error) {
+	params, err := p.buildParams(messages, opts)
+	if err != nil {
+		return nil, fmt.Errorf("openai: build params: %w", err)
+	}
+
+	start := time.Now()
+	log.Printf("[llm/openai] complete start model=%s", opts.Model)
+
+	resp, err := p.client.Chat.Completions.New(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("openai complete: %w", err)
+	}
+
+	log.Printf("[llm/openai] complete done elapsed=%s", time.Since(start).Round(time.Millisecond))
+
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("openai complete: no choices returned")
+	}
+
+	choice := resp.Choices[0]
+	result := &CompleteResult{
+		Content:    choice.Message.Content,
+		StopReason: string(choice.FinishReason),
+	}
+
+	for _, tc := range choice.Message.ToolCalls {
+		result.ToolCalls = append(result.ToolCalls, ToolCall{
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: tc.Function.Arguments,
+		})
+	}
+
+	return result, nil
+}
 func (p *OpenAIProvider) buildParams(messages []Message, opts GenerateOptions) (openai.ChatCompletionNewParams, error) {
 	params := openai.ChatCompletionNewParams{
 		Model: opts.Model,
