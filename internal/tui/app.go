@@ -462,6 +462,7 @@ func (a *AppModel) recalcSizes() {
 	if a.width == 0 || a.height == 0 {
 		return
 	}
+	a.chat.InvalidateRenderCache()
 	if a.layout == LayoutPhone {
 		viewerH := a.height * 3 / 5
 		chatH := a.height - viewerH

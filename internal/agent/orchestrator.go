@@ -156,6 +156,10 @@ func (o *Orchestrator) CrossAgentRelay(ctx context.Context, sourceSession, targe
 	if err != nil {
 		return fmt.Errorf("LLM relay: %w", err)
 	}
+	defer func() {
+		for range stream {
+		}
+	}()
 
 	var summary strings.Builder
 	for event := range stream {

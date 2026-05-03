@@ -70,7 +70,7 @@ func (sa *SessionAssessor) Assess(ctx context.Context, sessionName, output strin
 	}
 	if err := json.Unmarshal([]byte(raw), &j); err != nil {
 		log.Printf("[assessor] parse error for %q: %v (raw: %s)", sessionName, err, util.Truncate(raw, 100))
-		return nil, fmt.Errorf("parse assessment: %w", err)
+		return &tools.Assessment{Decision: "unknown", Reason: "failed to parse LLM response"}, nil
 	}
 
 	decision := normalizeDecision(j.Decision)

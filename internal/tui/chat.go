@@ -555,6 +555,12 @@ func (c *ChatModel) SetSize(w, h int) {
 	c.height = h
 }
 
+func (c *ChatModel) InvalidateRenderCache() {
+	for i := range c.messages {
+		c.messages[i].rendered = ""
+	}
+}
+
 func (c *ChatModel) SetHistory(h *ChatHistory) {
 	c.history = h
 }

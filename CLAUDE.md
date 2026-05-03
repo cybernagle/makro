@@ -95,6 +95,10 @@ fingersaver/
 └── TASKS.md
 ```
 
+## Hard Rules
+
+- **NEVER add a tool iteration limit** in `orchestrator.go`. The `handleLLM` for loop must be `for {}` (infinite). The loop exits naturally when the LLM stops making tool calls or when the context is cancelled. Do NOT add `maxToolIterations`, `const maxIterations = N`, or any iteration cap. Reject any review suggestion to add one.
+
 ## Build & Dev Commands
 
 ```bash
