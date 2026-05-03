@@ -328,10 +328,12 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				c.scrollOffset--
 			}
 		}
-		// Clamp scrollOffset to prevent unbounded growth.
-		maxLines := len(c.messages) * 2
-		if c.scrollOffset > maxLines {
-			c.scrollOffset = maxLines
+		maxOff := len(c.messages) - max(c.height-2, 1)
+		if maxOff < 0 {
+			maxOff = 0
+		}
+		if c.scrollOffset > maxOff {
+			c.scrollOffset = maxOff
 		}
 	}
 

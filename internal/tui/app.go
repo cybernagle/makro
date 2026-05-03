@@ -176,6 +176,9 @@ func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if sessionsChanged(a.lastSessions, msg.Sessions) {
 			a.lastSessions = msg.Sessions
 			a.chat.SetSessions(msg.Sessions)
+			m2, cmd2 := a.viewer.Update(SessionListMsg{Sessions: msg.Sessions})
+			a.viewer = m2.(ViewerModel)
+			cmds = append(cmds, cmd2)
 		}
 
 	case SessionTargetMsg:

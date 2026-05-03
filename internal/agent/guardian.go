@@ -277,7 +277,7 @@ func (gm *GuardianManager) notifyTUI(sessionName string, j *Judgment) {
 	}
 	action := "observing"
 	if j.NeedsResponse {
-		if j.Decision == "safe" {
+		if j.Decision == "approve" {
 			action = "approved (Yes)"
 		} else {
 			action = "rejected (No)"

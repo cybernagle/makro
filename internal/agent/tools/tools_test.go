@@ -204,7 +204,8 @@ func TestReadSessionOutputEmpty(t *testing.T) {
 		"name": "empty",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "(empty)", result)
+	assert.Contains(t, result, `"total_lines":0`)
+	assert.Contains(t, result, `"has_more":false`)
 }
 
 func TestAllToolsCount(t *testing.T) {

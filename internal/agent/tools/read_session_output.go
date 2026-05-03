@@ -40,15 +40,27 @@ func NewReadSessionOutputTool(tc TmuxClient) Tool {
 			if err != nil {
 				return "", fmt.Errorf("capture pane %q: %w", name, err)
 			}
+
+			emptyResult := func() (string, error) {
+				result, _ := json.Marshal(map[string]any{
+					"content":     "",
+					"total_lines": 0,
+					"page_start":  0,
+					"page_end":    0,
+					"has_more":    false,
+				})
+				return string(result), nil
+			}
+
 			if all == "" {
-				return "(empty)", nil
+				return emptyResult()
 			}
 
 			allLines := splitNonEmpty(all)
 			totalLines := len(allLines)
 
 			if totalLines == 0 {
-				return "(empty)", nil
+				return emptyResult()
 			}
 
 			// Calculate slice: from the end, skip offset, take lines.
