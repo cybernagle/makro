@@ -113,6 +113,14 @@ func main() {
 	assessor := agent.NewSessionAssessor(provider, cfg.LLMModel, cfg.GuardianPrompt)
 	orch := agent.NewOrchestrator(provider, tc, hm, tools.AllTools(tc, assessor))
 	orch.SetCommandRegistry(agent.NewCommandRegistry(tc))
+	homeDir, _ := os.UserHomeDir()
+	skillDirs := []string{
+		filepath.Join(homeDir, ".fingersaver", "skills"),
+		filepath.Join(".", ".fingersaver", "skills"),
+	}
+	if err := orch.LoadSkills(skillDirs); err != nil {
+		log.Printf("[main] warning: could not load skills: %v", err)
+	}
 	orch.SetModel(cfg.LLMModel)
 	orch.SetSystemPrompt(agent.DefaultSystemPrompt())
 

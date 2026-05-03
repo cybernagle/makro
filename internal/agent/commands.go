@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/naglezhang/fingersaver/internal/agent/skills"
 	"github.com/naglezhang/fingersaver/internal/agent/tools"
 )
 
@@ -13,6 +14,7 @@ type SlashCommand struct {
 	Usage       string
 	Description string
 	Execute     func(ctx context.Context, args []string) (string, error)
+	Skill       *skills.Skill
 }
 
 type CommandRegistry struct {
@@ -111,6 +113,11 @@ func (cr *CommandRegistry) List() []*SlashCommand {
 		result = append(result, cmd)
 	}
 	return result
+}
+
+func (cr *CommandRegistry) Lookup(name string) (*SlashCommand, bool) {
+	cmd, ok := cr.commands[name]
+	return cmd, ok
 }
 
 // ParseSlashCommand parses "/command arg1 arg2" into (command, args, true).
