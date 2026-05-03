@@ -30,7 +30,7 @@ var (
 	phoneLayout = flag.Bool("phone", false, "Use phone layout (vertical split)")
 )
 
-const version = "0.2.1"
+const version = "0.3.0"
 
 func main() {
 	flag.BoolVar(showHelp, "h", false, "Show help")
