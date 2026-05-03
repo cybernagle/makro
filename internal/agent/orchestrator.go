@@ -246,9 +246,7 @@ func (o *Orchestrator) handleLLM(ctx context.Context, ch chan<- OrchestratorEven
 	opts := o.buildOptions()
 	log.Printf("[orchestrator] handleLLM start inputLen=%d model=%s", len(input), opts.Model)
 
-	const maxToolIterations = 20
-
-	for i := 0; i < maxToolIterations; i++ {
+	for {
 		if ctx.Err() != nil {
 			log.Printf("[orchestrator] handleLLM cancelled")
 			ch <- OrchestratorEvent{Type: EventText, Content: "Cancelled."}
@@ -310,10 +308,6 @@ func (o *Orchestrator) handleLLM(ctx context.Context, ch chan<- OrchestratorEven
 
 		opts = o.buildOptions()
 	}
-
-	log.Printf("[orchestrator] handleLLM hit max iterations=%d", maxToolIterations)
-	ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("Reached maximum tool iterations (%d). Stopping.", maxToolIterations)}
-	ch <- OrchestratorEvent{Type: EventDone}
 }
 
 func (o *Orchestrator) executeTool(ctx context.Context, tc llm.ToolCall) llm.ToolResult {
