@@ -11,9 +11,10 @@ import (
 
 // knownAgents are the coding agent binary names we recognize.
 var knownAgents = map[string]bool{
-	"claude":  true,
-	"copilot": true,
-	"codex":   true,
+	"claude":             true,
+	"copilot":            true,
+	"github-copilot-cli": true,
+	"codex":              true,
 }
 
 // knownShells are processes that indicate the agent has exited.

@@ -335,6 +335,7 @@ func TestAgentAliveWhitelist(t *testing.T) {
 	}{
 		{"claude", true},
 		{"copilot", true},
+		{"github-copilot-cli", true},
 		{"codex", true},
 		{"bash", false},
 		{"zsh", false},
