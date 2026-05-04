@@ -287,15 +287,10 @@ func (o *Orchestrator) ProcessInput(ctx context.Context, input string) (<-chan O
 }
 
 func (o *Orchestrator) handleMention(ctx context.Context, ch chan<- OrchestratorEvent, sessionName, text string) {
-	tool := tools.NewSendToSessionTool(o.tc)
-	result, err := tool.Execute(ctx, map[string]any{
-		"name":    sessionName,
-		"message": text,
-	})
-	if err != nil {
+	if err := tools.DirectSend(o.tc, sessionName, text); err != nil {
 		ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("Error sending to @%s: %v", sessionName, err)}
 	} else {
-		ch <- OrchestratorEvent{Type: EventText, Content: result}
+		ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("Sent to @%s: %s", sessionName, util.Truncate(text, 80))}
 	}
 	ch <- OrchestratorEvent{Type: EventDone}
 }

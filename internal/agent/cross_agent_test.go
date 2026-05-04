@@ -14,6 +14,7 @@ func TestCrossAgentRelay(t *testing.T) {
 	mc := newMockTmuxClient()
 	mc.results["capture-pane -t auth -p -S -100"] = "Auth service started on port 8080\nAll tests passed"
 	mc.results["send-keys -t frontend 'Summary: auth tests passed'"] = ""
+	mc.results["list-panes -t frontend -F #{pane_current_command}"] = "claude"
 
 	mp := &mockProvider{
 		responses: [][]llm.StreamEvent{
@@ -22,7 +23,7 @@ func TestCrossAgentRelay(t *testing.T) {
 			},
 		},
 	}
-	orch := NewOrchestrator(mp, mc, NewHookManager(), tools.AllTools(mc, nil))
+	orch := NewOrchestrator(mp, mc, NewHookManager(), tools.AllTools(mc, nil, "/tmp"))
 
 	err := orch.CrossAgentRelay(context.Background(), "auth", "frontend",
 		"Summarize the output from this agent in one line.")

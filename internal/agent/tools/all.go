@@ -1,6 +1,6 @@
 package tools
 
-func AllTools(tc TmuxClient, assessor Assessor) []Tool {
+func AllTools(tc TmuxClient, assessor Assessor, cwd string) []Tool {
 	return []Tool{
 		NewListSessionsTool(tc),
 		NewCreateSessionTool(tc),
@@ -17,5 +17,8 @@ func AllTools(tc TmuxClient, assessor Assessor) []Tool {
 		NewRespondConfirmationTool(tc),
 		NewSetStateTool(),
 		NewGetStateTool(),
+		NewReadFileTool(cwd),
+		NewWriteFileTool(cwd),
+		NewListDirectoryTool(cwd),
 	}
 }

@@ -134,6 +134,7 @@ func TestKillSessionTool(t *testing.T) {
 
 func TestSendToSessionTool(t *testing.T) {
 	mc := newMockTmuxClient()
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "target")] = "claude"
 
 	tool := NewSendToSessionTool(mc)
 	result, err := tool.Execute(context.Background(), map[string]any{
@@ -210,8 +211,8 @@ func TestReadSessionOutputEmpty(t *testing.T) {
 
 func TestAllToolsCount(t *testing.T) {
 	mc := newMockTmuxClient()
-	ts := AllTools(mc, nil)
-	assert.Len(t, ts, 15)
+	ts := AllTools(mc, nil, "/tmp")
+	assert.Len(t, ts, 18)
 }
 
 func TestReadStructuredOutputTool(t *testing.T) {
