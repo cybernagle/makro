@@ -50,7 +50,8 @@ var blockedPatterns = []struct {
 	re      *regexp.Regexp
 	pattern string
 }{
-	{regexp.MustCompile(`(?i)\brm\s+-[a-zA-Z]*[rf][a-zA-Z]*[rf][a-zA-Z]*(?:\s|$)`), "rm -rf"},
+	// rm with both -r and -f in any form: combined (-rf, -fr), separate (-r -f), or long (--recursive --force).
+	{regexp.MustCompile(`(?i)\brm\b.*(?:(?:-[a-zA-Z]*[rf][a-zA-Z]*[rf])|(?:-[a-zA-Z]*r[a-zA-Z]*\s+-[a-zA-Z]*f)|(?:-[a-zA-Z]*f[a-zA-Z]*\s+-[a-zA-Z]*r)|(--recursive\b.*--force\b)|(--force\b.*--recursive\b))`), "rm -rf"},
 	{regexp.MustCompile(`(?i)sudo\s+rm\s+`), "sudo rm"},
 	{regexp.MustCompile(`(?i)mkfs\b`), "mkfs"},
 	{regexp.MustCompile(`(?i)dd\s+if=.*\s+of=/dev/`), "dd to block device"},

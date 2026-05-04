@@ -27,7 +27,10 @@ func NewReadFileTool(cwd string) Tool {
 				return "", fmt.Errorf("path is required")
 			}
 
-			absPath := resolvePath(path, cwd)
+			absPath, err := resolvePath(path, cwd)
+			if err != nil {
+				return "", err
+			}
 
 			// Validate offset early, before any early returns.
 			offset := 0

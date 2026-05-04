@@ -22,7 +22,10 @@ func NewWriteFileTool(cwd string) Tool {
 				return "", fmt.Errorf("path is required")
 			}
 
-			absPath := resolvePath(path, cwd)
+			absPath, err := resolvePath(path, cwd)
+			if err != nil {
+				return "", err
+			}
 
 			info, err := os.Stat(absPath)
 			if err == nil && info.IsDir() {

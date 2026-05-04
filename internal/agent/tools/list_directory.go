@@ -23,7 +23,10 @@ func NewListDirectoryTool(cwd string) Tool {
 		},
 		Execute: func(ctx context.Context, args map[string]any) (string, error) {
 			path, _ := args["path"].(string)
-			absPath := resolvePath(path, cwd)
+			absPath, err := resolvePath(path, cwd)
+			if err != nil {
+				return "", err
+			}
 
 			info, err := os.Stat(absPath)
 			if err != nil {
