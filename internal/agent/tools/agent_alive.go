@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/naglezhang/fingersaver/internal/tmux"
 )
@@ -53,12 +52,6 @@ func checkAgentAlive(tc TmuxClient, sessionName string) AgentStatus {
 	// Check process tree to be sure.
 	return checkProcessTree(tc, sessionName)
 }
-
-// psCache avoids running ps on every tool call.
-var (
-	psCache     map[int]string // pid -> command
-	psCacheOnce sync.Once
-)
 
 // checkProcessTree walks the process tree under the pane's PID.
 func checkProcessTree(tc TmuxClient, sessionName string) AgentStatus {

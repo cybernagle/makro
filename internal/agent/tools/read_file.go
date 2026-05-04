@@ -29,6 +29,15 @@ func NewReadFileTool(cwd string) Tool {
 
 			absPath := resolvePath(path, cwd)
 
+			// Validate offset early, before any early returns.
+			offset := 0
+			if v, ok := args["offset"].(float64); ok && v > 0 {
+				offset = int(v) - 1 // convert 1-indexed to 0-indexed
+			}
+			if offset < 0 {
+				offset = 0
+			}
+
 			info, err := os.Stat(absPath)
 			if err != nil {
 				if os.IsNotExist(err) {
@@ -40,6 +49,9 @@ func NewReadFileTool(cwd string) Tool {
 				return "", fmt.Errorf("path is a directory, not a file: %s", absPath)
 			}
 			if info.Size() == 0 {
+				if offset > 0 {
+					return "", fmt.Errorf("offset %d exceeds total lines 0", offset+1)
+				}
 				return "(empty file)", nil
 			}
 
@@ -48,10 +60,6 @@ func NewReadFileTool(cwd string) Tool {
 				return "", fmt.Errorf("read %s: %w", absPath, err)
 			}
 
-			offset := 0
-			if v, ok := args["offset"].(float64); ok && v > 0 {
-				offset = int(v) - 1 // convert 1-indexed to 0-indexed
-			}
 			limit := defaultReadLimit
 			if v, ok := args["limit"].(float64); ok && v > 0 {
 				limit = int(v)
@@ -84,7 +92,6 @@ func NewReadFileTool(cwd string) Tool {
 				numbered := fmt.Sprintf("%6d\t%s\n", offset+i+1, line)
 				totalBytes += len(numbered)
 				if totalBytes > defaultReadMaxBytes {
-					// Include partial content up to the byte limit.
 					if sb.Len() > 0 {
 						sb.WriteString(fmt.Sprintf("\n<result truncated at %d bytes, use offset=%d to continue>", defaultReadMaxBytes, offset+i+1))
 					}

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -91,6 +92,7 @@ func TestOrchestratorSlashCommand(t *testing.T) {
 
 func TestOrchestratorMention(t *testing.T) {
 	mc := newMockTmuxClient()
+	mc.results["has-session -t auth"] = ""
 	mp := &mockProvider{}
 	hm := NewHookManager()
 	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil, "/tmp"))
@@ -105,6 +107,25 @@ func TestOrchestratorMention(t *testing.T) {
 		}
 	}
 	assert.Contains(t, texts[0], "Sent to")
+}
+
+func TestOrchestratorMentionSessionNotFound(t *testing.T) {
+	mc := newMockTmuxClient()
+	mc.errors["has-session -t missing"] = fmt.Errorf("can't find session")
+	mp := &mockProvider{}
+	hm := NewHookManager()
+	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil, "/tmp"))
+
+	events, err := orch.ProcessInput(context.Background(), "@missing echo hello")
+	require.NoError(t, err)
+
+	var texts []string
+	for e := range events {
+		if e.Type == EventText {
+			texts = append(texts, e.Content)
+		}
+	}
+	assert.Contains(t, texts[0], "not found")
 }
 
 func TestOrchestratorLLMTextResponse(t *testing.T) {
