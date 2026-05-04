@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -29,7 +30,10 @@ type AgentNotifier struct {
 }
 
 func NewAgentNotifier() *AgentNotifier {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "/tmp"
+	}
 	return &AgentNotifier{
 		waiters:  make(map[string][]chan struct{}),
 		recent:   make(map[string]string),
@@ -45,9 +49,9 @@ func (n *AgentNotifier) WaitCh(session string) <-chan struct{} {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	// Check recent notifications first.
+	// Check recent notifications first. Recent is sticky — multiple
+	// WaitCh calls for the same session all get signaled until Clear.
 	if _, ok := n.recent[session]; ok {
-		delete(n.recent, session)
 		ch := make(chan struct{})
 		close(ch)
 		return ch
@@ -59,6 +63,7 @@ func (n *AgentNotifier) WaitCh(session string) <-chan struct{} {
 }
 
 // Notify marks a session as stopped and wakes all waiters.
+// Also stores in recent so subsequent WaitCh calls see the notification.
 func (n *AgentNotifier) Notify(session, status string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -69,16 +74,18 @@ func (n *AgentNotifier) Notify(session, status string) {
 	}
 	delete(n.waiters, session)
 
-	// Store in recent in case WaitCh is called later.
-	if len(channels) == 0 {
-		n.recent[session] = status
-	}
+	// Always store in recent for late WaitCh callers.
+	n.recent[session] = status
 }
 
 // Clear resets the notification state for a session.
+// Closes any outstanding wait channels so callers don't block forever.
 func (n *AgentNotifier) Clear(session string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	for _, ch := range n.waiters[session] {
+		close(ch)
+	}
 	delete(n.waiters, session)
 	delete(n.recent, session)
 }
@@ -115,6 +122,7 @@ func (n *AgentNotifier) Stop() {
 }
 
 func (n *AgentNotifier) acceptLoop(ctx context.Context) {
+	backoff := 100 * time.Millisecond
 	for {
 		conn, err := n.listener.Accept()
 		if err != nil {
@@ -125,9 +133,20 @@ func (n *AgentNotifier) acceptLoop(ctx context.Context) {
 				return
 			default:
 				log.Printf("[notifier] accept error: %v", err)
+				select {
+				case <-time.After(backoff):
+				case <-n.done:
+					return
+				case <-ctx.Done():
+					return
+				}
+				if backoff < 5*time.Second {
+					backoff *= 2
+				}
 				continue
 			}
 		}
+		backoff = 100 * time.Millisecond
 		go n.handleConn(conn)
 	}
 }
@@ -136,14 +155,15 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 	defer conn.Close()
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
-	buf := make([]byte, 4096)
-	nr, err := conn.Read(buf)
+	// Limit read to prevent abuse; hook payloads are <200 bytes.
+	data, err := io.ReadAll(io.LimitReader(conn, 4096))
 	if err != nil {
 		return
 	}
 
 	var msg hookPayload
-	if err := json.Unmarshal(buf[:nr], &msg); err != nil {
+	if err := json.Unmarshal(data, &msg); err != nil {
+		log.Printf("[notifier] invalid payload: %v", err)
 		return
 	}
 	if msg.Session == "" {
@@ -151,5 +171,6 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 	}
 
 	n.Notify(msg.Session, msg.Status)
+	conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	conn.Write([]byte("ok\n"))
 }

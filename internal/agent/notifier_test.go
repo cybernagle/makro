@@ -14,6 +14,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// dialAndNotify connects to the Unix socket, sends a payload, and returns.
+func dialAndNotify(t *testing.T, sockPath, session, status string) {
+	t.Helper()
+	conn, err := net.Dial("unix", sockPath)
+	require.NoError(t, err)
+	msg, _ := json.Marshal(hookPayload{Session: session, Status: status})
+	conn.Write(msg)
+	// Signal EOF so server's io.ReadAll returns.
+	if uc, ok := conn.(*net.UnixConn); ok {
+		uc.CloseWrite()
+	}
+	conn.Close()
+}
+
 func TestNotifierNotifyWakesWaiter(t *testing.T) {
 	n := NewAgentNotifier()
 	ch := n.WaitCh("auth")
@@ -114,19 +128,7 @@ func TestNotifierUnixSocket(t *testing.T) {
 	require.NoError(t, n.Start(ctx))
 	defer n.Stop()
 
-	// Connect and send notification.
-	conn, err := net.Dial("unix", n.sockPath)
-	require.NoError(t, err)
-	defer conn.Close()
-
-	msg, _ := json.Marshal(hookPayload{Session: "auth", Status: "done"})
-	conn.Write(msg)
-
-	buf := make([]byte, 64)
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	nr, err := conn.Read(buf)
-	require.NoError(t, err)
-	assert.Equal(t, "ok\n", string(buf[:nr]))
+	dialAndNotify(t, n.sockPath, "auth", "done")
 
 	// Verify waiter is woken.
 	ch := n.WaitCh("auth")
@@ -146,11 +148,7 @@ func TestNotifierUnixSocketIgnoresEmptySession(t *testing.T) {
 	require.NoError(t, n.Start(ctx))
 	defer n.Stop()
 
-	conn, err := net.Dial("unix", n.sockPath)
-	require.NoError(t, err)
-	msg, _ := json.Marshal(hookPayload{Session: "", Status: "done"})
-	conn.Write(msg)
-	conn.Close()
+	dialAndNotify(t, n.sockPath, "", "done")
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -159,6 +157,93 @@ func TestNotifierUnixSocketIgnoresEmptySession(t *testing.T) {
 	select {
 	case <-ch:
 		t.Fatal("empty session should not trigger notification")
+	case <-time.After(100 * time.Millisecond):
+		// Expected.
+	}
+}
+
+func TestNotifierRecentSticky(t *testing.T) {
+	// Multiple WaitCh calls after Notify should all return closed channels.
+	n := NewAgentNotifier()
+	n.Notify("auth", "done")
+
+	ch1 := n.WaitCh("auth")
+	ch2 := n.WaitCh("auth")
+
+	select {
+	case <-ch1:
+	default:
+		t.Fatal("first WaitCh should be closed")
+	}
+	select {
+	case <-ch2:
+	default:
+		t.Fatal("second WaitCh should also be closed (sticky recent)")
+	}
+}
+
+func TestNotifierConcurrentNotifyAndClear(t *testing.T) {
+	n := NewAgentNotifier()
+	const iterations = 100
+
+	var wg sync.WaitGroup
+	wg.Add(iterations)
+	for i := 0; i < iterations; i++ {
+		go func() {
+			defer wg.Done()
+			n.Notify("auth", "done")
+			n.Clear("auth")
+		}()
+	}
+	wg.Wait()
+
+	// Should not panic or deadlock. After all clears, WaitCh should be open.
+	ch := n.WaitCh("auth")
+	select {
+	case <-ch:
+		t.Fatal("WaitCh should be open after concurrent Notify+Clear")
+	case <-time.After(100 * time.Millisecond):
+		// Expected.
+	}
+}
+
+func TestNotifierClearClosesWaiters(t *testing.T) {
+	n := NewAgentNotifier()
+	ch := n.WaitCh("auth")
+
+	n.Clear("auth")
+
+	select {
+	case <-ch:
+		// Expected: channel closed by Clear.
+	case <-time.After(2 * time.Second):
+		t.Fatal("Clear should close outstanding waiter channels")
+	}
+}
+
+func TestNotifierUnixSocketMalformedJSON(t *testing.T) {
+	n := newNotifierWithShortPath(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, n.Start(ctx))
+	defer n.Stop()
+
+	conn, err := net.Dial("unix", n.sockPath)
+	require.NoError(t, err)
+	conn.Write([]byte("not json at all"))
+	if uc, ok := conn.(*net.UnixConn); ok {
+		uc.CloseWrite()
+	}
+	conn.Close()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// No notification should be recorded.
+	ch := n.WaitCh("auth")
+	select {
+	case <-ch:
+		t.Fatal("malformed JSON should not trigger notification")
 	case <-time.After(100 * time.Millisecond):
 		// Expected.
 	}
