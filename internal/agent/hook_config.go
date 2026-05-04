@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const fsNotifyHookCmd = "fingersaver notify"
+const fsNotifyHookSuffix = ` notify "$(tmux display-message -p '#{session_name}')" done`
 
 // claudeSettings represents the relevant parts of ~/.claude/settings.json.
 type claudeSettings struct {
@@ -28,47 +28,131 @@ type hookEntry struct {
 
 // EnsureStopHook adds a fingersaver notify Stop hook to Claude Code settings
 // if one does not already exist. The function is idempotent.
-func EnsureStopHook(claudeDir string) error {
+func EnsureStopHook(claudeDir, executablePath string) error {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
-	data, err := os.ReadFile(settingsPath)
+	info, err := os.Stat(settingsPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
+		return fmt.Errorf("stat settings: %w", err)
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
 		return fmt.Errorf("read settings: %w", err)
 	}
 
-	var settings claudeSettings
+	var settings any
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return fmt.Errorf("parse settings: %w", err)
 	}
-
-	if settings.Hooks == nil {
-		settings.Hooks = make(map[string][]hookGroup)
+	root, ok := settings.(map[string]any)
+	if !ok {
+		return fmt.Errorf("parse settings: root must be an object")
 	}
 
-	// Check if fingersaver notify hook already exists.
-	for _, group := range settings.Hooks["Stop"] {
-		for _, h := range group.Hooks {
-			if strings.Contains(h.Command, fsNotifyHookCmd) {
-				return nil
-			}
-		}
+	hooks, err := ensureJSONObject(root, "hooks")
+	if err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+	stopHooks, err := ensureJSONArray(hooks, "Stop")
+	if err != nil {
+		return fmt.Errorf("parse settings: %w", err)
 	}
 
-	// Add the hook.
-	newEntry := hookGroup{
-		Hooks: []hookEntry{{
-			Type:    "command",
-			Command: `fingersaver notify "$(tmux display-message -p '#{session_name}')" done`,
-			Timeout: 10,
+	exists, err := stopHookExists(stopHooks)
+	if err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+	if exists {
+		return nil
+	}
+
+	stopHooks = append(stopHooks, map[string]any{
+		"hooks": []any{map[string]any{
+			"type":    "command",
+			"command": buildStopHookCommand(executablePath),
+			"timeout": 10,
 		}},
-	}
-	settings.Hooks["Stop"] = append(settings.Hooks["Stop"], newEntry)
+	})
+	hooks["Stop"] = stopHooks
 
-	updated, err := json.MarshalIndent(settings, "", "  ")
+	updated, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)
 	}
-	return os.WriteFile(settingsPath, updated, 0o644)
+	updated = append(updated, '\n')
+	return os.WriteFile(settingsPath, updated, info.Mode().Perm())
+}
+
+func ensureJSONObject(parent map[string]any, key string) (map[string]any, error) {
+	if value, ok := parent[key]; ok {
+		object, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s must be an object", key)
+		}
+		return object, nil
+	}
+	object := make(map[string]any)
+	parent[key] = object
+	return object, nil
+}
+
+func ensureJSONArray(parent map[string]any, key string) ([]any, error) {
+	if value, ok := parent[key]; ok {
+		array, ok := value.([]any)
+		if !ok {
+			return nil, fmt.Errorf("%s must be an array", key)
+		}
+		return array, nil
+	}
+	return []any{}, nil
+}
+
+func stopHookExists(stopGroups []any) (bool, error) {
+	for _, groupValue := range stopGroups {
+		group, ok := groupValue.(map[string]any)
+		if !ok {
+			return false, fmt.Errorf("hooks.Stop entries must be objects")
+		}
+		hookValues, ok := group["hooks"]
+		if !ok {
+			continue
+		}
+		hooks, ok := hookValues.([]any)
+		if !ok {
+			return false, fmt.Errorf("hooks.Stop[].hooks must be an array")
+		}
+		for _, hookValue := range hooks {
+			hook, ok := hookValue.(map[string]any)
+			if !ok {
+				return false, fmt.Errorf("hooks.Stop[].hooks[] must be objects")
+			}
+			command, _ := hook["command"].(string)
+			if isFingerSaverNotifyHook(command) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func isFingerSaverNotifyHook(command string) bool {
+	return strings.Contains(command, "fingersaver") && strings.Contains(command, fsNotifyHookSuffix)
+}
+
+func buildStopHookCommand(executablePath string) string {
+	command := executablePath
+	if command == "" {
+		command = "fingersaver"
+	}
+	return shellQuote(command) + fsNotifyHookSuffix
+}
+
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }

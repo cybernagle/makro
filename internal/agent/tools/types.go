@@ -41,11 +41,12 @@ type Assessment struct {
 	Reason   string `json:"reason"`
 }
 
-// Notifier receives agent stop notifications and provides wait channels.
+// Notifier receives agent stop notifications and provides versioned waits.
 // Implemented by AgentNotifier in the agent package.
 type Notifier interface {
-	// WaitCh returns a channel that closes when the session's agent stops.
-	WaitCh(session string) <-chan struct{}
-	// Clear resets the notification state for a session.
-	Clear(session string)
+	// Snapshot returns the latest notification sequence for a session.
+	Snapshot(session string) uint64
+	// WaitAfter returns a channel that closes after the session receives a
+	// notification newer than after. The cancel function removes the waiter.
+	WaitAfter(session string, after uint64) (<-chan struct{}, func())
 }

@@ -38,7 +38,7 @@ func checkAgentAlive(tc TmuxClient, sessionName string) AgentStatus {
 	}
 	cmd = strings.TrimSpace(cmd)
 
-	// Direct match: agent is the foreground process.
+	// Direct match: agent is the foreground process or a direct wrapper around it.
 	if agent, found := knownAgentFromCommand(cmd); found {
 		return AgentStatus{Alive: true, Agent: agent, Reason: "agent is running"}
 	}
@@ -115,7 +115,7 @@ func buildProcessTree() (map[string][]procEntry, error) {
 }
 
 // findAgentInTree recursively walks the process tree from rootPID
-// looking for any process matching a known agent name.
+// looking for any process matching a known agent executable chain.
 func findAgentInTree(tree map[string][]procEntry, rootPID string) (string, bool) {
 	var walk func(pid string) (string, bool)
 	walk = func(pid string) (string, bool) {
@@ -136,27 +136,66 @@ func findAgentInTree(tree map[string][]procEntry, rootPID string) (string, bool)
 }
 
 func knownAgentFromCommand(command string) (string, bool) {
-	command = strings.TrimSpace(strings.ToLower(command))
+	command = strings.TrimSpace(command)
 	if command == "" {
 		return "", false
 	}
-
-	for _, token := range strings.Fields(command) {
-		if agent, found := knownAgentFromToken(token); found {
-			return agent, true
-		}
-	}
-
-	return "", false
+	return knownAgentFromArgs(strings.Fields(command))
 }
 
-func knownAgentFromToken(token string) (string, bool) {
-	token = strings.Trim(strings.ToLower(token), `"'`)
+func knownAgentFromArgs(args []string) (string, bool) {
+	if len(args) == 0 {
+		return "", false
+	}
+
+	token := normalizeProcessToken(args[0])
+	if agent, found := knownAgentFromExecutable(token); found {
+		return agent, true
+	}
+
+	switch executableName(token) {
+	case "env":
+		i := 1
+		for i < len(args) && isEnvAssignment(args[i]) {
+			i++
+		}
+		return knownAgentFromArgs(args[i:])
+	case "nohup":
+		return knownAgentFromArgs(args[1:])
+	case "timeout", "gtimeout":
+		i := 1
+		for i < len(args) && strings.HasPrefix(args[i], "-") {
+			i++
+		}
+		if i < len(args) {
+			i++
+		}
+		return knownAgentFromArgs(args[i:])
+	case "stdbuf":
+		i := 1
+		for i < len(args) && strings.HasPrefix(args[i], "-") {
+			i++
+		}
+		return knownAgentFromArgs(args[i:])
+	}
+
+	if !isInvocationWrapper(token) || len(args) < 2 {
+		return "", false
+	}
+	next := normalizeProcessToken(args[1])
+	if strings.HasPrefix(next, "-") {
+		return "", false
+	}
+	return knownAgentFromExecutable(next)
+}
+
+func knownAgentFromExecutable(token string) (string, bool) {
+	token = normalizeProcessToken(token)
 	if token == "" {
 		return "", false
 	}
 
-	base := filepath.Base(token)
+	base := executableName(token)
 	if knownAgents[base] {
 		return base, true
 	}
@@ -166,9 +205,40 @@ func knownAgentFromToken(token string) (string, bool) {
 		return baseNoExt, true
 	}
 
-	if strings.Contains(token, "github-copilot-cli") {
-		return "github-copilot-cli", true
+	for _, part := range strings.Split(strings.Trim(token, "/"), "/") {
+		if normalizeProcessToken(part) == "github-copilot-cli" {
+			return "github-copilot-cli", true
+		}
 	}
 
 	return "", false
+}
+
+func normalizeProcessToken(token string) string {
+	return strings.Trim(strings.ToLower(token), `"'`)
+}
+
+func executableName(token string) string {
+	return filepath.Base(normalizeProcessToken(token))
+}
+
+func isInvocationWrapper(token string) bool {
+	switch executableName(token) {
+	case "node", "bun", "deno", "python", "python3", "ruby", "bash", "sh", "zsh", "fish", "dash":
+		return true
+	default:
+		return false
+	}
+}
+
+func isEnvAssignment(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" || strings.HasPrefix(token, "=") {
+		return false
+	}
+	if strings.HasPrefix(token, "-") {
+		return false
+	}
+	parts := strings.SplitN(token, "=", 2)
+	return len(parts) == 2 && parts[0] != ""
 }

@@ -148,7 +148,11 @@ func main() {
 
 	// Auto-configure Claude Code stop hook.
 	if notifier != nil {
-		if err := agent.EnsureStopHook(cfg.ClaudeDir); err != nil {
+		executablePath, err := os.Executable()
+		if err != nil {
+			log.Printf("[main] warning: could not resolve executable path for Claude stop hook: %v", err)
+		}
+		if err := agent.EnsureStopHook(cfg.ClaudeDir, executablePath); err != nil {
 			log.Printf("[main] warning: could not configure Claude stop hook: %v", err)
 		}
 	}

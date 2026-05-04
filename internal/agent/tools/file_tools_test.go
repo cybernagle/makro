@@ -378,3 +378,11 @@ func TestFindAgentInTreeMatchesWrappedCommandLine(t *testing.T) {
 	assert.True(t, found)
 	assert.Equal(t, "github-copilot-cli", agent)
 }
+
+func TestKnownAgentFromCommandIgnoresArguments(t *testing.T) {
+	_, found := knownAgentFromCommand(`sh -c 'echo github-copilot-cli'`)
+	assert.False(t, found)
+
+	_, found = knownAgentFromCommand(`node --eval "console.log('github-copilot-cli')"`)
+	assert.False(t, found)
+}

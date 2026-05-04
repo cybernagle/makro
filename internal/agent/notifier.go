@@ -21,8 +21,9 @@ type hookPayload struct {
 // AgentNotifier tracks stop notifications from coding agents.
 type AgentNotifier struct {
 	mu       sync.Mutex
-	waiters  map[string][]chan struct{} // session → wait channels
-	recent   map[string]string          // session → status (arrived before WaitCh)
+	waiters  map[string]map[uint64]chan struct{} // session → waiter ID → wait channel
+	seq      map[string]uint64                   // session → latest notification sequence
+	nextID   uint64
 	sockPath string
 	listener net.Listener
 	done     chan struct{}
@@ -35,59 +36,67 @@ func NewAgentNotifier() *AgentNotifier {
 		home = "/tmp"
 	}
 	return &AgentNotifier{
-		waiters:  make(map[string][]chan struct{}),
-		recent:   make(map[string]string),
+		waiters:  make(map[string]map[uint64]chan struct{}),
+		seq:      make(map[string]uint64),
 		sockPath: filepath.Join(home, ".fingersaver", "hooks.sock"),
 		done:     make(chan struct{}),
 	}
 }
 
-// WaitCh returns a channel that closes when the session's agent stops.
-// If a notification was already received (Notify called before WaitCh),
-// returns an already-closed channel.
-func (n *AgentNotifier) WaitCh(session string) <-chan struct{} {
+// Snapshot returns the latest notification sequence for a session.
+func (n *AgentNotifier) Snapshot(session string) uint64 {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.seq[session]
+}
+
+// WaitAfter returns a channel that closes after the session receives a
+// notification newer than after. The returned cancel function unregisters the
+// waiter without waking other waiters for the same session.
+func (n *AgentNotifier) WaitAfter(session string, after uint64) (<-chan struct{}, func()) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	// Check recent notifications first. Recent is sticky — multiple
-	// WaitCh calls for the same session all get signaled until Clear.
-	if _, ok := n.recent[session]; ok {
+	if n.seq[session] > after {
 		ch := make(chan struct{})
 		close(ch)
-		return ch
+		return ch, func() {}
 	}
 
 	ch := make(chan struct{})
-	n.waiters[session] = append(n.waiters[session], ch)
-	return ch
+	n.nextID++
+	waiterID := n.nextID
+	if n.waiters[session] == nil {
+		n.waiters[session] = make(map[uint64]chan struct{})
+	}
+	n.waiters[session][waiterID] = ch
+
+	cancel := func() {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		waiters := n.waiters[session]
+		if waiters == nil {
+			return
+		}
+		delete(waiters, waiterID)
+		if len(waiters) == 0 {
+			delete(n.waiters, session)
+		}
+	}
+	return ch, cancel
 }
 
 // Notify marks a session as stopped and wakes all waiters.
-// Also stores in recent so subsequent WaitCh calls see the notification.
 func (n *AgentNotifier) Notify(session, status string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	channels := n.waiters[session]
-	for _, ch := range channels {
+	n.seq[session]++
+	waiters := n.waiters[session]
+	for _, ch := range waiters {
 		close(ch)
 	}
 	delete(n.waiters, session)
-
-	// Always store in recent for late WaitCh callers.
-	n.recent[session] = status
-}
-
-// Clear resets the notification state for a session.
-// Closes any outstanding wait channels so callers don't block forever.
-func (n *AgentNotifier) Clear(session string) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	for _, ch := range n.waiters[session] {
-		close(ch)
-	}
-	delete(n.waiters, session)
-	delete(n.recent, session)
 }
 
 // Start begins listening on the Unix socket for hook notifications.

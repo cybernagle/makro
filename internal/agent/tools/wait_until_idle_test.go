@@ -12,46 +12,52 @@ import (
 )
 
 type mockNotifier struct {
-	mu         sync.Mutex
-	waitCalls  int
-	clearCalls int
-	stale      bool
-	ch         chan struct{}
+	mu        sync.Mutex
+	waitCalls int
+	cancelled int
+	nextID    uint64
+	seq       uint64
+	waiters   map[uint64]chan struct{}
 }
 
 func newMockNotifier() *mockNotifier {
-	return &mockNotifier{ch: make(chan struct{})}
+	return &mockNotifier{waiters: make(map[uint64]chan struct{})}
 }
 
-func (n *mockNotifier) WaitCh(session string) <-chan struct{} {
+func (n *mockNotifier) Snapshot(session string) uint64 {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.seq
+}
+
+func (n *mockNotifier) WaitAfter(session string, after uint64) (<-chan struct{}, func()) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.waitCalls++
-	if n.stale {
+	if n.seq > after {
 		ch := make(chan struct{})
 		close(ch)
-		return ch
+		return ch, func() {}
 	}
-	return n.ch
-}
-
-func (n *mockNotifier) Clear(session string) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.clearCalls++
-	n.stale = false
-	if n.ch == nil {
-		n.ch = make(chan struct{})
+	n.nextID++
+	id := n.nextID
+	ch := make(chan struct{})
+	n.waiters[id] = ch
+	return ch, func() {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		n.cancelled++
+		delete(n.waiters, id)
 	}
 }
 
 func (n *mockNotifier) Notify() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	select {
-	case <-n.ch:
-	default:
-		close(n.ch)
+	n.seq++
+	for id, ch := range n.waiters {
+		close(ch)
+		delete(n.waiters, id)
 	}
 }
 
@@ -111,7 +117,7 @@ func TestWaitUntilIdleClearsStaleNotificationBeforeWaiting(t *testing.T) {
 	mc := newMockTmuxClient()
 	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "busy")] = "⏺ Running… go test ./..."
 	notifier := newMockNotifier()
-	notifier.stale = true
+	notifier.seq = 1
 
 	tool := NewWaitUntilIdleTool(mc, notifier)
 	result, err := tool.Execute(context.Background(), map[string]any{
@@ -123,8 +129,8 @@ func TestWaitUntilIdleClearsStaleNotificationBeforeWaiting(t *testing.T) {
 
 	notifier.mu.Lock()
 	defer notifier.mu.Unlock()
-	assert.Equal(t, 1, notifier.waitCalls, "stale notifications should be cleared before registering a waiter")
-	assert.GreaterOrEqual(t, notifier.clearCalls, 2, "wait should clear notifier state at start and on exit")
+	assert.Equal(t, 1, notifier.waitCalls, "stale notifications should be ignored by snapshotting before registering a waiter")
+	assert.Equal(t, 1, notifier.cancelled, "waiter should be cleaned up on exit")
 }
 
 func TestWaitUntilIdleReturnsIdleOnNotification(t *testing.T) {

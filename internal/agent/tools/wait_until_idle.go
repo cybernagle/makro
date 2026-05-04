@@ -49,14 +49,17 @@ func pollUntilIdle(ctx context.Context, tc TmuxClient, sessionName string, timeo
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
 	start := time.Now()
 	var notifyCh <-chan struct{}
+	var cancelNotify func()
+	var lastSeen uint64
 
 	if notifier != nil {
-		// Drop stale notifications from earlier tasks before waiting for the
-		// current one; otherwise a previous stop event can wake this poll
-		// immediately even though the agent is still working.
-		notifier.Clear(sessionName)
-		notifyCh = notifier.WaitCh(sessionName)
-		defer notifier.Clear(sessionName)
+		lastSeen = notifier.Snapshot(sessionName)
+		notifyCh, cancelNotify = notifier.WaitAfter(sessionName, lastSeen)
+		defer func() {
+			if cancelNotify != nil {
+				cancelNotify()
+			}
+		}()
 	}
 
 	for {
@@ -106,10 +109,14 @@ func pollUntilIdle(ctx context.Context, tc TmuxClient, sessionName string, timeo
 				return map[string]string{"status": "idle"}, time.Since(start)
 			}
 			// The notification did not correspond to the idle state we need.
-			// Re-arm the waiter for the next stop event.
+			// Re-arm from the current notification sequence so we wait only for a
+			// newer stop event without disturbing other waiters on the session.
 			if notifier != nil {
-				notifier.Clear(sessionName)
-				notifyCh = notifier.WaitCh(sessionName)
+				lastSeen = notifier.Snapshot(sessionName)
+				if cancelNotify != nil {
+					cancelNotify()
+				}
+				notifyCh, cancelNotify = notifier.WaitAfter(sessionName, lastSeen)
 			}
 		}
 	}

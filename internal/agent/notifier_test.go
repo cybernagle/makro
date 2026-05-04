@@ -30,7 +30,8 @@ func dialAndNotify(t *testing.T, sockPath, session, status string) {
 
 func TestNotifierNotifyWakesWaiter(t *testing.T) {
 	n := NewAgentNotifier()
-	ch := n.WaitCh("auth")
+	ch, cancel := n.WaitAfter("auth", n.Snapshot("auth"))
+	defer cancel()
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
@@ -47,15 +48,17 @@ func TestNotifierNotifyWakesWaiter(t *testing.T) {
 
 func TestNotifierMultipleWaiters(t *testing.T) {
 	n := NewAgentNotifier()
+	after := n.Snapshot("worker")
 
 	var wg sync.WaitGroup
 	woken := make([]bool, 3)
 	for i := 0; i < 3; i++ {
 		wg.Add(1)
-		ch := n.WaitCh("worker")
+		ch, cancel := n.WaitAfter("worker", after)
 		idx := i
 		go func() {
 			defer wg.Done()
+			defer cancel()
 			<-ch
 			woken[idx] = true
 		}()
@@ -72,26 +75,29 @@ func TestNotifierMultipleWaiters(t *testing.T) {
 
 func TestNotifierNotifyBeforeWait(t *testing.T) {
 	n := NewAgentNotifier()
+	before := n.Snapshot("auth")
 	n.Notify("auth", "done")
 
-	ch := n.WaitCh("auth")
+	ch, cancel := n.WaitAfter("auth", before)
+	defer cancel()
 	select {
 	case <-ch:
 		// Expected: already closed.
 	default:
-		t.Fatal("WaitCh should be closed when Notify was called first")
+		t.Fatal("WaitAfter should be closed when Notify was called first")
 	}
 }
 
-func TestNotifierClearResets(t *testing.T) {
+func TestNotifierWaitAfterCurrentSnapshotStaysOpen(t *testing.T) {
 	n := NewAgentNotifier()
 	n.Notify("auth", "done")
-	n.Clear("auth")
+	after := n.Snapshot("auth")
 
-	ch := n.WaitCh("auth")
+	ch, cancel := n.WaitAfter("auth", after)
+	defer cancel()
 	select {
 	case <-ch:
-		t.Fatal("WaitCh should not be closed after Clear")
+		t.Fatal("WaitAfter should not be closed at the current snapshot")
 	case <-time.After(100 * time.Millisecond):
 		// Expected: still open.
 	}
@@ -99,11 +105,12 @@ func TestNotifierClearResets(t *testing.T) {
 
 func TestNotifierNoNotifyNoWake(t *testing.T) {
 	n := NewAgentNotifier()
-	ch := n.WaitCh("auth")
+	ch, cancel := n.WaitAfter("auth", n.Snapshot("auth"))
+	defer cancel()
 
 	select {
 	case <-ch:
-		t.Fatal("WaitCh should not close without Notify")
+		t.Fatal("WaitAfter should not close without Notify")
 	case <-time.After(200 * time.Millisecond):
 		// Expected: still open.
 	}
@@ -131,12 +138,13 @@ func TestNotifierUnixSocket(t *testing.T) {
 	dialAndNotify(t, n.sockPath, "auth", "done")
 
 	// Verify waiter is woken.
-	ch := n.WaitCh("auth")
+	ch, cancelWait := n.WaitAfter("auth", 0)
+	defer cancelWait()
 	select {
 	case <-ch:
 		// Expected.
 	case <-time.After(2 * time.Second):
-		t.Fatal("WaitCh not closed after socket notification")
+		t.Fatal("WaitAfter not closed after socket notification")
 	}
 }
 
@@ -163,11 +171,12 @@ func TestNotifierUnixSocketWithoutCloseWrite(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ok\n", string(buf[:nr]))
 
-	ch := n.WaitCh("auth")
+	ch, cancelWait := n.WaitAfter("auth", 0)
+	defer cancelWait()
 	select {
 	case <-ch:
 	case <-time.After(2 * time.Second):
-		t.Fatal("WaitCh not closed after socket notification without CloseWrite")
+		t.Fatal("WaitAfter not closed after socket notification without CloseWrite")
 	}
 }
 
@@ -184,7 +193,8 @@ func TestNotifierUnixSocketIgnoresEmptySession(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// No notification should have been recorded.
-	ch := n.WaitCh("auth")
+	ch, cancelWait := n.WaitAfter("auth", n.Snapshot("auth"))
+	defer cancelWait()
 	select {
 	case <-ch:
 		t.Fatal("empty session should not trigger notification")
@@ -194,26 +204,28 @@ func TestNotifierUnixSocketIgnoresEmptySession(t *testing.T) {
 }
 
 func TestNotifierRecentSticky(t *testing.T) {
-	// Multiple WaitCh calls after Notify should all return closed channels.
 	n := NewAgentNotifier()
+	before := n.Snapshot("auth")
 	n.Notify("auth", "done")
 
-	ch1 := n.WaitCh("auth")
-	ch2 := n.WaitCh("auth")
+	ch1, cancel1 := n.WaitAfter("auth", before)
+	defer cancel1()
+	ch2, cancel2 := n.WaitAfter("auth", before)
+	defer cancel2()
 
 	select {
 	case <-ch1:
 	default:
-		t.Fatal("first WaitCh should be closed")
+		t.Fatal("first WaitAfter should be closed")
 	}
 	select {
 	case <-ch2:
 	default:
-		t.Fatal("second WaitCh should also be closed (sticky recent)")
+		t.Fatal("second WaitAfter should also be closed for the same earlier snapshot")
 	}
 }
 
-func TestNotifierConcurrentNotifyAndClear(t *testing.T) {
+func TestNotifierConcurrentNotifyAndWaitAfter(t *testing.T) {
 	n := NewAgentNotifier()
 	const iterations = 100
 
@@ -222,33 +234,36 @@ func TestNotifierConcurrentNotifyAndClear(t *testing.T) {
 	for i := 0; i < iterations; i++ {
 		go func() {
 			defer wg.Done()
+			_, cancel := n.WaitAfter("auth", n.Snapshot("auth"))
+			cancel()
 			n.Notify("auth", "done")
-			n.Clear("auth")
 		}()
 	}
 	wg.Wait()
 
-	// Should not panic or deadlock. After all clears, WaitCh should be open.
-	ch := n.WaitCh("auth")
+	// Should not panic or deadlock. Waiting at the current snapshot should stay open.
+	ch, cancel := n.WaitAfter("auth", n.Snapshot("auth"))
+	defer cancel()
 	select {
 	case <-ch:
-		t.Fatal("WaitCh should be open after concurrent Notify+Clear")
+		t.Fatal("WaitAfter should be open at the current snapshot")
 	case <-time.After(100 * time.Millisecond):
 		// Expected.
 	}
 }
 
-func TestNotifierClearClosesWaiters(t *testing.T) {
+func TestNotifierCancelRemovesWaiter(t *testing.T) {
 	n := NewAgentNotifier()
-	ch := n.WaitCh("auth")
+	ch, cancel := n.WaitAfter("auth", n.Snapshot("auth"))
 
-	n.Clear("auth")
+	cancel()
+	n.Notify("auth", "done")
 
 	select {
 	case <-ch:
-		// Expected: channel closed by Clear.
-	case <-time.After(2 * time.Second):
-		t.Fatal("Clear should close outstanding waiter channels")
+		t.Fatal("cancelled waiter should not be woken")
+	case <-time.After(100 * time.Millisecond):
+		// Expected.
 	}
 }
 
@@ -271,7 +286,8 @@ func TestNotifierUnixSocketMalformedJSON(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// No notification should be recorded.
-	ch := n.WaitCh("auth")
+	ch, cancelWait := n.WaitAfter("auth", n.Snapshot("auth"))
+	defer cancelWait()
 	select {
 	case <-ch:
 		t.Fatal("malformed JSON should not trigger notification")
