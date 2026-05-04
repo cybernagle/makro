@@ -140,6 +140,37 @@ func TestNotifierUnixSocket(t *testing.T) {
 	}
 }
 
+func TestNotifierUnixSocketWithoutCloseWrite(t *testing.T) {
+	n := newNotifierWithShortPath(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, n.Start(ctx))
+	defer n.Stop()
+
+	conn, err := net.Dial("unix", n.sockPath)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	msg, err := json.Marshal(hookPayload{Session: "auth", Status: "done"})
+	require.NoError(t, err)
+	_, err = conn.Write(msg)
+	require.NoError(t, err)
+
+	buf := make([]byte, 64)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	nr, err := conn.Read(buf)
+	require.NoError(t, err)
+	assert.Equal(t, "ok\n", string(buf[:nr]))
+
+	ch := n.WaitCh("auth")
+	select {
+	case <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal("WaitCh not closed after socket notification without CloseWrite")
+	}
+}
+
 func TestNotifierUnixSocketIgnoresEmptySession(t *testing.T) {
 	n := newNotifierWithShortPath(t)
 

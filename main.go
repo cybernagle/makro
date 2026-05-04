@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -355,7 +356,10 @@ func runNotify() {
 	session := os.Args[2]
 	status := os.Args[3]
 
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "/tmp"
+	}
 	sockPath := filepath.Join(home, ".fingersaver", "hooks.sock")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -368,10 +372,22 @@ func runNotify() {
 	}
 	defer conn.Close()
 
-	msg, _ := json.Marshal(map[string]string{"session": session, "status": status})
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	conn.Write(msg)
+	msg, err := json.Marshal(map[string]string{"session": session, "status": status})
+	if err != nil {
+		os.Exit(1)
+	}
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		os.Exit(1)
+	}
+	if _, err := conn.Write(msg); err != nil {
+		os.Exit(1)
+	}
+	if uc, ok := conn.(*net.UnixConn); ok {
+		_ = uc.CloseWrite()
+	}
 
 	buf := make([]byte, 64)
-	conn.Read(buf)
+	if _, err := conn.Read(buf); err != nil && !errors.Is(err, io.EOF) {
+		os.Exit(1)
+	}
 }

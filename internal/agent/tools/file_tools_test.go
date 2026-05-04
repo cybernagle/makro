@@ -352,8 +352,8 @@ func TestAgentAliveWhitelist(t *testing.T) {
 
 func TestFindAgentInTree(t *testing.T) {
 	tree := map[string][]procEntry{
-		"100": {{pid: "101", ppid: "100", cmd: "bash"}},
-		"101": {{pid: "102", ppid: "101", cmd: "claude"}},
+		"100": {{pid: "101", ppid: "100", cmd: "bash", command: "bash"}},
+		"101": {{pid: "102", ppid: "101", cmd: "claude", command: "claude"}},
 	}
 
 	agent, found := findAgentInTree(tree, "100")
@@ -362,4 +362,19 @@ func TestFindAgentInTree(t *testing.T) {
 
 	_, found = findAgentInTree(tree, "999")
 	assert.False(t, found)
+}
+
+func TestFindAgentInTreeMatchesWrappedCommandLine(t *testing.T) {
+	tree := map[string][]procEntry{
+		"200": {{
+			pid:     "201",
+			ppid:    "200",
+			cmd:     "node",
+			command: "node /usr/local/bin/github-copilot-cli",
+		}},
+	}
+
+	agent, found := findAgentInTree(tree, "200")
+	assert.True(t, found)
+	assert.Equal(t, "github-copilot-cli", agent)
 }

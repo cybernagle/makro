@@ -40,7 +40,7 @@ func EnsureStopHook(claudeDir string) error {
 
 	var settings claudeSettings
 	if err := json.Unmarshal(data, &settings); err != nil {
-		return nil // malformed settings — don't touch.
+		return fmt.Errorf("parse settings: %w", err)
 	}
 
 	if settings.Hooks == nil {

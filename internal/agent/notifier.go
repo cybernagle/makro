@@ -155,14 +155,9 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 	defer conn.Close()
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
-	// Limit read to prevent abuse; hook payloads are <200 bytes.
-	data, err := io.ReadAll(io.LimitReader(conn, 4096))
-	if err != nil {
-		return
-	}
-
+	dec := json.NewDecoder(io.LimitReader(conn, 4096))
 	var msg hookPayload
-	if err := json.Unmarshal(data, &msg); err != nil {
+	if err := dec.Decode(&msg); err != nil {
 		log.Printf("[notifier] invalid payload: %v", err)
 		return
 	}
@@ -172,5 +167,7 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 
 	n.Notify(msg.Session, msg.Status)
 	conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-	conn.Write([]byte("ok\n"))
+	if _, err := conn.Write([]byte("ok\n")); err != nil {
+		log.Printf("[notifier] write ack: %v", err)
+	}
 }

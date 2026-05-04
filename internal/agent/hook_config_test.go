@@ -98,3 +98,13 @@ func TestEnsureStopHookNoFile(t *testing.T) {
 	err := EnsureStopHook(dir)
 	assert.NoError(t, err)
 }
+
+func TestEnsureStopHookMalformedSettings(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	require.NoError(t, os.WriteFile(settingsPath, []byte("{not valid json"), 0o644))
+
+	err := EnsureStopHook(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse settings")
+}
