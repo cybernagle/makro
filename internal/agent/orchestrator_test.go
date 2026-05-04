@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -73,7 +74,7 @@ func TestOrchestratorSlashCommand(t *testing.T) {
 	mc := newMockTmuxClient()
 	mp := &mockProvider{}
 	hm := NewHookManager()
-	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil))
+	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil, "/tmp"))
 	orch.SetCommandRegistry(NewCommandRegistry(mc))
 
 	events, err := orch.ProcessInput(context.Background(), "/help")
@@ -91,9 +92,10 @@ func TestOrchestratorSlashCommand(t *testing.T) {
 
 func TestOrchestratorMention(t *testing.T) {
 	mc := newMockTmuxClient()
+	mc.results["has-session -t auth"] = ""
 	mp := &mockProvider{}
 	hm := NewHookManager()
-	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil))
+	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil, "/tmp"))
 
 	events, err := orch.ProcessInput(context.Background(), "@auth echo hello")
 	require.NoError(t, err)
@@ -107,6 +109,25 @@ func TestOrchestratorMention(t *testing.T) {
 	assert.Contains(t, texts[0], "Sent to")
 }
 
+func TestOrchestratorMentionSessionNotFound(t *testing.T) {
+	mc := newMockTmuxClient()
+	mc.errors["has-session -t missing"] = fmt.Errorf("can't find session")
+	mp := &mockProvider{}
+	hm := NewHookManager()
+	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil, "/tmp"))
+
+	events, err := orch.ProcessInput(context.Background(), "@missing echo hello")
+	require.NoError(t, err)
+
+	var texts []string
+	for e := range events {
+		if e.Type == EventText {
+			texts = append(texts, e.Content)
+		}
+	}
+	assert.Contains(t, texts[0], "not found")
+}
+
 func TestOrchestratorLLMTextResponse(t *testing.T) {
 	mc := newMockTmuxClient()
 	mp := &mockProvider{
@@ -118,7 +139,7 @@ func TestOrchestratorLLMTextResponse(t *testing.T) {
 		},
 	}
 	hm := NewHookManager()
-	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil))
+	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil, "/tmp"))
 
 	events, err := orch.ProcessInput(context.Background(), "hi there")
 	require.NoError(t, err)
@@ -152,7 +173,7 @@ func TestOrchestratorLLMToolCall(t *testing.T) {
 		},
 	}
 	hm := NewHookManager()
-	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil))
+	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil, "/tmp"))
 
 	events, err := orch.ProcessInput(context.Background(), "what sessions do I have?")
 	require.NoError(t, err)
@@ -191,7 +212,7 @@ func TestOrchestratorMessagesAccumulate(t *testing.T) {
 			{{Type: llm.EventTextDelta, Text: "second response"}},
 		},
 	}
-	orch := NewOrchestrator(mp, mc, NewHookManager(), tools.AllTools(mc, nil))
+	orch := NewOrchestrator(mp, mc, NewHookManager(), tools.AllTools(mc, nil, "/tmp"))
 
 	events1, _ := orch.ProcessInput(context.Background(), "message 1")
 	for range events1 {
@@ -220,7 +241,7 @@ func TestOrchestratorCancel(t *testing.T) {
 		},
 	}
 
-	orch := NewOrchestrator(bp, mc, NewHookManager(), tools.AllTools(mc, nil))
+	orch := NewOrchestrator(bp, mc, NewHookManager(), tools.AllTools(mc, nil, "/tmp"))
 
 	events, err := orch.ProcessInput(context.Background(), "list sessions")
 	require.NoError(t, err)

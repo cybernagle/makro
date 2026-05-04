@@ -88,6 +88,14 @@ func HasSessionCmd(name string) string {
 	return fmt.Sprintf("has-session -t %s", quoteArg(name))
 }
 
+func PanePIDCmd(sessionName string) string {
+	return fmt.Sprintf("list-panes -t %s -F #{pane_pid}", quoteArg(sessionName))
+}
+
+func PaneCurrentCommandCmd(sessionName string) string {
+	return fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", quoteArg(sessionName))
+}
+
 func quoteArg(s string) string {
 	if !strings.ContainsAny(s, " \t'\"\\") {
 		return s

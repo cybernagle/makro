@@ -111,7 +111,8 @@ func main() {
 	// Create assessor and orchestrator.
 	hm := agent.NewHookManager()
 	assessor := agent.NewSessionAssessor(provider, cfg.LLMModel, cfg.GuardianPrompt)
-	orch := agent.NewOrchestrator(provider, tc, hm, tools.AllTools(tc, assessor))
+	cwd, _ := os.Getwd()
+	orch := agent.NewOrchestrator(provider, tc, hm, tools.AllTools(tc, assessor, cwd))
 	orch.SetCommandRegistry(agent.NewCommandRegistry(tc))
 	homeDir, _ := os.UserHomeDir()
 	skillDirs := []string{

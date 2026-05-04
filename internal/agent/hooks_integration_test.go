@@ -35,7 +35,7 @@ func TestOrchestratorAfterToolCallHook(t *testing.T) {
 		},
 	})
 
-	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil))
+	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil, "/tmp"))
 
 	events, err := orch.ProcessInput(context.Background(), "list sessions")
 	require.NoError(t, err)
@@ -73,7 +73,7 @@ func TestOrchestratorBeforeToolCallBlock(t *testing.T) {
 		},
 	})
 
-	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil))
+	orch := NewOrchestrator(mp, mc, hm, tools.AllTools(mc, nil, "/tmp"))
 
 	events, err := orch.ProcessInput(context.Background(), "list sessions")
 	require.NoError(t, err)
