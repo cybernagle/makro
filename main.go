@@ -134,13 +134,6 @@ func main() {
 
 	// Create hook notifier for agent stop notifications.
 	notifier := agent.NewAgentNotifier()
-	if err := notifier.Start(ctx); err != nil {
-		log.Printf("[main] warning: hook notifier failed to start: %v", err)
-		notifier = nil
-	}
-	if notifier != nil {
-		defer notifier.Stop()
-	}
 
 	orch := agent.NewOrchestrator(provider, tc, hm, tools.AllTools(tc, assessor, cwd, notifier))
 	orch.SetCommandRegistry(agent.NewCommandRegistry(tc))
@@ -155,18 +148,13 @@ func main() {
 	orch.SetModel(cfg.LLMModel)
 	orch.SetSystemPrompt(agent.DefaultSystemPrompt())
 
-	// Auto-configure Claude Code stop hook.
-	if notifier != nil {
-		executablePath, err := os.Executable()
-		if err != nil {
-			log.Printf("[main] warning: could not resolve executable path for Claude stop hook: %v", err)
-		}
-		if err := agent.EnsureStopHook(cfg.ClaudeDir, executablePath); err != nil {
-			log.Printf("[main] warning: could not configure Claude stop hook: %v", err)
-		}
-	}
-
 	if *chatMode {
+		// Start notifier for chat mode too (wait_until_idle support).
+		if err := notifier.Start(ctx); err != nil {
+			log.Printf("[main] warning: hook notifier failed to start: %v", err)
+		} else {
+			defer notifier.Stop()
+		}
 		runChat(ctx, orch)
 		return
 	}
@@ -177,14 +165,29 @@ func main() {
 		app.SetLayout(tui.LayoutPhone)
 	}
 
-	// Wire notifier callbacks for external messages.
+	// Register callbacks BEFORE Start to avoid race condition.
+	notifier.OnChat(func(role, content string) {
+		app.SendChatMessage(role, content)
+	})
+	notifier.OnSession(func(session, content string) error {
+		return tools.DirectSend(tc, session, content)
+	})
+
+	if err := notifier.Start(ctx); err != nil {
+		log.Printf("[main] warning: hook notifier failed to start: %v", err)
+		notifier = nil
+	}
 	if notifier != nil {
-		notifier.OnChat(func(role, content string) {
-			app.SendChatMessage(role, content)
-		})
-		notifier.OnSession(func(session, content string) error {
-			return tools.DirectSend(tc, session, content)
-		})
+		defer notifier.Stop()
+
+		// Auto-configure Claude Code stop hook.
+		executablePath, err := os.Executable()
+		if err != nil {
+			log.Printf("[main] warning: could not resolve executable path for Claude stop hook: %v", err)
+		}
+		if err := agent.EnsureStopHook(cfg.ClaudeDir, executablePath); err != nil {
+			log.Printf("[main] warning: could not configure Claude stop hook: %v", err)
+		}
 	}
 
 	// Set up chat history persistence.

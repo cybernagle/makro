@@ -172,8 +172,8 @@ func TestChatModelQueueSubmitWhileWorking(t *testing.T) {
 
 	m, cmd := c.Update(tea.KeyPressMsg{Code: 13}) // enter
 	c = m.(ChatModel)
-	assert.Equal(t, "", c.textInput.Value()) // input cleared
-	assert.Equal(t, "hello", c.pendingInput) // queued
+	assert.Equal(t, "", c.textInput.Value())           // input cleared
+	assert.Equal(t, []string{"hello"}, c.pendingQueue) // queued
 	assert.Nil(t, cmd)
 }
 

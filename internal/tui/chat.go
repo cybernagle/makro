@@ -78,7 +78,7 @@ type ChatModel struct {
 	scrollOffset  int
 	ctrlCCount    int
 	lastCtrlC     time.Time
-	pendingInput  string // queued message to send when current work finishes
+	pendingQueue  []string // queued messages to send when current work finishes
 }
 
 func NewChatModel() ChatModel {
@@ -249,8 +249,8 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if strings.HasPrefix(strings.TrimSpace(text), "@") {
 					return c, func() tea.Msg { return SubmitMsg{Text: text} }
 				}
-				c.pendingInput = text
-				c.appendMessage("system", "(queued, will send when current task finishes)")
+				c.pendingQueue = append(c.pendingQueue, text)
+				c.appendMessage("system", fmt.Sprintf("(queued #%d, will send when current task finishes)", len(c.pendingQueue)))
 				return c, nil
 			}
 
@@ -328,10 +328,10 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			c.flushStreamingToHistory()
 			c.working = false
 			c.workingMsg = ""
-			// Send queued message if any.
-			if c.pendingInput != "" {
-				text := c.pendingInput
-				c.pendingInput = ""
+			// Send next queued message if any.
+			if len(c.pendingQueue) > 0 {
+				text := c.pendingQueue[0]
+				c.pendingQueue = c.pendingQueue[1:]
 				c.working = true
 				c.workStart = time.Now()
 				c.spinnerFrame = 0

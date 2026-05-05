@@ -138,12 +138,16 @@ func (n *AgentNotifier) Stop() {
 
 // OnChat sets the callback for incoming chat messages from the socket.
 func (n *AgentNotifier) OnChat(fn func(role, content string)) {
+	n.mu.Lock()
 	n.onChat = fn
+	n.mu.Unlock()
 }
 
 // OnSession sets the callback for incoming session messages from the socket.
 func (n *AgentNotifier) OnSession(fn func(session, content string) error) {
+	n.mu.Lock()
 	n.onSession = fn
+	n.mu.Unlock()
 }
 
 func (n *AgentNotifier) acceptLoop(ctx context.Context) {
@@ -187,18 +191,23 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 		return
 	}
 
+	n.mu.Lock()
+	onChat := n.onChat
+	onSession := n.onSession
+	n.mu.Unlock()
+
 	switch msg.Type {
 	case "chat":
-		if n.onChat != nil && msg.Content != "" {
+		if onChat != nil && msg.Content != "" {
 			role := msg.Role
 			if role == "" {
 				role = "system"
 			}
-			n.onChat(role, msg.Content)
+			onChat(role, msg.Content)
 		}
 	case "session":
-		if n.onSession != nil && msg.Session != "" && msg.Content != "" {
-			if err := n.onSession(msg.Session, msg.Content); err != nil {
+		if onSession != nil && msg.Session != "" && msg.Content != "" {
+			if err := onSession(msg.Session, msg.Content); err != nil {
 				conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 				conn.Write([]byte("error: " + err.Error() + "\n"))
 				return
