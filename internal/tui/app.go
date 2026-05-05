@@ -212,6 +212,10 @@ func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.chat = m.(ChatModel)
 		cmds = append(cmds, cmd)
 		return a, tea.Batch(cmds...)
+
+	case ExternalChatMsg:
+		a.chat.AppendMessage(msg.Role, msg.Content)
+		return a, tea.Batch(cmds...)
 	}
 
 	// Route key and mouse events to focused pane.
@@ -450,6 +454,12 @@ func sessionsChanged(a, b []string) bool {
 
 func (a *AppModel) SetSendFn(fn func(tea.Msg)) {
 	a.sendFn = fn
+}
+
+func (a *AppModel) SendChatMessage(role, content string) {
+	if a.sendFn != nil {
+		a.sendFn(ExternalChatMsg{Role: role, Content: content})
+	}
 }
 
 func (a *AppModel) SetLayout(l Layout) {

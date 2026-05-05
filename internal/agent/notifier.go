@@ -14,20 +14,26 @@ import (
 
 // hookPayload is the JSON message sent to the socket.
 type hookPayload struct {
-	Session string `json:"session"`
-	Status  string `json:"status"`
+	Type    string `json:"type"` // "agent_stop", "chat", "session"
+	Session string `json:"session,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Role    string `json:"role,omitempty"`    // for chat: "assistant", "system"
+	Content string `json:"content,omitempty"` // for chat/session: message text
 }
 
-// AgentNotifier tracks stop notifications from coding agents.
+// AgentNotifier tracks stop notifications from coding agents and dispatches
+// external messages (chat, session) via callbacks.
 type AgentNotifier struct {
-	mu       sync.Mutex
-	waiters  map[string]map[uint64]chan struct{} // session → waiter ID → wait channel
-	seq      map[string]uint64                   // session → latest notification sequence
-	nextID   uint64
-	sockPath string
-	listener net.Listener
-	done     chan struct{}
-	stopOnce sync.Once
+	mu        sync.Mutex
+	waiters   map[string]map[uint64]chan struct{} // session → waiter ID → wait channel
+	seq       map[string]uint64                   // session → latest notification sequence
+	nextID    uint64
+	sockPath  string
+	listener  net.Listener
+	done      chan struct{}
+	stopOnce  sync.Once
+	onChat    func(role, content string)
+	onSession func(session, content string) error
 }
 
 func NewAgentNotifier() *AgentNotifier {
@@ -130,6 +136,16 @@ func (n *AgentNotifier) Stop() {
 	})
 }
 
+// OnChat sets the callback for incoming chat messages from the socket.
+func (n *AgentNotifier) OnChat(fn func(role, content string)) {
+	n.onChat = fn
+}
+
+// OnSession sets the callback for incoming session messages from the socket.
+func (n *AgentNotifier) OnSession(fn func(session, content string) error) {
+	n.onSession = fn
+}
+
 func (n *AgentNotifier) acceptLoop(ctx context.Context) {
 	backoff := 100 * time.Millisecond
 	for {
@@ -170,11 +186,32 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 		log.Printf("[notifier] invalid payload: %v", err)
 		return
 	}
-	if msg.Session == "" {
-		return
+
+	switch msg.Type {
+	case "chat":
+		if n.onChat != nil && msg.Content != "" {
+			role := msg.Role
+			if role == "" {
+				role = "system"
+			}
+			n.onChat(role, msg.Content)
+		}
+	case "session":
+		if n.onSession != nil && msg.Session != "" && msg.Content != "" {
+			if err := n.onSession(msg.Session, msg.Content); err != nil {
+				conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+				conn.Write([]byte("error: " + err.Error() + "\n"))
+				return
+			}
+		}
+	default:
+		// Backward compat: messages without type are agent_stop.
+		if msg.Session == "" {
+			return
+		}
+		n.Notify(msg.Session, msg.Status)
 	}
 
-	n.Notify(msg.Session, msg.Status)
 	conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	if _, err := conn.Write([]byte("ok\n")); err != nil {
 		log.Printf("[notifier] write ack: %v", err)

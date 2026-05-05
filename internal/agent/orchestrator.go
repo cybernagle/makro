@@ -317,6 +317,19 @@ func (o *Orchestrator) handleLLM(ctx context.Context, ch chan<- OrchestratorEven
 		result, err := o.provider.Complete(callCtx, msgs, opts)
 		callCancel()
 		if err != nil {
+			errMsg := err.Error()
+			if isRetryableError(errMsg) {
+				log.Printf("[orchestrator] LLM retryable error: %v, waiting 3m", err)
+				ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("LLM error (retrying in 3m): %v", err)}
+				select {
+				case <-ctx.Done():
+					ch <- OrchestratorEvent{Type: EventText, Content: "Cancelled."}
+					ch <- OrchestratorEvent{Type: EventDone}
+					return
+				case <-time.After(3 * time.Minute):
+					continue
+				}
+			}
 			log.Printf("[orchestrator] LLM complete error: %v", err)
 			ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("LLM error: %v", err)}
 			ch <- OrchestratorEvent{Type: EventDone}
@@ -451,6 +464,19 @@ func parseJSONArgs(raw string) map[string]any {
 		args["_parse_error"] = err.Error()
 	}
 	return args
+}
+
+// isRetryableError checks if an LLM error message indicates a server-side
+// issue (4xx/5xx) that may resolve after waiting.
+func isRetryableError(errMsg string) bool {
+	retryable := []string{"429", "500", "502", "503", "504", "overloaded", "rate limit", "capacity"}
+	lower := strings.ToLower(errMsg)
+	for _, pattern := range retryable {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func DefaultSystemPrompt() string {

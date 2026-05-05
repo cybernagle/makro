@@ -34,13 +34,22 @@ var (
 	phoneLayout = flag.Bool("phone", false, "Use phone layout (vertical split)")
 )
 
-const version = "0.4.2"
+const version = "0.4.3"
 
 func main() {
-	// Handle "fingersaver notify <session> <status>" subcommand.
-	if len(os.Args) >= 2 && os.Args[1] == "notify" {
-		runNotify()
-		return
+	// Handle subcommands that communicate with a running FingerSaver instance.
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "notify":
+			runSocketCommand("agent_stop")
+			return
+		case "chat":
+			runSocketCommand("chat")
+			return
+		case "send":
+			runSocketCommand("session")
+			return
+		}
 	}
 
 	flag.BoolVar(showHelp, "h", false, "Show help")
@@ -166,6 +175,16 @@ func main() {
 	app := tui.NewAppModel(orch, tc)
 	if *phoneLayout {
 		app.SetLayout(tui.LayoutPhone)
+	}
+
+	// Wire notifier callbacks for external messages.
+	if notifier != nil {
+		notifier.OnChat(func(role, content string) {
+			app.SendChatMessage(role, content)
+		})
+		notifier.OnSession(func(session, content string) error {
+			return tools.DirectSend(tc, session, content)
+		})
 	}
 
 	// Set up chat history persistence.
@@ -307,7 +326,7 @@ func helpText() string {
 
 USAGE
   fingersaver [flags]
-  fingersaver notify <session> <status>
+  fingersaver <subcommand> [args]
 
 FLAGS
   -h, --help      Show help
@@ -317,7 +336,9 @@ FLAGS
   --phone         Use phone layout (vertical split)
 
 SUBCOMMANDS
-  notify          Send agent stop notification (used by Claude Code Stop hook)
+  notify <session> <status>  Send agent stop notification (used by Claude Code Stop hook)
+  chat <role> <content>      Send message to FingerSaver chat window
+  send <session> <message>   Send message to a tmux session
 
 CONFIGURATION
   FingerSaver reads from Claude settings (claude_dir/settings.json):
@@ -351,14 +372,13 @@ CHAT COMMANDS
 `
 }
 
-// runNotify sends an agent stop notification to the FingerSaver Unix socket.
-func runNotify() {
-	if len(os.Args) < 4 {
-		fmt.Fprintf(os.Stderr, "Usage: fingersaver notify <session> <status>\n")
+// runSocketCommand sends a typed message to the FingerSaver Unix socket.
+// Subcommands: notify (agent_stop), chat (chat), send (session).
+func runSocketCommand(msgType string) {
+	payload := buildSocketPayload(msgType)
+	if payload == nil {
 		os.Exit(1)
 	}
-	session := os.Args[2]
-	status := os.Args[3]
 
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -372,26 +392,70 @@ func runNotify() {
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", sockPath)
 	if err != nil {
 		// Silently exit — FingerSaver may not be running.
-		os.Exit(1)
+		os.Exit(0)
 	}
 	defer conn.Close()
 
-	msg, err := json.Marshal(map[string]string{"session": session, "status": status})
+	msg, err := json.Marshal(payload)
 	if err != nil {
-		os.Exit(1)
+		os.Exit(0)
 	}
 	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		os.Exit(1)
+		os.Exit(0)
 	}
 	if _, err := conn.Write(msg); err != nil {
-		os.Exit(1)
+		os.Exit(0)
 	}
 	if uc, ok := conn.(*net.UnixConn); ok {
 		_ = uc.CloseWrite()
 	}
 
 	buf := make([]byte, 64)
-	if _, err := conn.Read(buf); err != nil && !errors.Is(err, io.EOF) {
+	n, err := conn.Read(buf)
+	if err != nil && !errors.Is(err, io.EOF) {
+		os.Exit(0)
+	}
+	resp := strings.TrimSpace(string(buf[:n]))
+	if strings.HasPrefix(resp, "error:") {
+		fmt.Fprintf(os.Stderr, "%s\n", resp)
 		os.Exit(1)
+	}
+}
+
+func buildSocketPayload(msgType string) map[string]string {
+	switch msgType {
+	case "agent_stop":
+		if len(os.Args) < 4 {
+			fmt.Fprintf(os.Stderr, "Usage: fingersaver notify <session> <status>\n")
+			return nil
+		}
+		return map[string]string{
+			"type":    "agent_stop",
+			"session": os.Args[2],
+			"status":  os.Args[3],
+		}
+	case "chat":
+		if len(os.Args) < 4 {
+			fmt.Fprintf(os.Stderr, "Usage: fingersaver chat <role> <content>\n")
+			return nil
+		}
+		return map[string]string{
+			"type":    "chat",
+			"role":    os.Args[2],
+			"content": os.Args[3],
+		}
+	case "session":
+		if len(os.Args) < 4 {
+			fmt.Fprintf(os.Stderr, "Usage: fingersaver send <session> <message>\n")
+			return nil
+		}
+		return map[string]string{
+			"type":    "session",
+			"session": os.Args[2],
+			"content": os.Args[3],
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown subcommand: %s\n", msgType)
+		return nil
 	}
 }

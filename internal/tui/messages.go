@@ -45,6 +45,12 @@ type GuardianEventMsg struct {
 	Content string
 }
 
+// ExternalChatMsg carries a message pushed from an external source (e.g. hook socket).
+type ExternalChatMsg struct {
+	Role    string
+	Content string
+}
+
 // tickMsg is used for periodic tmux polling.
 type tickMsg struct{}
 
