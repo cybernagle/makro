@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 
 	"github.com/creack/pty"
 )
@@ -35,9 +36,14 @@ func NewKeepAlive(socketPath string) *KeepAlive {
 // The PTY master fd is kept open so tmux sees the session as attached.
 func (k *KeepAlive) Add(ctx context.Context, sessionName string) error {
 	k.mu.Lock()
-	if _, exists := k.clients[sessionName]; exists {
-		k.mu.Unlock()
-		return nil
+	if entry, exists := k.clients[sessionName]; exists {
+		if isProcessAlive(entry.cmd) {
+			k.mu.Unlock()
+			return nil
+		}
+		// Process died; clean up stale entry.
+		entry.ptmx.Close()
+		delete(k.clients, sessionName)
 	}
 	k.mu.Unlock()
 
@@ -90,4 +96,11 @@ func (k *KeepAlive) Close() {
 		}
 	}
 	log.Printf("[keepalive] closed all hidden clients (%d)", len(entries))
+}
+
+func isProcessAlive(cmd *exec.Cmd) bool {
+	if cmd.Process == nil {
+		return false
+	}
+	return cmd.Process.Signal(syscall.Signal(0)) == nil
 }
