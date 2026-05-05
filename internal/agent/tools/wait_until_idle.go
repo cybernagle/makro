@@ -108,6 +108,10 @@ func pollUntilIdle(ctx context.Context, tc TmuxClient, sessionName string, timeo
 			if err == nil && isIdle(out) {
 				return map[string]string{"status": "idle"}, time.Since(start)
 			}
+			// If status is completed but isIdle missed it (e.g. ⏺ in output), trust status.
+			if err == nil && out.Status == "completed" {
+				return map[string]string{"status": "idle"}, time.Since(start)
+			}
 			// The notification did not correspond to the idle state we need.
 			// Re-arm from the current notification sequence so we wait only for a
 			// newer stop event without disturbing other waiters on the session.

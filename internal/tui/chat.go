@@ -78,6 +78,7 @@ type ChatModel struct {
 	scrollOffset  int
 	ctrlCCount    int
 	lastCtrlC     time.Time
+	pendingInput  string // queued message to send when current work finishes
 }
 
 func NewChatModel() ChatModel {
@@ -210,7 +211,7 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "enter":
 			input := c.textInput.Value()
-			if c.working || strings.TrimSpace(input) == "" {
+			if strings.TrimSpace(input) == "" {
 				return c, nil
 			}
 			trimmed := strings.TrimSpace(input)
@@ -240,11 +241,23 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			c.historyIdx = len(c.inputHistory)
 			c.textInput.Reset()
 			c.trimHistory()
+			c.appendMessage("user", text)
+
+			if c.working {
+				// Agent is busy — @session sends go through immediately,
+				// other messages are queued for when work finishes.
+				if strings.HasPrefix(strings.TrimSpace(text), "@") {
+					return c, func() tea.Msg { return SubmitMsg{Text: text} }
+				}
+				c.pendingInput = text
+				c.appendMessage("system", "(queued, will send when current task finishes)")
+				return c, nil
+			}
+
 			c.working = true
 			c.workingMsg = ""
 			c.workStart = time.Now()
 			c.spinnerFrame = 0
-			c.appendMessage("user", text)
 			return c, tea.Batch(
 				func() tea.Msg { return SubmitMsg{Text: text} },
 				tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg { return spinnerTickMsg(t) }),
@@ -315,6 +328,19 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			c.flushStreamingToHistory()
 			c.working = false
 			c.workingMsg = ""
+			// Send queued message if any.
+			if c.pendingInput != "" {
+				text := c.pendingInput
+				c.pendingInput = ""
+				c.working = true
+				c.workStart = time.Now()
+				c.spinnerFrame = 0
+				c.appendMessage("user", text)
+				return c, tea.Batch(
+					func() tea.Msg { return SubmitMsg{Text: text} },
+					tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg { return spinnerTickMsg(t) }),
+				)
+			}
 		}
 
 	case tea.MouseWheelMsg:

@@ -34,7 +34,7 @@ var (
 	phoneLayout = flag.Bool("phone", false, "Use phone layout (vertical split)")
 )
 
-const version = "0.4.3"
+const version = "0.4.4"
 
 func main() {
 	// Handle subcommands that communicate with a running FingerSaver instance.

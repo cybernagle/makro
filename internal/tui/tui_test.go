@@ -164,7 +164,7 @@ func TestChatModelHistoryNavigation(t *testing.T) {
 	assert.Equal(t, "", c.textInput.Value())
 }
 
-func TestChatModelBlockSubmitWhileWorking(t *testing.T) {
+func TestChatModelQueueSubmitWhileWorking(t *testing.T) {
 	c := NewChatModel()
 	c.SetSize(80, 24)
 	c.textInput.SetValue("hello")
@@ -172,7 +172,8 @@ func TestChatModelBlockSubmitWhileWorking(t *testing.T) {
 
 	m, cmd := c.Update(tea.KeyPressMsg{Code: 13}) // enter
 	c = m.(ChatModel)
-	assert.Equal(t, "hello", c.textInput.Value()) // input not cleared
+	assert.Equal(t, "", c.textInput.Value()) // input cleared
+	assert.Equal(t, "hello", c.pendingInput) // queued
 	assert.Nil(t, cmd)
 }
 
