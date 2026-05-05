@@ -225,7 +225,7 @@ func (c *Client) pollSessions(ctx context.Context, knownSessions map[string]stri
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	args := []string{"-S", c.socketPath, "list-sessions", "-F", "#{session_id}:#{session_name}"}
+	args := []string{"-S", c.socketPath, "list-sessions", "-F", "#{session_id}:#{session_name}:#{session_attached}"}
 	out, err := exec.CommandContext(ctx, "tmux", args...).Output()
 	if err != nil {
 		// No sessions or server not running.
@@ -236,11 +236,11 @@ func (c *Client) pollSessions(ctx context.Context, knownSessions map[string]stri
 	currentSessions := make(map[string]string)
 
 	for _, line := range lines {
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) != 3 {
 			continue
 		}
-		id, name := parts[0], parts[1]
+		id, name, attached := parts[0], parts[1], parts[2]
 		currentSessions[name] = id
 
 		if _, exists := knownSessions[name]; !exists {
@@ -257,6 +257,10 @@ func (c *Client) pollSessions(ctx context.Context, knownSessions map[string]stri
 		}
 
 		if c.keepAlive != nil {
+			if attached == "0" {
+				log.Printf("[tmux] session %s unattached, removing stale keepalive", name)
+				c.keepAlive.Remove(name)
+			}
 			if err := c.keepAlive.Add(ctx, name); err != nil {
 				log.Printf("[tmux] keepalive add %s: %v", name, err)
 			}

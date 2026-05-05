@@ -5,8 +5,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/creack/pty"
 )
@@ -33,31 +33,52 @@ func NewKeepAlive(socketPath string) *KeepAlive {
 }
 
 // Add creates a hidden PTY client attached to the session.
-// The PTY master fd is kept open so tmux sees the session as attached.
-func (k *KeepAlive) Add(ctx context.Context, sessionName string) error {
+// The attach process is long-running so we use background context,
+// not the caller's context which may have a timeout.
+func (k *KeepAlive) Add(_ context.Context, sessionName string) error {
 	k.mu.Lock()
-	if entry, exists := k.clients[sessionName]; exists {
-		if isProcessAlive(entry.cmd) {
-			k.mu.Unlock()
-			return nil
-		}
-		// Process died; clean up stale entry.
-		entry.ptmx.Close()
-		delete(k.clients, sessionName)
+	if _, exists := k.clients[sessionName]; exists {
+		k.mu.Unlock()
+		return nil
 	}
 	k.mu.Unlock()
 
-	cmd := exec.CommandContext(ctx, "tmux", "-S", k.socket, "attach-session", "-t", sessionName)
+	cmd := exec.Command("tmux", "-S", k.socket, "attach-session", "-t", sessionName)
+	// Clear TMUX* env vars to avoid nested-tmux detection causing immediate exit.
+	var env []string
+	for _, e := range os.Environ() {
+		if strings.HasPrefix(e, "TMUX") {
+			continue
+		}
+		env = append(env, e)
+	}
+	cmd.Env = env
+
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
+		log.Printf("[keepalive] pty.Start %s error: %v", sessionName, err)
 		return err
 	}
+
+	log.Printf("[keepalive] added PID=%d for session %s", cmd.Process.Pid, sessionName)
 
 	k.mu.Lock()
 	k.clients[sessionName] = &keepAliveEntry{ptmx: ptmx, cmd: cmd}
 	k.mu.Unlock()
 
-	log.Printf("[keepalive] added hidden client for session %s", sessionName)
+	// When the attach process exits, remove the stale map entry so the next
+	// poll cycle can re-attach instead of seeing a live entry and skipping.
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Printf("[keepalive] session %s PID %d exited: %v", sessionName, cmd.Process.Pid, err)
+		}
+		k.mu.Lock()
+		if entry, ok := k.clients[sessionName]; ok && entry.cmd == cmd {
+			delete(k.clients, sessionName)
+		}
+		k.mu.Unlock()
+	}()
+
 	return nil
 }
 
@@ -96,11 +117,4 @@ func (k *KeepAlive) Close() {
 		}
 	}
 	log.Printf("[keepalive] closed all hidden clients (%d)", len(entries))
-}
-
-func isProcessAlive(cmd *exec.Cmd) bool {
-	if cmd.Process == nil {
-		return false
-	}
-	return cmd.Process.Signal(syscall.Signal(0)) == nil
 }
