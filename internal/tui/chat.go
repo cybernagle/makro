@@ -227,8 +227,10 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return c, func() tea.Msg { return SubmitMsg{Text: trimmed} }
 			}
 			text := input
-			// Prepend sticky session target only if input does not already start with @.
-			if c.targetSession != "" && !strings.HasPrefix(trimmed, "@") && !strings.HasPrefix(trimmed, "/") {
+			// Prepend sticky session target unless input already starts with @.
+			// In sticky mode, / commands (except /layout and /resize which are
+			// handled above) are forwarded to the session as agent commands.
+			if c.targetSession != "" && !strings.HasPrefix(trimmed, "@") {
 				text = "@" + c.targetSession + " " + text
 			}
 			// Extract and set sticky session from @mention in input.
