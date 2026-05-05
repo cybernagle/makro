@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -32,6 +33,7 @@ type Client struct {
 	cancel     context.CancelFunc
 	mu         sync.Mutex
 	running    bool
+	keepAlive  *KeepAlive
 }
 
 func NewClient(socketPath string, owned bool) *Client {
@@ -65,6 +67,7 @@ func (c *Client) Start(ctx context.Context) error {
 	}
 
 	c.running = true
+	c.keepAlive = NewKeepAlive(c.socketPath)
 
 	// Start polling for session state changes.
 	go c.pollLoop(ctx)
@@ -93,6 +96,10 @@ func (c *Client) Stop() error {
 		return nil
 	}
 	c.running = false
+
+	if c.keepAlive != nil {
+		c.keepAlive.Close()
+	}
 
 	if c.cancel != nil {
 		c.cancel()
@@ -248,12 +255,21 @@ func (c *Client) pollSessions(ctx context.Context, knownSessions map[string]stri
 			default:
 			}
 		}
+
+		if c.keepAlive != nil {
+			if err := c.keepAlive.Add(ctx, name); err != nil {
+				log.Printf("[tmux] keepalive add %s: %v", name, err)
+			}
+		}
 	}
 
 	// Check for removed sessions.
 	for name, id := range knownSessions {
 		if _, exists := currentSessions[name]; !exists {
 			c.state.RemoveSession(id)
+			if c.keepAlive != nil {
+				c.keepAlive.Remove(name)
+			}
 		}
 	}
 

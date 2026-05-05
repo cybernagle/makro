@@ -7,10 +7,9 @@ import (
 	"github.com/naglezhang/fingersaver/internal/tmux"
 )
 
-// sendText sends text to a tmux session, handling multi-line content correctly
-// to avoid triggering bracket paste mode. For multi-line text, it sends each
-// line individually to prevent the terminal from detecting a rapid character
-// sequence as a paste event.
+// sendText sends text to a tmux session using bracket paste mode.
+// All text and the submit keystroke are sent as a single payload to avoid
+// timing races with TUI apps like Copilot that may drop separate events.
 func sendText(tc TmuxClient, sessionName, text string) error {
 	if !strings.Contains(text, "\n") {
 		return sendSingleLine(tc, sessionName, text)
@@ -19,36 +18,27 @@ func sendText(tc TmuxClient, sessionName, text string) error {
 }
 
 func sendSingleLine(tc TmuxClient, sessionName, text string) error {
-	if text != "" {
-		if _, err := tc.Exec(tmux.SendKeysLiteralCmd(sessionName, text)); err != nil {
-			return fmt.Errorf("send to %q: %w", sessionName, err)
-		}
-	}
-	if _, err := tc.Exec(tmux.SendEnterCmd(sessionName)); err != nil {
-		return fmt.Errorf("send enter to %q: %w", sessionName, err)
+	payload := fmt.Sprintf("\033[200~%s\033[201~\r", text)
+	if _, err := tc.Exec(tmux.SendKeysLiteralCmd(sessionName, payload)); err != nil {
+		return fmt.Errorf("send to %q: %w", sessionName, err)
 	}
 	return nil
 }
 
 func sendMultiLine(tc TmuxClient, sessionName, text string) error {
 	lines := strings.Split(text, "\n")
+	var buf strings.Builder
+	buf.WriteString("\033[200~")
 	for i, line := range lines {
-		if line != "" {
-			if _, err := tc.Exec(tmux.SendKeysLiteralCmd(sessionName, line)); err != nil {
-				return fmt.Errorf("send line %d to %q: %w", i+1, sessionName, err)
-			}
-		}
-		// Between lines: send C-j (newline) to insert a line break without
-		// submitting, then a final Enter after the last line to submit.
+		buf.WriteString(line)
 		if i < len(lines)-1 {
-			if _, err := tc.Exec(tmux.SendCJCmd(sessionName)); err != nil {
-				return fmt.Errorf("send newline to %q: %w", sessionName, err)
-			}
+			buf.WriteString("\n")
 		}
 	}
+	buf.WriteString("\033[201~\r")
 
-	if _, err := tc.Exec(tmux.SendEnterCmd(sessionName)); err != nil {
-		return fmt.Errorf("send enter to %q: %w", sessionName, err)
+	if _, err := tc.Exec(tmux.SendKeysLiteralCmd(sessionName, buf.String())); err != nil {
+		return fmt.Errorf("send multi-line to %q: %w", sessionName, err)
 	}
 	return nil
 }

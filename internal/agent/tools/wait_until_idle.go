@@ -102,19 +102,21 @@ func pollUntilIdle(ctx context.Context, tc TmuxClient, sessionName string, timeo
 		case <-time.After(wait):
 			// Continue polling.
 		case <-notifyCh:
-			// Agent reported stop via hook. Brief settle then verify.
-			time.Sleep(100 * time.Millisecond)
+			// Agent reported stop via hook — trust the notification.
+			time.Sleep(200 * time.Millisecond)
 			out, err = readStructured(tc, sessionName)
-			if err == nil && isIdle(out) {
+			// Return idle unless a confirmation prompt appeared.
+			if err == nil && out.PendingConfirmation == nil {
 				return map[string]string{"status": "idle"}, time.Since(start)
 			}
-			// If status is completed but isIdle missed it (e.g. ⏺ in output), trust status.
-			if err == nil && out.Status == "completed" {
-				return map[string]string{"status": "idle"}, time.Since(start)
+			if err == nil && out.PendingConfirmation != nil {
+				return map[string]string{
+					"status":         "blocked",
+					"pending_prompt": out.PendingConfirmation.Prompt,
+					"pending_type":   out.PendingConfirmation.Type,
+				}, time.Since(start)
 			}
-			// The notification did not correspond to the idle state we need.
-			// Re-arm from the current notification sequence so we wait only for a
-			// newer stop event without disturbing other waiters on the session.
+			// Fallback: re-arm from the current sequence.
 			if notifier != nil {
 				lastSeen = notifier.Snapshot(sessionName)
 				if cancelNotify != nil {
