@@ -247,7 +247,7 @@ func (a AppModel) View() tea.View {
 	if a.width == 0 {
 		v := tea.NewView("Loading...")
 		v.AltScreen = true
-		v.MouseMode = tea.MouseModeAllMotion
+		v.MouseMode = tea.MouseModeCellMotion
 		return v
 	}
 	if a.layout == LayoutPhone {
@@ -279,7 +279,7 @@ func (a AppModel) viewDefault() tea.View {
 
 	v := tea.NewView(joined)
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeAllMotion
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
@@ -317,7 +317,7 @@ func (a AppModel) viewPhone() tea.View {
 
 	v := tea.NewView(joined)
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeAllMotion
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
