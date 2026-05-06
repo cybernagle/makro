@@ -182,9 +182,23 @@ func main() {
 	}
 
 	// Register TUI-specific chat callback after app is created.
-	notifier.OnChat(func(role, content string) {
-		app.SendChatMessage(role, content)
-	})
+	if notifier != nil {
+		notifier.OnChat(func(role, content string) {
+			app.SendChatMessage(role, content)
+		})
+
+		notifier.OnAgentStop(func(session, status string) {
+			s := status
+			if s == "" {
+				s = "stopped"
+			}
+			msg := fmt.Sprintf("Session %s %s", session, s)
+			if out, err := tools.ReadStructuredOutput(tc, session); err == nil && out.LastAssistantMessage != "" {
+				msg += "\n" + out.LastAssistantMessage
+			}
+			app.SendChatMessage("system", msg)
+		})
+	}
 
 	// Set up chat history persistence.
 	if cfg.ChatHistoryPath != "" {

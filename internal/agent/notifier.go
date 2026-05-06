@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -25,16 +24,17 @@ type hookPayload struct {
 // AgentNotifier tracks stop notifications from coding agents and dispatches
 // external messages (chat, session) via callbacks.
 type AgentNotifier struct {
-	mu        sync.Mutex
-	waiters   map[string]map[uint64]chan struct{} // session → waiter ID → wait channel
-	seq       map[string]uint64                   // session → latest notification sequence
-	nextID    uint64
-	sockPath  string
-	listener  net.Listener
-	done      chan struct{}
-	stopOnce  sync.Once
-	onChat    func(role, content string)
-	onSession func(session, content string) error
+	mu          sync.Mutex
+	waiters     map[string]map[uint64]chan struct{} // session → waiter ID → wait channel
+	seq         map[string]uint64                   // session → latest notification sequence
+	nextID      uint64
+	sockPath    string
+	listener    net.Listener
+	done        chan struct{}
+	stopOnce    sync.Once
+	onChat      func(role, content string)
+	onSession   func(session, content string) error
+	onAgentStop func(session, status string)
 }
 
 func NewAgentNotifier() *AgentNotifier {
@@ -151,6 +151,13 @@ func (n *AgentNotifier) OnSession(fn func(session, content string) error) {
 	n.mu.Unlock()
 }
 
+// OnAgentStop sets the callback for agent stop notifications.
+func (n *AgentNotifier) OnAgentStop(fn func(session, status string)) {
+	n.mu.Lock()
+	n.onAgentStop = fn
+	n.mu.Unlock()
+}
+
 func (n *AgentNotifier) acceptLoop(ctx context.Context) {
 	backoff := 100 * time.Millisecond
 	for {
@@ -195,6 +202,7 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 	n.mu.Lock()
 	onChat := n.onChat
 	onSession := n.onSession
+	onAgentStop := n.onAgentStop
 	n.mu.Unlock()
 
 	switch msg.Type {
@@ -220,12 +228,8 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 			return
 		}
 		n.Notify(msg.Session, msg.Status)
-		if onChat != nil {
-			status := msg.Status
-			if status == "" {
-				status = "stopped"
-			}
-			onChat("system", fmt.Sprintf("Session %s %s", msg.Session, status))
+		if onAgentStop != nil {
+			onAgentStop(msg.Session, msg.Status)
 		}
 	}
 

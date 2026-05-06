@@ -37,7 +37,8 @@ var (
 	assistantMsgRe = regexp.MustCompile(`⏺\s+(.+)`)
 )
 
-func readStructured(tc TmuxClient, sessionName string) (*StructuredOutput, error) {
+// ReadStructuredOutput captures and parses the full pane output from a session.
+func ReadStructuredOutput(tc TmuxClient, sessionName string) (*StructuredOutput, error) {
 	raw, err := tc.Exec(tmux.CapturePaneAllCmd(sessionName))
 	if err != nil {
 		return nil, fmt.Errorf("capture pane %q: %w", sessionName, err)

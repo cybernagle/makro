@@ -35,7 +35,7 @@ func NewSaveContextTool(tc TmuxClient) Tool {
 				return "", fmt.Errorf("name is required")
 			}
 
-			out, err := readStructured(tc, name)
+			out, err := ReadStructuredOutput(tc, name)
 			if err != nil {
 				return "", err
 			}

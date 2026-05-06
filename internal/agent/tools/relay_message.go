@@ -30,7 +30,7 @@ func NewRelayMessageTool(tc TmuxClient) Tool {
 				return "", fmt.Errorf("from_session, to_session, message_type, and content are required")
 			}
 
-			srcOutput, err := readStructured(tc, fromSession)
+			srcOutput, err := ReadStructuredOutput(tc, fromSession)
 			if err != nil {
 				return "", err
 			}

@@ -26,7 +26,7 @@ func NewAssessConfirmationTool(tc TmuxClient, assessor Assessor) Tool {
 				return "", fmt.Errorf("no assessor configured")
 			}
 
-			out, err := readStructured(tc, sessionName)
+			out, err := ReadStructuredOutput(tc, sessionName)
 			if err != nil {
 				return "", err
 			}

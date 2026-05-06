@@ -17,7 +17,7 @@ func NewReadStructuredOutputTool(tc TmuxClient) Tool {
 			if name == "" {
 				return "", fmt.Errorf("name is required")
 			}
-			out, err := readStructured(tc, name)
+			out, err := ReadStructuredOutput(tc, name)
 			if err != nil {
 				return "", err
 			}

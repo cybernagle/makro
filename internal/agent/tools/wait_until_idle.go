@@ -30,7 +30,7 @@ func NewWaitUntilIdleTool(tc TmuxClient, notifier Notifier) Tool {
 			result, waited := pollUntilIdle(ctx, tc, sessionName, timeoutSec, notifier)
 
 			// Always capture final output so the LLM doesn't need read_session_output.
-			out, err := readStructured(tc, sessionName)
+			out, err := ReadStructuredOutput(tc, sessionName)
 			data := map[string]any{
 				"status":         result["status"],
 				"waited_seconds": fmt.Sprintf("%.1f", waited.Seconds()),
@@ -84,7 +84,7 @@ func pollUntilIdle(ctx context.Context, tc TmuxClient, sessionName string, timeo
 			return map[string]string{"status": "error"}, time.Since(start)
 		}
 
-		out, err := readStructured(tc, sessionName)
+		out, err := ReadStructuredOutput(tc, sessionName)
 		if err != nil {
 			return map[string]string{"status": "error"}, time.Since(start)
 		}
@@ -121,7 +121,7 @@ func pollUntilIdle(ctx context.Context, tc TmuxClient, sessionName string, timeo
 		case <-notifyCh:
 			// Agent reported stop via hook — trust the notification.
 			time.Sleep(200 * time.Millisecond)
-			out, err = readStructured(tc, sessionName)
+			out, err = ReadStructuredOutput(tc, sessionName)
 			// Return idle unless a confirmation prompt appeared.
 			if err == nil && out.PendingConfirmation == nil {
 				return map[string]string{"status": "idle"}, time.Since(start)
