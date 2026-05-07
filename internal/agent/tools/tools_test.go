@@ -155,7 +155,7 @@ func TestSendToSessionMissingArgs(t *testing.T) {
 func TestReadSessionOutputTool(t *testing.T) {
 	mc := newMockTmuxClient()
 	allCmd := fmt.Sprintf("capture-pane -t %s -p -S -", "reader")
-	rangeCmd := fmt.Sprintf("capture-pane -t %s -p -S -%d -E -%d", "reader", 201, 0)
+	rangeCmd := fmt.Sprintf("capture-pane -t %s -p -S -%d -E -%d", "reader", 501, 0)
 	mc.results[allCmd] = "line1\nline2\nline3"
 	mc.results[rangeCmd] = "line1\nline2\nline3"
 

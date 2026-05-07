@@ -90,9 +90,22 @@ func detectStatus(lines []string) string {
 		}
 	}
 	for i := len(recent) - 1; i >= 0; i-- {
-		if strings.HasPrefix(strings.TrimSpace(recent[i]), "⏺") {
+		trimmed := strings.TrimSpace(recent[i])
+		// Skip Claude Code status bar lines.
+		if strings.HasPrefix(trimmed, "--") && strings.Contains(trimmed, "--") {
+			continue
+		}
+		if trimmed == "" {
+			continue
+		}
+		// A bare ❯ prompt means the agent is done (or waiting for input, handled above).
+		if strings.HasPrefix(trimmed, "❯") {
+			return "completed"
+		}
+		if strings.HasPrefix(trimmed, "⏺") {
 			return "thinking"
 		}
+		break
 	}
 	return "completed"
 }

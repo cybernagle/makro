@@ -63,11 +63,20 @@ func (n *mockNotifier) Notify() {
 
 func TestWaitUntilIdleTool(t *testing.T) {
 	mc := newMockTmuxClient()
-	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "worker")] = "⏺ Done. All tests pass.\n❯ "
+	sessionName := "worker"
+	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", sessionName)] = "⏺ Done. All tests pass.\n❯ "
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", sessionName)] = "claude"
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", sessionName)] = "12345"
+	notifier := newMockNotifier()
 
-	tool := NewWaitUntilIdleTool(mc, nil)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		notifier.Notify()
+	}()
+
+	tool := NewWaitUntilIdleTool(mc, notifier)
 	result, err := tool.Execute(context.Background(), map[string]any{
-		"session_name":    "worker",
+		"session_name":    sessionName,
 		"timeout_seconds": float64(10),
 	})
 	require.NoError(t, err)
@@ -79,6 +88,8 @@ func TestWaitUntilIdleTimeout(t *testing.T) {
 	mc := newMockTmuxClient()
 	// Busy output — never idle.
 	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "busy")] = "⏺ Running… go test ./..."
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "busy")] = "claude"
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", "busy")] = "12345"
 
 	tool := NewWaitUntilIdleTool(mc, nil)
 	result, err := tool.Execute(context.Background(), map[string]any{
@@ -92,6 +103,8 @@ func TestWaitUntilIdleTimeout(t *testing.T) {
 func TestWaitUntilIdleCancel(t *testing.T) {
 	mc := newMockTmuxClient()
 	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "stuck")] = "⏺ Running… go test ./..."
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "stuck")] = "claude"
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", "stuck")] = "12345"
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -113,9 +126,28 @@ func TestWaitUntilIdleMissingSession(t *testing.T) {
 	assert.Contains(t, err.Error(), "session_name is required")
 }
 
+func TestWaitUntilIdleAgentDead(t *testing.T) {
+	mc := newMockTmuxClient()
+	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "dead")] = "⏺ some output"
+	// No agent process — only shell running.
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "dead")] = "zsh"
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", "dead")] = "99999"
+
+	tool := NewWaitUntilIdleTool(mc, nil)
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"session_name":    "dead",
+		"timeout_seconds": float64(5),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result, `"error"`)
+	assert.Contains(t, result, "agent process not running")
+}
+
 func TestWaitUntilIdleClearsStaleNotificationBeforeWaiting(t *testing.T) {
 	mc := newMockTmuxClient()
 	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "busy")] = "⏺ Running… go test ./..."
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "busy")] = "claude"
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", "busy")] = "12345"
 	notifier := newMockNotifier()
 	notifier.seq = 1
 
@@ -138,6 +170,8 @@ func TestWaitUntilIdleReturnsIdleOnNotification(t *testing.T) {
 	sessionName := "worker"
 	cmd := fmt.Sprintf("capture-pane -t %s -p -S -", sessionName)
 	mc.results[cmd] = "⏺ Running… go test ./..."
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", sessionName)] = "claude"
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", sessionName)] = "12345"
 	notifier := newMockNotifier()
 
 	go func() {

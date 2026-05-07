@@ -9,7 +9,7 @@ import (
 	"github.com/naglezhang/fingersaver/internal/tmux"
 )
 
-const defaultPageSize = 200
+const defaultPageSize = 500
 
 func NewReadSessionOutputTool(tc TmuxClient) Tool {
 	return Tool{

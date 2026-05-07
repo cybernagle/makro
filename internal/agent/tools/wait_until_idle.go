@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 )
@@ -56,6 +57,9 @@ func NewWaitUntilIdleTool(tc TmuxClient, notifier Notifier) Tool {
 			if v, ok := result["pending_type"]; ok {
 				data["pending_type"] = v
 			}
+			if v, ok := result["reason"]; ok {
+				data["reason"] = v
+			}
 			jsonBytes, _ := json.Marshal(data)
 			return string(jsonBytes), nil
 		},
@@ -84,25 +88,25 @@ func pollUntilIdle(ctx context.Context, tc TmuxClient, sessionName string, timeo
 			return map[string]string{"status": "error"}, time.Since(start)
 		}
 
-		out, err := ReadStructuredOutput(tc, sessionName)
-		if err != nil {
-			return map[string]string{"status": "error"}, time.Since(start)
+		if time.Now().After(deadline) {
+			return map[string]string{"status": "timeout"}, time.Since(start)
 		}
 
-		if out.PendingConfirmation != nil {
+		// Agent process died (crash, killed) — this is abnormal.
+		alive := checkAgentAlive(tc, sessionName)
+		if !alive.Alive {
+			log.Printf("[wait_until_idle] agent not alive: %s", alive.Reason)
+			return map[string]string{"status": "error", "reason": "agent process not running: " + alive.Reason}, time.Since(start)
+		}
+
+		// Check for pending confirmation prompt.
+		out, err := ReadStructuredOutput(tc, sessionName)
+		if err == nil && out.PendingConfirmation != nil {
 			return map[string]string{
 				"status":         "blocked",
 				"pending_prompt": out.PendingConfirmation.Prompt,
 				"pending_type":   out.PendingConfirmation.Type,
 			}, time.Since(start)
-		}
-
-		if isIdle(out) {
-			return map[string]string{"status": "idle"}, time.Since(start)
-		}
-
-		if time.Now().After(deadline) {
-			return map[string]string{"status": "timeout"}, time.Since(start)
 		}
 
 		wait := 3 * time.Second
@@ -119,13 +123,12 @@ func pollUntilIdle(ctx context.Context, tc TmuxClient, sessionName string, timeo
 		case <-time.After(wait):
 			// Continue polling.
 		case <-notifyCh:
-			// Agent reported stop via hook — trust the notification.
-			time.Sleep(200 * time.Millisecond)
+			// Stop hook fired — trust it.
+			log.Printf("[wait_until_idle] stop hook received for %s", sessionName)
+			time.Sleep(500 * time.Millisecond)
+
+			// Check for confirmation before declaring idle.
 			out, err = ReadStructuredOutput(tc, sessionName)
-			// Return idle unless a confirmation prompt appeared.
-			if err == nil && out.PendingConfirmation == nil {
-				return map[string]string{"status": "idle"}, time.Since(start)
-			}
 			if err == nil && out.PendingConfirmation != nil {
 				return map[string]string{
 					"status":         "blocked",
@@ -133,42 +136,8 @@ func pollUntilIdle(ctx context.Context, tc TmuxClient, sessionName string, timeo
 					"pending_type":   out.PendingConfirmation.Type,
 				}, time.Since(start)
 			}
-			// Fallback: re-arm from the current sequence.
-			if notifier != nil {
-				lastSeen = notifier.Snapshot(sessionName)
-				if cancelNotify != nil {
-					cancelNotify()
-				}
-				notifyCh, cancelNotify = notifier.WaitAfter(sessionName, lastSeen)
-			}
-		}
-	}
-}
 
-func isIdle(out *StructuredOutput) bool {
-	if out.PendingConfirmation != nil {
-		return false
-	}
-	if out.Status == "completed" {
-		return true
-	}
-	if hasBarePrompt(out.RawOutput) && out.Status != "executing_command" && out.Status != "waiting_input" {
-		return true
-	}
-	return false
-}
-
-func hasBarePrompt(raw string) bool {
-	lines := strings.Split(raw, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
+			return map[string]string{"status": "idle"}, time.Since(start)
 		}
-		if strings.HasPrefix(line, "❯") && !selectionRe.MatchString(line) {
-			return true
-		}
-		return false
 	}
-	return false
 }
