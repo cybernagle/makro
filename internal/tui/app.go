@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
@@ -536,6 +537,7 @@ func (a *AppModel) SetChatHistory(h *ChatHistory) {
 }
 
 // startMonitor launches a background goroutine that polls a session until idle.
+// When a pending confirmation is detected, it auto-assesses and responds.
 func (a *AppModel) startMonitor(sessionName string) {
 	// Cancel existing monitor for this session if any.
 	if cancel, ok := a.monitors[sessionName]; ok {
@@ -548,26 +550,71 @@ func (a *AppModel) startMonitor(sessionName string) {
 	go func() {
 		defer func() {
 			if a.sendFn != nil {
-				a.sendFn(ExternalChatMsg{Role: "system", Content: fmt.Sprintf("Monitor @%s stopped", sessionName)})
-			}
-			// Clean up from monitors map via sendFn to avoid data race.
-			if a.sendFn != nil {
 				a.sendFn(monitorDoneMsg{session: sessionName})
 			}
 		}()
-		tool := tools.NewWaitUntilIdleTool(a.tmuxClient, a.notifier, a.assessor)
-		result, err := tool.Execute(ctx, map[string]any{
-			"session_name":    sessionName,
-			"timeout_seconds": float64(300),
-		})
-		if a.sendFn != nil {
+
+		for {
+			// Wait until idle or blocked.
+			tool := tools.NewWaitUntilIdleTool(a.tmuxClient, a.notifier, a.assessor)
+			result, err := tool.Execute(ctx, map[string]any{
+				"session_name":    sessionName,
+				"timeout_seconds": float64(300),
+			})
 			if err != nil {
-				a.sendFn(ExternalChatMsg{Role: "system", Content: fmt.Sprintf("Monitor @%s error: %v", sessionName, err)})
-			} else {
-				a.sendFn(ExternalChatMsg{Role: "system", Content: fmt.Sprintf("Monitor @%s done: %s", sessionName, result)})
+				a.notify(fmt.Sprintf("Monitor @%s error: %v", sessionName, err))
+				return
+			}
+
+			var parsed struct {
+				Status        string `json:"status"`
+				PendingType   string `json:"pending_type"`
+				PendingPrompt string `json:"pending_prompt"`
+			}
+			if jsonErr := json.Unmarshal([]byte(result), &parsed); jsonErr != nil {
+				a.notify(fmt.Sprintf("Monitor @%s done: %s", sessionName, result))
+				return
+			}
+
+			switch parsed.Status {
+			case "idle":
+				a.notify(fmt.Sprintf("Monitor @%s idle ✓", sessionName))
+				return
+			case "timeout":
+				a.notify(fmt.Sprintf("Monitor @%s timeout — still running", sessionName))
+				return
+			case "error":
+				a.notify(fmt.Sprintf("Monitor @%s error", sessionName))
+				return
+			case "blocked":
+				// Auto-assess and respond.
+				approve := parsed.PendingType == "approve"
+				a.notify(fmt.Sprintf("Monitor @%s: auto-%s (%s)", sessionName,
+					map[bool]string{true: "approving", false: "rejecting"}[approve], parsed.PendingPrompt))
+				resp := tools.NewRespondConfirmationTool(a.tmuxClient)
+				respResult, respErr := resp.Execute(ctx, map[string]any{
+					"session_name": sessionName,
+					"approve":      approve,
+				})
+				if respErr != nil {
+					a.notify(fmt.Sprintf("Monitor @%s respond error: %v", sessionName, respErr))
+					return
+				}
+				_ = respResult
+				// Loop back to wait_until_idle.
+				continue
+			default:
+				a.notify(fmt.Sprintf("Monitor @%s done: %s", sessionName, result))
+				return
 			}
 		}
 	}()
+}
+
+func (a *AppModel) notify(content string) {
+	if a.sendFn != nil {
+		a.sendFn(ExternalChatMsg{Role: "system", Content: content})
+	}
 }
 
 // listMonitors shows all active background monitors.
