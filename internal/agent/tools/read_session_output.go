@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/naglezhang/fingersaver/internal/tmux"
@@ -19,6 +20,7 @@ func NewReadSessionOutputTool(tc TmuxClient) Tool {
 			{Name: "name", Type: "string", Description: "Session name", Required: true},
 			{Name: "lines", Type: "number", Description: "Number of lines to read per page (default 200)"},
 			{Name: "offset", Type: "number", Description: "Skip this many lines from the end (for paging backward, default 0)"},
+			{Name: "last_response", Type: "boolean", Description: "If true, find the last user message marker (>) and return the complete response from there"},
 		},
 		Execute: func(ctx context.Context, args map[string]any) (string, error) {
 			name, _ := args["name"].(string)
@@ -33,6 +35,14 @@ func NewReadSessionOutputTool(tc TmuxClient) Tool {
 			offset := 0
 			if v, ok := args["offset"].(float64); ok && v > 0 {
 				offset = int(v)
+			}
+			lastResponse := false
+			if v, ok := args["last_response"].(bool); ok {
+				lastResponse = v
+			}
+
+			if lastResponse {
+				return readLastResponse(tc, name, lines)
 			}
 
 			emptyResult := func() (string, error) {
@@ -132,4 +142,62 @@ func splitNonEmpty(s string) []string {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
+}
+
+// userMsgMarkerRe matches a user message line in agent output.
+var userMsgMarkerRe = regexp.MustCompile(`^>\s`)
+
+// readLastResponse finds the last user message marker (>) in the scrollback
+// and returns everything from there to the end as a complete response.
+func readLastResponse(tc TmuxClient, name string, maxLines int) (string, error) {
+	// Read a generous tail to find the last user prompt.
+	captureCount := maxLines
+	if captureCount < 500 {
+		captureCount = 500
+	}
+	raw, err := tc.Exec(tmux.CapturePaneRangeCmd(name, captureCount, 0))
+	if err != nil {
+		return "", fmt.Errorf("capture pane %q: %w", name, err)
+	}
+	if raw == "" {
+		result, _ := json.Marshal(map[string]any{
+			"content": "", "total_lines": 0, "truncated": false,
+		})
+		return string(result), nil
+	}
+	allLines := splitNonEmpty(raw)
+
+	// Find the last user message marker scanning backward.
+	cutIdx := 0
+	for i := len(allLines) - 1; i >= 0; i-- {
+		if userMsgMarkerRe.MatchString(allLines[i]) {
+			cutIdx = i
+			break
+		}
+	}
+
+	page := allLines[cutIdx:]
+	truncated := cutIdx > 0
+
+	// If we didn't find a marker, read full scrollback to search further back.
+	if cutIdx == 0 && len(allLines) >= captureCount {
+		full, err := tc.Exec(tmux.CapturePaneAllCmd(name))
+		if err == nil && full != "" {
+			fullLines := splitNonEmpty(full)
+			for i := len(fullLines) - 1; i >= 0; i-- {
+				if userMsgMarkerRe.MatchString(fullLines[i]) {
+					page = fullLines[i:]
+					truncated = i > 0
+					break
+				}
+			}
+		}
+	}
+
+	result, _ := json.Marshal(map[string]any{
+		"content":     strings.Join(page, "\n"),
+		"total_lines": len(page),
+		"truncated":   truncated,
+	})
+	return string(result), nil
 }
