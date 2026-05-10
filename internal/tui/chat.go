@@ -160,13 +160,14 @@ func (c ChatModel) currentSuggestions() []Suggestion {
 		return filterCommandSuggestions(c.commands, input[1:])
 	}
 
-	if strings.HasPrefix(input, "@") {
+	if strings.HasPrefix(input, "@") || strings.HasPrefix(input, "&") {
 		prefix := input[1:]
+		kind := string(input[0])
 		var result []Suggestion
 		for _, s := range c.sessions {
 			if strings.HasPrefix(s, prefix) {
 				result = append(result, Suggestion{
-					Text: "@" + s + " ",
+					Text: kind + s + " ",
 				})
 			}
 		}
@@ -227,6 +228,15 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return c, func() tea.Msg { return SessionTargetMsg{Name: name} }
 					}
 				}
+				// For & completions, submit as monitor command.
+				if strings.HasPrefix(s.Text, "&") {
+					name := strings.TrimSpace(strings.TrimPrefix(s.Text, "&"))
+					if name != "" {
+						c.textInput.Reset()
+						c.selectedSugg = 0
+						return c, func() tea.Msg { return SubmitMsg{Text: "&" + name} }
+					}
+				}
 				c.textInput.SetValue(s.Text)
 				c.textInput.CursorEnd()
 				c.selectedSugg = 0
@@ -271,7 +281,7 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Prepend sticky session target unless input already starts with @.
 			// In sticky mode, / commands (except /layout and /resize which are
 			// handled above) are forwarded to the session as agent commands.
-			if c.targetSession != "" && !strings.HasPrefix(trimmed, "@") {
+			if c.targetSession != "" && !strings.HasPrefix(trimmed, "@") && !strings.HasPrefix(trimmed, "&") {
 				text = "@" + c.targetSession + " " + text
 			}
 			// Extract and set sticky session from @mention in input.
@@ -290,7 +300,7 @@ func (c ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if c.working {
 				// Agent is busy — @session sends go through immediately,
 				// other messages are queued for when work finishes.
-				if strings.HasPrefix(strings.TrimSpace(text), "@") {
+				if strings.HasPrefix(strings.TrimSpace(text), "@") || strings.HasPrefix(strings.TrimSpace(text), "&") {
 					c.activeRuns++
 					return c, func() tea.Msg { return SubmitMsg{Text: text} }
 				}

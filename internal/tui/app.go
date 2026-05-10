@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 	"github.com/naglezhang/fingersaver/internal/agent"
+	"github.com/naglezhang/fingersaver/internal/agent/tools"
 	"github.com/naglezhang/fingersaver/internal/tmux"
 )
 
@@ -156,6 +157,14 @@ func (a AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.viewer.SetActiveSession(fields[0])
 				delete(a.lastOutput, fields[0])
 			}
+		}
+		// &session: background monitor until idle.
+		if strings.HasPrefix(text, "&") {
+			sessionName := agent.ExtractMonitor(text)
+			if sessionName != "" {
+				a.startMonitor(sessionName)
+			}
+			return a, nil
 		}
 		if a.orchestrator != nil {
 			go a.processOrchestratorInput(msg.Text)
@@ -512,4 +521,23 @@ func (a *AppModel) resizeAllSessions() {
 func (a *AppModel) SetChatHistory(h *ChatHistory) {
 	a.chat.SetHistory(h)
 	a.chat.LoadHistory()
+}
+
+// startMonitor launches a background goroutine that polls a session until idle.
+func (a *AppModel) startMonitor(sessionName string) {
+	a.chat.AppendMessage("system", fmt.Sprintf("Monitoring @%s until idle...", sessionName))
+	go func() {
+		tool := tools.NewWaitUntilIdleTool(a.tmuxClient, nil, nil)
+		result, err := tool.Execute(a.ctx, map[string]any{
+			"session_name":    sessionName,
+			"timeout_seconds": float64(300),
+		})
+		if a.sendFn != nil {
+			if err != nil {
+				a.sendFn(ExternalChatMsg{Role: "system", Content: fmt.Sprintf("Monitor @%s error: %v", sessionName, err)})
+			} else {
+				a.sendFn(ExternalChatMsg{Role: "system", Content: fmt.Sprintf("Monitor @%s done: %s", sessionName, result)})
+			}
+		}
+	}()
 }

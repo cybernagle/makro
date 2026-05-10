@@ -148,3 +148,14 @@ func ExtractMention(input string) (sessionName string, text string) {
 	}
 	return name, strings.TrimSpace(remaining)
 }
+
+// ExtractMonitor extracts &session-name from input and returns the
+// session name. Returns empty string if input does not start with &.
+func ExtractMonitor(input string) string {
+	input = strings.TrimSpace(input)
+	if !strings.HasPrefix(input, "&") {
+		return ""
+	}
+	name, _, _ := strings.Cut(strings.TrimSpace(input[1:]), " ")
+	return name
+}
