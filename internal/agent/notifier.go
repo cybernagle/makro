@@ -27,6 +27,7 @@ type AgentNotifier struct {
 	mu           sync.Mutex
 	waiters      map[string]map[uint64]chan struct{} // session → waiter ID → wait channel
 	seq          map[string]uint64                   // session → latest notification sequence
+	lastStatus   map[string]string                   // session → last notification type ("permission", "done", etc.)
 	nextID       uint64
 	sockPath     string
 	listener     net.Listener
@@ -44,10 +45,11 @@ func NewAgentNotifier() *AgentNotifier {
 		home = "/tmp"
 	}
 	return &AgentNotifier{
-		waiters:  make(map[string]map[uint64]chan struct{}),
-		seq:      make(map[string]uint64),
-		sockPath: filepath.Join(home, ".fingersaver", "hooks.sock"),
-		done:     make(chan struct{}),
+		waiters:    make(map[string]map[uint64]chan struct{}),
+		seq:        make(map[string]uint64),
+		lastStatus: make(map[string]string),
+		sockPath:   filepath.Join(home, ".fingersaver", "hooks.sock"),
+		done:       make(chan struct{}),
 	}
 }
 
@@ -94,12 +96,20 @@ func (n *AgentNotifier) WaitAfter(session string, after uint64) (<-chan struct{}
 	return ch, cancel
 }
 
+// LastStatus returns the most recent notification type for a session (e.g. "permission", "done").
+func (n *AgentNotifier) LastStatus(session string) string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.lastStatus[session]
+}
+
 // Notify marks a session as stopped and wakes all waiters.
 func (n *AgentNotifier) Notify(session, status string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
 	n.seq[session]++
+	n.lastStatus[session] = status
 	waiters := n.waiters[session]
 	for _, ch := range waiters {
 		close(ch)

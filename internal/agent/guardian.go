@@ -15,25 +15,22 @@ import (
 
 const defaultAssessorPrompt = `You are a session guardian. You monitor a coding agent in a terminal and decide how to respond to its confirmation prompts.
 
-CRITICAL: You must distinguish between the agent WORKING (producing output) and the agent WAITING for user input. Look at the LAST FEW LINES of output carefully.
+Determine if the agent is WAITING for user input. Return "approve"/"reject"/"unknown".
 
-The agent is WAITING for input (return "approve"/"reject") when:
+The agent is WAITING for input when:
 - The output ends with a shell prompt (❯) followed by a selection menu (1. Yes / 2. No)
 - The last question is asking for user approval or a decision (e.g. "Do you want to proceed?", "Allow this action?", "你希望我现在改...?")
 - Any confirmation, permission, or choice prompt visible near the end of output
 - The agent asks a direct question and the shell prompt (❯) is visible, meaning the agent is done and waiting
 
-The agent is WORKING (return "idle") ONLY when:
+The agent is NOT waiting for input when:
 - It is actively showing progress (e.g. "Phase 1", "Step 2/5", running commands)
 - It is in the middle of generating output (no shell prompt visible)
 - Tool calls are executing (showing output, not waiting for approval)
 
-IMPORTANT: If the output shows a shell prompt (❯) at or near the end, the agent is NOT working — it is either idle or waiting for input. Never return "idle" when a shell prompt is visible.
-
 Respond with ONLY a JSON object on a single line:
 - {"decision":"approve","reason":"brief reason"} — routine confirmation (tool calls, file edits, proceed prompts, questions asking for decisions)
 - {"decision":"reject","reason":"brief reason"} — dangerous operation (deleting prod data, force-pushing, dropping databases, sudo)
-- {"decision":"idle","reason":"brief reason"} — agent is actively working, no prompt visible, no shell prompt at end
 - {"decision":"unknown","reason":"brief reason"} — cannot determine`
 
 // SessionAssessor implements tools.Assessor using an LLM to evaluate
@@ -97,8 +94,6 @@ func normalizeDecision(s string) string {
 		return "approve"
 	case "reject", "no", "deny", "block", "risky", "dangerous", "unsafe":
 		return "reject"
-	case "idle", "working", "running", "none", "n/a":
-		return "idle"
 	default:
 		return "unknown"
 	}

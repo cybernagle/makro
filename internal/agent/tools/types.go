@@ -49,4 +49,6 @@ type Notifier interface {
 	// WaitAfter returns a channel that closes after the session receives a
 	// notification newer than after. The cancel function removes the waiter.
 	WaitAfter(session string, after uint64) (<-chan struct{}, func())
+	// LastStatus returns the most recent notification type for a session.
+	LastStatus(session string) string
 }

@@ -25,10 +25,9 @@ func NewSendToSessionTool(tc TmuxClient) Tool {
 				return "", fmt.Errorf("name and message are required")
 			}
 
-			// Check agent is alive and is a known agent.
-			status := checkAgentAlive(tc, name)
-			if !status.Alive {
-				return "", fmt.Errorf("session %q: %s", name, status.Reason)
+			// Check session exists.
+			if !IsSessionAlive(tc, name) {
+				return "", fmt.Errorf("session %q not found", name)
 			}
 
 			// Blocklist check.
@@ -40,7 +39,7 @@ func NewSendToSessionTool(tc TmuxClient) Tool {
 				return "", err
 			}
 
-			return fmt.Sprintf("Sent to %q (%s): %s", name, status.Agent, util.Truncate(message, 50)), nil
+			return fmt.Sprintf("Sent to %q: %s", name, util.Truncate(message, 50)), nil
 		},
 	}
 }

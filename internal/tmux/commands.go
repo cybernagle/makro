@@ -72,14 +72,6 @@ func CapturePaneAllCmd(paneID string) string {
 	return fmt.Sprintf("capture-pane -t %s -p -S -", quoteArg(paneID))
 }
 
-func SetWindowSizeCmd(sessionName string, width, height int) string {
-	return fmt.Sprintf("set-option -t %s window-size %dx%d", quoteArg(sessionName), width, height)
-}
-
-func ResizeWindowCmd(sessionName string, width, height int) string {
-	return fmt.Sprintf("resize-window -t %s -x %d -y %d", quoteArg(sessionName), width, height)
-}
-
 func DetachClientCmd() string {
 	return "detach-client"
 }

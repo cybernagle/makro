@@ -222,7 +222,6 @@ func (v *ViewerModel) pruneSessions(active []string) {
 
 func (v *ViewerModel) SetFocused(f bool)         { v.focused = f }
 func (v *ViewerModel) SetSize(w, h int)          { v.width = w; v.height = h }
-func (v *ViewerModel) Size() (int, int)          { return v.width, v.height }
 func (v *ViewerModel) SetCompact(c bool)         { v.compact = c }
 func (v *ViewerModel) ActiveSession() string     { return v.active }
 func (v *ViewerModel) SetActiveSession(s string) { v.active = s }
