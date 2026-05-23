@@ -240,7 +240,9 @@ document.addEventListener("keydown", (e) => {
         e.preventDefault();
         chatPanel.classList.toggle("collapsed");
         btnToggle.classList.toggle("collapsed", chatPanel.classList.contains("collapsed"));
-        setTimeout(refitAll, 250);
+        // Two-phase resize: catch mid-transition and post-transition
+        setTimeout(refitAll, 50);
+        setTimeout(refitAll, 300);
         return;
     }
 
@@ -250,5 +252,21 @@ document.addEventListener("keydown", (e) => {
         e.preventDefault();
         const names = Array.from(terminals.keys());
         if (num <= names.length) switchToTab(names[num - 1]);
+        return;
+    }
+
+    // Cmd+L focus terminal input
+    if (e.key === "l") {
+        e.preventDefault();
+        const entry = activeTab && terminals.get(activeTab);
+        if (entry) entry.term.focus();
+    }
+});
+
+// Cmd+J focus chat input
+document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "j") {
+        e.preventDefault();
+        chatInput.focus();
     }
 });

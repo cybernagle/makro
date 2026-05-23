@@ -43,7 +43,7 @@ html, body { height: 100%; overflow: hidden; }
   height: var(--toolbar-h);
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-default);
-  padding: 0 8px;
+  padding: 0 8px 0 78px;
   gap: 2px;
   flex-shrink: 0;
   user-select: none;
