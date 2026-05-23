@@ -231,12 +231,24 @@ chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Escape") hintEl.classList.remove("visible");
 });
 
-// Cmd+B toggle chat panel
+// Keyboard shortcuts
 document.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "b") {
+    if (!(e.metaKey || e.ctrlKey)) return;
+
+    // Cmd+B toggle chat panel
+    if (e.key === "b") {
         e.preventDefault();
         chatPanel.classList.toggle("collapsed");
         btnToggle.classList.toggle("collapsed", chatPanel.classList.contains("collapsed"));
         setTimeout(refitAll, 250);
+        return;
+    }
+
+    // Cmd+1..9 switch to tab by index
+    const num = parseInt(e.key);
+    if (num >= 1 && num <= 9) {
+        e.preventDefault();
+        const names = Array.from(terminals.keys());
+        if (num <= names.length) switchToTab(names[num - 1]);
     }
 });
