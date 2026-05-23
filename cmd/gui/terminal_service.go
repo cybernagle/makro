@@ -3,20 +3,23 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
 
+	"github.com/creack/pty"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 type terminalProcess struct {
-	masterFd int
-	pid      int
+	ptmx *os.File
+	pid  int
 }
 
 type TerminalService struct {
@@ -35,9 +38,7 @@ func (t *TerminalService) SetApp(app *application.App) {
 	t.app = app
 }
 
-func (t *TerminalService) Startup(ctx application.Context) {
-	// Service lifecycle - nothing to do
-}
+func (t *TerminalService) Startup(ctx application.Context) {}
 
 func (t *TerminalService) AttachSession(sessionName string) error {
 	t.mu.Lock()
@@ -54,46 +55,43 @@ func (t *TerminalService) AttachSession(sessionName string) error {
 		tmuxArgs = append([]string{"-S", sockPath}, tmuxArgs...)
 	}
 
-	var masterFd, slaveFd int
-	if err := openpty(&masterFd, &slaveFd); err != nil {
-		return fmt.Errorf("openpty: %w", err)
-	}
-
-	setWinsize(masterFd, 80, 24)
-
 	cmd := exec.Command(tmuxBin, tmuxArgs...)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
-	cmd.Stdin = os.NewFile(uintptr(slaveFd), "stdin")
-	cmd.Stdout = os.NewFile(uintptr(slaveFd), "stdout")
-	cmd.Stderr = os.NewFile(uintptr(slaveFd), "stderr")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	var env []string
+	for _, e := range os.Environ() {
+		if strings.HasPrefix(e, "TMUX") {
+			continue
+		}
+		env = append(env, e)
+	}
+	cmd.Env = append(env, "TERM=xterm-256color")
 
-	if err := cmd.Start(); err != nil {
-		syscall.Close(masterFd)
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
 		return fmt.Errorf("start tmux attach: %w", err)
 	}
 
-	tp := &terminalProcess{masterFd: masterFd, pid: cmd.Process.Pid}
+	tp := &terminalProcess{ptmx: ptmx, pid: cmd.Process.Pid}
 
 	t.mu.Lock()
 	t.terminals[sessionName] = tp
 	t.mu.Unlock()
 
-	// Read loop: masterFd → Wails events
 	go func() {
-		buf := make([]byte, 4096)
+		buf := make([]byte, 8192)
 		for {
-			n, err := syscall.Read(masterFd, buf)
+			n, err := ptmx.Read(buf)
 			if n > 0 {
 				encoded := base64.StdEncoding.EncodeToString(buf[:n])
 				t.app.Event.Emit("terminal:"+sessionName, encoded)
 			}
 			if err != nil {
-				log.Printf("[terminal] read error for %s: %v", sessionName, err)
+				if err != io.EOF {
+					log.Printf("[terminal] read error for %s: %v", sessionName, err)
+				}
 				t.mu.Lock()
 				delete(t.terminals, sessionName)
 				t.mu.Unlock()
-				syscall.Close(masterFd)
+				ptmx.Close()
 				t.app.Event.Emit("terminal:exit:"+sessionName, "")
 				return
 			}
@@ -116,7 +114,7 @@ func (t *TerminalService) WriteInput(sessionName, data string) error {
 		return fmt.Errorf("base64 decode: %w", err)
 	}
 
-	_, err = syscall.Write(tp.masterFd, decoded)
+	_, err = tp.ptmx.Write(decoded)
 	return err
 }
 
@@ -127,7 +125,7 @@ func (t *TerminalService) ResizeTerminal(sessionName string, cols, rows int) err
 	if !ok {
 		return fmt.Errorf("not attached to session %q", sessionName)
 	}
-	return setWinsize(tp.masterFd, cols, rows)
+	return setWinsize(tp.ptmx, cols, rows)
 }
 
 func (t *TerminalService) DetachSession(sessionName string) error {
@@ -138,54 +136,14 @@ func (t *TerminalService) DetachSession(sessionName string) error {
 	if !ok {
 		return nil
 	}
-	syscall.Close(tp.masterFd)
+	tp.ptmx.Close()
 	syscall.Kill(tp.pid, syscall.SIGTERM)
 	return nil
 }
 
-// openpty creates a pseudo-terminal pair using posix_openpt.
-func openpty(master, slave *int) error {
-	m, err := syscall.Open("/dev/ptmx", syscall.O_RDWR|syscall.O_NOCTTY, 0)
-	if err != nil {
-		return err
-	}
-
-	var n uint32
-	if err := ioctl(m, syscall.TIOCPTYGRANT, uintptr(unsafe.Pointer(&n))); err != nil {
-		syscall.Close(m)
-		return err
-	}
-	if err := ioctl(m, syscall.TIOCPTYUNLK, uintptr(unsafe.Pointer(&n))); err != nil {
-		syscall.Close(m)
-		return err
-	}
-
-	sname := ""
-	var sn [256]byte
-	if err := ioctl(m, syscall.TIOCPTYGNAME, uintptr(unsafe.Pointer(&sn))); err != nil {
-		syscall.Close(m)
-		return err
-	}
-	for i, c := range sn {
-		if c == 0 {
-			sname = string(sn[:i])
-			break
-		}
-	}
-
-	s, err := syscall.Open(sname, syscall.O_RDWR|syscall.O_NOCTTY, 0)
-	if err != nil {
-		syscall.Close(m)
-		return err
-	}
-
-	*master = m
-	*slave = s
-	return nil
-}
-
-func ioctl(fd int, req uintptr, arg uintptr) error {
-	_, _, e := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), req, arg)
+func setWinsize(f *os.File, cols, rows int) error {
+	ws := winsize{Rows: uint16(rows), Cols: uint16(cols)}
+	_, _, e := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TIOCSWINSZ, uintptr(unsafe.Pointer(&ws)))
 	if e != 0 {
 		return e
 	}
@@ -197,9 +155,4 @@ type winsize struct {
 	Cols uint16
 	X    uint16
 	Y    uint16
-}
-
-func setWinsize(fd int, cols, rows int) error {
-	ws := winsize{Rows: uint16(rows), Cols: uint16(cols)}
-	return ioctl(fd, syscall.TIOCSWINSZ, uintptr(unsafe.Pointer(&ws)))
 }

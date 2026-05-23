@@ -60,7 +60,7 @@ func (c *Client) Start(ctx context.Context) error {
 
 	// Start the dedicated tmux server (only for owned servers).
 	if c.owned {
-		startCmd := exec.CommandContext(ctx, "tmux", "-S", c.socketPath, "start-server")
+		startCmd := exec.CommandContext(ctx, "tmux", c.tmuxArgs("start-server")...)
 		if err := startCmd.Run(); err != nil {
 			// Server may already be running, try to continue.
 		}
@@ -109,11 +109,19 @@ func (c *Client) Stop() error {
 
 	// Only kill owned servers; shared servers are left running.
 	if c.owned {
-		exec.Command("tmux", "-S", c.socketPath, "kill-server").Run()
+		exec.Command("tmux", c.tmuxArgs("kill-server")...).Run()
 		os.Remove(c.socketPath)
 	}
 
 	return nil
+}
+
+// tmuxArgs builds the argument list with optional -S socket flag.
+func (c *Client) tmuxArgs(extra ...string) []string {
+	if c.socketPath != "" {
+		return append([]string{"-S", c.socketPath}, extra...)
+	}
+	return extra
 }
 
 // Exec runs a tmux command and returns its output.
@@ -129,7 +137,7 @@ func (c *Client) Exec(cmd string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	args := []string{"-S", c.socketPath}
+	args := c.tmuxArgs()
 	args = append(args, parseTmuxArgs(cmd)...)
 	out, err := exec.CommandContext(ctx, "tmux", args...).CombinedOutput()
 	if err != nil {
@@ -225,7 +233,7 @@ func (c *Client) pollSessions(ctx context.Context, knownSessions map[string]stri
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	args := []string{"-S", c.socketPath, "list-sessions", "-F", "#{session_id}:#{session_name}:#{session_attached}"}
+	args := c.tmuxArgs("list-sessions", "-F", "#{session_id}:#{session_name}:#{session_attached}")
 	out, err := exec.CommandContext(ctx, "tmux", args...).Output()
 	if err != nil {
 		// No sessions or server not running.

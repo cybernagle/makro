@@ -10,8 +10,9 @@
   },
   "dependencies": {
     "@wailsio/runtime": "latest",
+    "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
-    "@xterm/addon-fit": "^0.10.0"
+    "marked": "^18.0.4"
   },
   "devDependencies": {
     "vite": "^8.0.5"

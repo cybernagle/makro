@@ -48,7 +48,13 @@ func (k *KeepAlive) Add(sessionName string) error {
 	}
 	k.mu.Unlock()
 
-	cmd := exec.Command("tmux", "-S", k.socket, "attach-session", "-t", sessionName)
+	var args []string
+	if k.socket != "" {
+		args = []string{"-S", k.socket, "attach-session", "-t", sessionName}
+	} else {
+		args = []string{"attach-session", "-t", sessionName}
+	}
+	cmd := exec.Command("tmux", args...)
 	// Clear TMUX* env vars to avoid nested-tmux detection causing immediate exit.
 	var env []string
 	for _, e := range os.Environ() {

@@ -13,6 +13,15 @@ html, body { height: 100%; overflow: hidden; }
 .chat-msg { margin-bottom: 8px; padding: 4px 0; font-size: 13px; line-height: 1.4; word-break: break-word; }
 .chat-msg.user { color: #569cd6; }
 .chat-msg.assistant { color: #b5cea8; }
+.chat-msg.assistant p { margin: 2px 0; }
+.chat-msg.assistant code { background: #333; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+.chat-msg.assistant pre { background: #1a1a1a; padding: 6px 8px; border-radius: 4px; overflow-x: auto; margin: 4px 0; }
+.chat-msg.assistant pre code { background: none; padding: 0; }
+.chat-msg.assistant ul, .chat-msg.assistant ol { padding-left: 20px; margin: 4px 0; }
+.chat-msg.assistant li { margin: 2px 0; }
+.chat-msg.assistant strong { color: #fff; }
+.chat-msg.assistant h1, .chat-msg.assistant h2, .chat-msg.assistant h3 { color: #fff; margin: 6px 0 2px; }
+.chat-msg.assistant blockquote { border-left: 3px solid #555; padding-left: 8px; margin: 4px 0; color: #999; }
 .chat-msg.system { color: #ce9178; font-style: italic; }
 #chat-input-area { display: flex; padding: 6px 8px; gap: 6px; border-top: 1px solid #333; height: 38px; flex-shrink: 0; }
 #chat-input { flex: 1; border: 1px solid #444; border-radius: 4px; background: #1e1e1e; color: #e0e0e0; padding: 0 8px; font-family: inherit; font-size: 13px; outline: none; }
