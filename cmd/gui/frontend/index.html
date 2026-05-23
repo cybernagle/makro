@@ -8,30 +8,34 @@
 </head>
 <body>
 <div id="app">
-    <div id="chat-panel">
-        <div id="chat-header">
-            <button id="btn-toggle" title="Toggle panel">&#x25C0;</button>
-            <span>FingerSaver</span>
-        </div>
-        <div id="chat-messages"></div>
-        <div id="chat-input-area">
-            <input id="chat-input" type="text" placeholder="Message... (@session to switch)" autocomplete="off"/>
-            <button id="btn-send">Send</button>
-        </div>
+    <div id="toolbar">
+        <div id="tabs"></div>
+        <div id="toolbar-spacer"></div>
+        <button id="btn-toggle" title="Toggle chat panel (⌘B)"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="2" y="2" width="3.5" height="10" rx="1" fill="currentColor" opacity="0.9"/><rect x="8.5" y="2" width="3.5" height="10" rx="1" fill="currentColor" opacity="0.35"/></svg></button>
+        <button id="btn-new" title="New Session">+</button>
+        <button id="btn-refresh" title="Refresh">&#x21bb;</button>
     </div>
-    <div id="terminal-panel">
-        <div id="tab-bar">
-            <div id="tabs"></div>
-            <button id="btn-new" title="New Session">+</button>
-            <button id="btn-refresh" title="Refresh">&#x21bb;</button>
+    <div id="content">
+        <div id="chat-panel">
+            <div id="chat-messages"></div>
+            <div id="chat-input-area">
+                <input id="chat-input" type="text" placeholder="Message (@session &monitor)" autocomplete="off"/>
+                <button id="btn-send">Send</button>
+            </div>
         </div>
-        <div id="terminals"></div>
-        <div id="empty-state">
-            <p>No sessions</p>
-            <button id="btn-start">Start tmux server or create a session</button>
+        <div id="terminal-panel">
+            <div id="terminals"></div>
+            <div id="empty-state">
+                <p>No terminal sessions</p>
+                <button id="btn-start">Create a session</button>
+                <div class="hint-keys">
+                    <span class="hint-key">@session</span>
+                    <span class="hint-key">&session</span>
+                    <span class="hint-key">+</span>
+                </div>
+            </div>
         </div>
     </div>
 </div>
 <script type="module" src="/src/main.js"></script>
 </body>
-</html>

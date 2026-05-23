@@ -30,7 +30,7 @@ const btnStart     = document.getElementById("btn-start");
 
 btnToggle.addEventListener("click", () => {
     chatPanel.classList.toggle("collapsed");
-    btnToggle.textContent = chatPanel.classList.contains("collapsed") ? "▶" : "◀";
+    btnToggle.classList.toggle("collapsed", chatPanel.classList.contains("collapsed"));
     setTimeout(refitAll, 250);
 });
 
@@ -99,7 +99,7 @@ function addTab(name) {
     const wrapper = document.createElement("div");
     wrapper.className = "terminal-wrapper"; wrapper.id = "term-" + name;
     terminalsEl.appendChild(wrapper);
-    const term = new Terminal({ fontSize: 13, fontFamily: '"SF Mono", Menlo, Monaco, monospace', theme: { background: "#1e1e1e", foreground: "#e0e0e0", cursor: "#e0e0e0", selectionBackground: "#264f78" }, cursorBlink: true, scrollback: 10000 });
+    const term = new Terminal({ fontSize: 13, fontFamily: '"SF Mono", "JetBrains Mono", Menlo, Monaco, monospace', theme: { background: "#0c0c0e", foreground: "#e4e4e7", cursor: "#34d399", cursorAccent: "#0c0c0e", selectionBackground: "rgba(52,211,153,0.2)", selectionForeground: "#e4e4e7", black: "#3f3f46", red: "#f87171", green: "#34d399", yellow: "#fbbf24", blue: "#60a5fa", magenta: "#c084fc", cyan: "#22d3ee", white: "#e4e4e7", brightBlack: "#71717a", brightRed: "#fca5a5", brightGreen: "#6ee7b7", brightYellow: "#fde68a", brightBlue: "#93c5fd", brightMagenta: "#d8b4fe", brightCyan: "#67e8f9", brightWhite: "#ffffff" }, cursorBlink: true, scrollback: 10000 });
     const fitAddon = new FitAddon(); term.loadAddon(fitAddon); term.open(wrapper); fitAddon.fit();
     term.onData((data) => WriteInput(name, toBase64(data)).catch(console.error));
     term.onResize(({cols, rows}) => ResizeTerminal(name, cols, rows).catch(console.error));
@@ -127,7 +127,7 @@ function switchToTab(name) {
     const entry = terminals.get(name); if (entry) entry.term.focus();
 }
 
-function closeTab(name) { DetachSession(name).catch(console.error); removeTab(name); }
+function closeTab(name) { DetachSession(name).catch(() => {}); KillSession(name).catch(() => {}); removeTab(name); }
 
 function removeTab(name) {
     const entry = terminals.get(name); if (entry) { if (entry.ro) entry.ro.disconnect(); entry.term.dispose(); entry.wrapper.remove(); terminals.delete(name); }
@@ -153,7 +153,18 @@ function forceResize(name) {
 }
 
 async function refreshSessions() {
-    try { const sessions = await ListSessions(); for (const s of (sessions || [])) { if (!terminals.has(s.name)) await attachTo(s.name); } } catch (err) { addChatMessage("system", "Refresh error: " + err); }
+    try {
+        const sessions = await ListSessions();
+        const alive = new Set((sessions || []).map(s => s.name));
+        // Close tabs for sessions that no longer exist.
+        for (const name of Array.from(terminals.keys())) {
+            if (!alive.has(name)) removeTab(name);
+        }
+        // Attach new sessions.
+        for (const s of (sessions || [])) {
+            if (!terminals.has(s.name)) await attachTo(s.name);
+        }
+    } catch (err) { addChatMessage("system", "Refresh error: " + err); }
 }
 
 function refitAll() { for (const [name] of terminals) forceResize(name); }
@@ -170,3 +181,62 @@ LoadChatHistory().then(msgs => {
 
 addChatMessage("system", "FingerSaver GUI ready.");
 refreshSessions();
+
+// Periodic session sync — close tabs for killed sessions, attach new ones.
+setInterval(refreshSessions, 5000);
+
+// ── @ and & autocomplete hints ──
+
+const hintEl = document.createElement("div");
+hintEl.id = "input-hint";
+chatPanel.appendChild(hintEl);
+
+chatInput.addEventListener("input", () => {
+    const val = chatInput.value;
+    const trimmed = val.trimStart();
+    if (trimmed.startsWith("@")) {
+        const partial = trimmed.slice(1).split(/\s/)[0].toLowerCase();
+        const names = Array.from(terminals.keys()).filter(n => n.toLowerCase().startsWith(partial));
+        const list = names.length ? names.map(n => "<div class='hint-item' data-name='" + n + "'>@" + n + "</div>").join("") : "<div class='hint-empty'>No matching sessions</div>";
+        hintEl.innerHTML = "<div class='hint-title'>Switch to session</div>" + list;
+        hintEl.classList.add("visible");
+        hintEl.querySelectorAll(".hint-item").forEach(el => {
+            el.addEventListener("click", () => {
+                const name = el.dataset.name;
+                const rest = trimmed.includes(" ") ? trimmed.slice(trimmed.indexOf(" ")) : " ";
+                chatInput.value = "@" + name + rest;
+                hintEl.classList.remove("visible");
+                chatInput.focus();
+            });
+        });
+    } else if (trimmed === "&") {
+        const names = Array.from(terminals.keys());
+        const list = names.map(n => "<div class='hint-item' data-name='" + n + "'>&" + n + "</div>").join("");
+        hintEl.innerHTML = "<div class='hint-title'>Monitor session until idle</div>" + list;
+        hintEl.classList.add("visible");
+        hintEl.querySelectorAll(".hint-item").forEach(el => {
+            el.addEventListener("click", () => {
+                chatInput.value = "&" + el.dataset.name;
+                hintEl.classList.remove("visible");
+                chatInput.focus();
+            });
+        });
+    } else {
+        hintEl.classList.remove("visible");
+    }
+});
+
+chatInput.addEventListener("blur", () => setTimeout(() => hintEl.classList.remove("visible"), 150));
+chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hintEl.classList.remove("visible");
+});
+
+// Cmd+B toggle chat panel
+document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "b") {
+        e.preventDefault();
+        chatPanel.classList.toggle("collapsed");
+        btnToggle.classList.toggle("collapsed", chatPanel.classList.contains("collapsed"));
+        setTimeout(refitAll, 250);
+    }
+});
