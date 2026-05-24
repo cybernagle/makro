@@ -18,12 +18,12 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/naglezhang/fingersaver/internal/agent"
-	"github.com/naglezhang/fingersaver/internal/agent/tools"
-	"github.com/naglezhang/fingersaver/internal/config"
-	"github.com/naglezhang/fingersaver/internal/llm"
-	"github.com/naglezhang/fingersaver/internal/tmux"
-	"github.com/naglezhang/fingersaver/internal/tui"
+	"github.com/naglezhang/makro/internal/agent"
+	"github.com/naglezhang/makro/internal/agent/tools"
+	"github.com/naglezhang/makro/internal/config"
+	"github.com/naglezhang/makro/internal/llm"
+	"github.com/naglezhang/makro/internal/tmux"
+	"github.com/naglezhang/makro/internal/tui"
 )
 
 var (
@@ -37,7 +37,7 @@ var (
 const version = "0.4.18"
 
 func main() {
-	// Handle subcommands that communicate with a running FingerSaver instance.
+	// Handle subcommands that communicate with a running Makro instance.
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
 		case "notify":
@@ -63,7 +63,7 @@ func main() {
 		return
 	}
 	if *showVersion {
-		fmt.Printf("fingersaver %s\n", version)
+		fmt.Printf("makro %s\n", version)
 		return
 	}
 
@@ -98,7 +98,7 @@ func main() {
 			defer logFile.Close()
 		}
 	}
-	log.Printf("[main] fingersaver %s starting provider=%s model=%s chat=%v", version, cfg.LLMProvider, cfg.LLMModel, *chatMode)
+	log.Printf("[main] makro %s starting provider=%s model=%s chat=%v", version, cfg.LLMProvider, cfg.LLMModel, *chatMode)
 
 	if *showConfig {
 		fmt.Print(cfg.Summary())
@@ -142,8 +142,8 @@ func main() {
 	orch.SetCommandRegistry(agent.NewCommandRegistry(tc))
 	homeDir, _ := os.UserHomeDir()
 	skillDirs := []string{
-		filepath.Join(homeDir, ".fingersaver", "skills"),
-		filepath.Join(".", ".fingersaver", "skills"),
+		filepath.Join(homeDir, ".makro", "skills"),
+		filepath.Join(".", ".makro", "skills"),
 	}
 	if err := orch.LoadSkills(skillDirs); err != nil {
 		log.Printf("[main] warning: could not load skills: %v", err)
@@ -238,7 +238,7 @@ func main() {
 }
 
 // resolveTmuxServer determines which tmux server to use based on config.
-// Returns the socket path and whether FingerSaver owns the server.
+// Returns the socket path and whether Makro owns the server.
 func resolveTmuxServer(cfg *config.Config, chatMode bool) (string, bool, error) {
 	switch cfg.TmuxMode {
 	case config.TmuxModeDedicated:
@@ -303,7 +303,7 @@ func isTerminal(f *os.File) bool {
 
 // runChat runs a simple CLI chat loop for e2e testing without TUI.
 func runChat(ctx context.Context, orch *agent.Orchestrator) {
-	fmt.Println("FingerSaver CLI Chat (type 'exit' to quit)")
+	fmt.Println("Makro CLI Chat (type 'exit' to quit)")
 	fmt.Println()
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024) // 1MB buffer for long prompts
@@ -347,11 +347,11 @@ func runChat(ctx context.Context, orch *agent.Orchestrator) {
 }
 
 func helpText() string {
-	return `fingersaver - AI coding agent orchestrator
+	return `makro - AI coding agent orchestrator
 
 USAGE
-  fingersaver [flags]
-  fingersaver <subcommand> [args]
+  makro [flags]
+  makro <subcommand> [args]
 
 FLAGS
   -h, --help      Show help
@@ -362,22 +362,22 @@ FLAGS
 
 SUBCOMMANDS
   notify <session> <status>  Send agent stop notification (used by Claude Code Stop hook)
-  chat <role> <content>      Send message to FingerSaver chat window
+  chat <role> <content>      Send message to Makro chat window
   send <session> <message>   Send message to a tmux session
 
 CONFIGURATION
-  FingerSaver reads from Claude settings (claude_dir/settings.json):
+  Makro reads from Claude settings (claude_dir/settings.json):
   - ANTHROPIC_AUTH_TOKEN  -> API key
   - ANTHROPIC_BASE_URL   -> Custom API endpoint
   - ANTHROPIC_DEFAULT_SONNET_MODEL -> Model name
 
   Override with environment variables:
-  - FINGERSAVER_LLM_PROVIDER  (anthropic|openai)
-  - FINGERSAVER_LLM_API_KEY
-  - FINGERSAVER_LLM_MODEL
+  - MAKRO_LLM_PROVIDER  (anthropic|openai)
+  - MAKRO_LLM_API_KEY
+  - MAKRO_LLM_MODEL
   - ANTHROPIC_API_KEY / OPENAI_API_KEY
 
-  Or create ~/.fingersaver/config.json for persistent settings.
+  Or create ~/.makro/config.json for persistent settings.
 
 KEY BINDINGS
   Ctrl+O        Switch between Chat and Viewer panes
@@ -397,7 +397,7 @@ CHAT COMMANDS
 `
 }
 
-// runSocketCommand sends a typed message to the FingerSaver Unix socket.
+// runSocketCommand sends a typed message to the Makro Unix socket.
 // Subcommands: notify (agent_stop), chat (chat), send (session).
 func runSocketCommand(msgType string) {
 	payload := buildSocketPayload(msgType)
@@ -409,14 +409,14 @@ func runSocketCommand(msgType string) {
 	if err != nil {
 		home = "/tmp"
 	}
-	sockPath := filepath.Join(home, ".fingersaver", "hooks.sock")
+	sockPath := filepath.Join(home, ".makro", "hooks.sock")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", sockPath)
 	if err != nil {
-		// Silently exit — FingerSaver may not be running.
+		// Silently exit — Makro may not be running.
 		os.Exit(0)
 	}
 	defer conn.Close()
@@ -454,7 +454,7 @@ func buildSocketPayload(msgType string) map[string]string {
 	switch msgType {
 	case "agent_stop":
 		if len(os.Args) < 4 {
-			fmt.Fprintf(os.Stderr, "Usage: fingersaver notify <session> <status>\n")
+			fmt.Fprintf(os.Stderr, "Usage: makro notify <session> <status>\n")
 			return nil
 		}
 		return map[string]string{
@@ -464,7 +464,7 @@ func buildSocketPayload(msgType string) map[string]string {
 		}
 	case "chat":
 		if len(os.Args) < 4 {
-			fmt.Fprintf(os.Stderr, "Usage: fingersaver chat <role> <content>\n")
+			fmt.Fprintf(os.Stderr, "Usage: makro chat <role> <content>\n")
 			return nil
 		}
 		return map[string]string{
@@ -474,7 +474,7 @@ func buildSocketPayload(msgType string) map[string]string {
 		}
 	case "session":
 		if len(os.Args) < 4 {
-			fmt.Fprintf(os.Stderr, "Usage: fingersaver send <session> <message>\n")
+			fmt.Fprintf(os.Stderr, "Usage: makro send <session> <message>\n")
 			return nil
 		}
 		return map[string]string{
@@ -484,7 +484,7 @@ func buildSocketPayload(msgType string) map[string]string {
 		}
 	case "permission":
 		if len(os.Args) < 3 {
-			fmt.Fprintf(os.Stderr, "Usage: fingersaver permission <session>\n")
+			fmt.Fprintf(os.Stderr, "Usage: makro permission <session>\n")
 			return nil
 		}
 		return map[string]string{

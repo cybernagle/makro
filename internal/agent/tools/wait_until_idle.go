@@ -7,11 +7,9 @@ import (
 	"log"
 	"strings"
 	"time"
-
-	"github.com/naglezhang/fingersaver/internal/util"
 )
 
-func NewWaitUntilIdleTool(tc TmuxClient, notifier Notifier, assessor Assessor) Tool {
+func NewWaitUntilIdleTool(tc TmuxClient, notifier Notifier) Tool {
 	return Tool{
 		Name:        "wait_until_idle",
 		Description: "Wait for a session agent to finish, then return its output. Combines waiting and reading — no need to call read_session_output afterwards.",
@@ -30,7 +28,7 @@ func NewWaitUntilIdleTool(tc TmuxClient, notifier Notifier, assessor Assessor) T
 				timeoutSec = int(v)
 			}
 
-			result, waited := pollUntilIdle(ctx, tc, sessionName, timeoutSec, notifier, assessor)
+			result, waited := pollUntilIdle(ctx, tc, sessionName, timeoutSec, notifier)
 
 			out, err := ReadStructuredOutput(tc, sessionName)
 			data := map[string]any{
@@ -52,12 +50,6 @@ func NewWaitUntilIdleTool(tc TmuxClient, notifier Notifier, assessor Assessor) T
 					data["files_modified"] = out.FilesModified
 				}
 			}
-			if v, ok := result["pending_prompt"]; ok {
-				data["pending_prompt"] = v
-			}
-			if v, ok := result["pending_type"]; ok {
-				data["pending_type"] = v
-			}
 			if v, ok := result["reason"]; ok {
 				data["reason"] = v
 			}
@@ -67,13 +59,13 @@ func NewWaitUntilIdleTool(tc TmuxClient, notifier Notifier, assessor Assessor) T
 	}
 }
 
-func pollUntilIdle(ctx context.Context, tc TmuxClient, sessionName string, timeoutSec int, notifier Notifier, assessor Assessor) (map[string]string, time.Duration) {
+func pollUntilIdle(ctx context.Context, tc TmuxClient, sessionName string, timeoutSec int, notifier Notifier) (map[string]string, time.Duration) {
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
 	start := time.Now()
+
 	var notifyCh <-chan struct{}
 	var cancelNotify func()
 	var lastSeen uint64
-	var lastOutput string
 
 	if notifier != nil {
 		lastSeen = notifier.Snapshot(sessionName)
@@ -90,87 +82,33 @@ func pollUntilIdle(ctx context.Context, tc TmuxClient, sessionName string, timeo
 			return map[string]string{"status": "error"}, time.Since(start)
 		}
 
-		if time.Now().After(deadline) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			return map[string]string{"status": "timeout"}, time.Since(start)
 		}
 
-		alive := checkAgentAlive(tc, sessionName)
-		if !alive.Alive {
-			log.Printf("[wait_until_idle] agent not alive: %s", alive.Reason)
-			return map[string]string{"status": "error", "reason": "agent process not running: " + alive.Reason}, time.Since(start)
-		}
-
-		// Use LLM to classify agent state if assessor is available.
-		out, err := ReadStructuredOutput(tc, sessionName)
-		if err == nil {
-			// Extend deadline while agent is actively producing output.
-			trimmed := strings.TrimSpace(out.RawOutput)
-			if lastOutput != "" && trimmed != lastOutput {
-				remaining := time.Until(deadline)
-				if remaining < time.Duration(timeoutSec)*time.Second {
-					deadline = time.Now().Add(time.Duration(timeoutSec) * time.Second)
-				}
-			}
-			lastOutput = trimmed
-
-			if assessor != nil {
-				assessCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-				output := util.ReadProgressive(out.RawOutput, 2000)
-				assessment, assessErr := assessor.Assess(assessCtx, sessionName, output)
-				cancel()
-				if assessErr != nil {
-					log.Printf("[wait_until_idle] assess error for %s: %v", sessionName, assessErr)
-				} else if assessment != nil {
-					switch assessment.Decision {
-					case "approve", "reject", "unknown":
-						return map[string]string{
-							"status":         "blocked",
-							"pending_prompt": assessment.Reason,
-							"pending_type":   assessment.Decision,
-						}, time.Since(start)
-					}
-					// "idle" means agent is still working — continue polling.
-				}
-			}
-		}
-
-		wait := 10 * time.Second
-		if remaining := time.Until(deadline); remaining < wait {
-			wait = remaining
-		}
-		if wait <= 0 {
-			return map[string]string{"status": "timeout"}, time.Since(start)
+		// Check process alive every 30s as a fallback for crashed agents.
+		checkInterval := 30 * time.Second
+		if remaining < checkInterval {
+			checkInterval = remaining
 		}
 
 		select {
 		case <-ctx.Done():
 			return map[string]string{"status": "error"}, time.Since(start)
-		case <-time.After(wait):
-			// Continue polling.
+		case <-time.After(checkInterval):
+			if alive := checkAgentAlive(tc, sessionName); !alive.Alive {
+				log.Printf("[wait_until_idle] agent process dead for %s: %s", sessionName, alive.Reason)
+				return map[string]string{"status": "agent_dead", "reason": alive.Reason}, time.Since(start)
+			}
 		case <-notifyCh:
-			// Stop or permission hook fired — trust it.
 			log.Printf("[wait_until_idle] hook notification received for %s", sessionName)
 			time.Sleep(500 * time.Millisecond)
 
-			// Re-check with LLM before declaring idle.
-			out, err = ReadStructuredOutput(tc, sessionName)
-			if err == nil && assessor != nil {
-				assessCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-				output := util.ReadProgressive(out.RawOutput, 2000)
-				assessment, assessErr := assessor.Assess(assessCtx, sessionName, output)
-				cancel()
-				if assessErr == nil && assessment != nil {
-					switch assessment.Decision {
-					case "approve", "reject", "unknown":
-						return map[string]string{
-							"status":         "blocked",
-							"pending_prompt": assessment.Reason,
-							"pending_type":   assessment.Decision,
-						}, time.Since(start)
-					}
-				}
+			// Determine action from hook type.
+			if notifier != nil && notifier.LastStatus(sessionName) == "permission" {
+				return map[string]string{"status": "blocked"}, time.Since(start)
 			}
-
 			return map[string]string{"status": "idle"}, time.Since(start)
 		}
 	}

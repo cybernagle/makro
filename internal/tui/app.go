@@ -10,9 +10,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
-	"github.com/naglezhang/fingersaver/internal/agent"
-	"github.com/naglezhang/fingersaver/internal/agent/tools"
-	"github.com/naglezhang/fingersaver/internal/tmux"
+	"github.com/naglezhang/makro/internal/agent"
+	"github.com/naglezhang/makro/internal/agent/tools"
+	"github.com/naglezhang/makro/internal/tmux"
 )
 
 type Focus int
@@ -373,7 +373,7 @@ func trimToLines(s string, maxLines int) string {
 
 func (a *AppModel) processOrchestratorInput(text string) {
 	log.Printf("[tui] processOrchestratorInput start textLen=%d", len(text))
-	source := "fingersaver"
+	source := "makro"
 	if name, _ := agent.ExtractMention(text); name != "" {
 		source = name
 	}
@@ -514,21 +514,6 @@ func (a *AppModel) recalcSizes() {
 		a.viewer.SetSize(viewerW, a.height)
 		a.viewer.SetCompact(false)
 	}
-	a.resizeAllSessions()
-}
-
-// resizeAllSessions resizes all tmux sessions to match the viewer pane size.
-func (a *AppModel) resizeAllSessions() {
-	if a.tmuxClient == nil {
-		return
-	}
-	tw, th := a.viewer.Size()
-	if tw <= 0 || th <= 0 {
-		return
-	}
-	for _, s := range a.tmuxClient.State().Sessions() {
-		_, _ = a.tmuxClient.Exec(tmux.ResizeWindowCmd(s.Name, tw, th))
-	}
 }
 
 func (a *AppModel) SetChatHistory(h *ChatHistory) {
@@ -556,7 +541,7 @@ func (a *AppModel) startMonitor(sessionName string) {
 
 		for {
 			// Wait until idle or blocked.
-			tool := tools.NewWaitUntilIdleTool(a.tmuxClient, a.notifier, a.assessor)
+			tool := tools.NewWaitUntilIdleTool(a.tmuxClient, a.notifier)
 			result, err := tool.Execute(ctx, map[string]any{
 				"session_name":    sessionName,
 				"timeout_seconds": float64(300),
@@ -567,9 +552,7 @@ func (a *AppModel) startMonitor(sessionName string) {
 			}
 
 			var parsed struct {
-				Status        string `json:"status"`
-				PendingType   string `json:"pending_type"`
-				PendingPrompt string `json:"pending_prompt"`
+				Status string `json:"status"`
 			}
 			if jsonErr := json.Unmarshal([]byte(result), &parsed); jsonErr != nil {
 				a.notify(fmt.Sprintf("Monitor @%s done: %s", sessionName, result))
@@ -583,14 +566,32 @@ func (a *AppModel) startMonitor(sessionName string) {
 			case "timeout":
 				a.notify(fmt.Sprintf("Monitor @%s timeout — still running", sessionName))
 				return
+			case "agent_dead":
+				a.notify(fmt.Sprintf("Monitor @%s: agent process exited — please check manually", sessionName))
+				return
 			case "error":
 				a.notify(fmt.Sprintf("Monitor @%s error", sessionName))
 				return
 			case "blocked":
-				// Auto-assess and respond.
-				approve := parsed.PendingType == "approve"
+				// Assess the permission prompt and auto-respond.
+				assessTool := tools.NewAssessConfirmationTool(a.tmuxClient, a.assessor)
+				assessResult, assessErr := assessTool.Execute(ctx, map[string]any{
+					"session_name": sessionName,
+				})
+				approve := false
+				promptReason := ""
+				if assessErr == nil {
+					var ar struct {
+						Decision string `json:"decision"`
+						Reason   string `json:"reason"`
+					}
+					if json.Unmarshal([]byte(assessResult), &ar) == nil {
+						approve = ar.Decision == "approve"
+						promptReason = ar.Reason
+					}
+				}
 				a.notify(fmt.Sprintf("Monitor @%s: auto-%s (%s)", sessionName,
-					map[bool]string{true: "approving", false: "rejecting"}[approve], parsed.PendingPrompt))
+					map[bool]string{true: "approving", false: "rejecting"}[approve], promptReason))
 				resp := tools.NewRespondConfirmationTool(a.tmuxClient)
 				respResult, respErr := resp.Execute(ctx, map[string]any{
 					"session_name": sessionName,
@@ -601,7 +602,6 @@ func (a *AppModel) startMonitor(sessionName string) {
 					return
 				}
 				_ = respResult
-				// Loop back to wait_until_idle.
 				continue
 			default:
 				a.notify(fmt.Sprintf("Monitor @%s done: %s", sessionName, result))

@@ -17,6 +17,7 @@ type mockNotifier struct {
 	cancelled int
 	nextID    uint64
 	seq       uint64
+	status    string
 	waiters   map[uint64]chan struct{}
 }
 
@@ -51,10 +52,17 @@ func (n *mockNotifier) WaitAfter(session string, after uint64) (<-chan struct{},
 	}
 }
 
-func (n *mockNotifier) Notify() {
+func (n *mockNotifier) LastStatus(session string) string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.status
+}
+
+func (n *mockNotifier) Notify(status string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.seq++
+	n.status = status
 	for id, ch := range n.waiters {
 		close(ch)
 		delete(n.waiters, id)
@@ -64,17 +72,17 @@ func (n *mockNotifier) Notify() {
 func TestWaitUntilIdleTool(t *testing.T) {
 	mc := newMockTmuxClient()
 	sessionName := "worker"
-	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", sessionName)] = "⏺ Done. All tests pass.\n❯ "
+	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", sessionName)] = "Done. All tests pass.\n❯ "
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", sessionName)] = "claude"
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", sessionName)] = "12345"
 	notifier := newMockNotifier()
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		notifier.Notify()
+		notifier.Notify("done")
 	}()
 
-	tool := NewWaitUntilIdleTool(mc, notifier, nil)
+	tool := NewWaitUntilIdleTool(mc, notifier)
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"session_name":    sessionName,
 		"timeout_seconds": float64(10),
@@ -84,14 +92,35 @@ func TestWaitUntilIdleTool(t *testing.T) {
 	assert.Contains(t, result, `"waited_seconds"`)
 }
 
+func TestWaitUntilIdlePermissionHook(t *testing.T) {
+	mc := newMockTmuxClient()
+	sessionName := "worker"
+	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", sessionName)] = "Do you want to proceed?\n❯ 1. Yes\n❯ 2. No"
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", sessionName)] = "claude"
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", sessionName)] = "12345"
+	notifier := newMockNotifier()
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		notifier.Notify("permission")
+	}()
+
+	tool := NewWaitUntilIdleTool(mc, notifier)
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"session_name":    sessionName,
+		"timeout_seconds": float64(5),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result, `"blocked"`)
+}
+
 func TestWaitUntilIdleTimeout(t *testing.T) {
 	mc := newMockTmuxClient()
-	// Busy output — never idle.
-	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "busy")] = "⏺ Running… go test ./..."
+	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "busy")] = "Running..."
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "busy")] = "claude"
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", "busy")] = "12345"
 
-	tool := NewWaitUntilIdleTool(mc, nil, nil)
+	tool := NewWaitUntilIdleTool(mc, nil)
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"session_name":    "busy",
 		"timeout_seconds": float64(1),
@@ -102,14 +131,12 @@ func TestWaitUntilIdleTimeout(t *testing.T) {
 
 func TestWaitUntilIdleCancel(t *testing.T) {
 	mc := newMockTmuxClient()
-	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "stuck")] = "⏺ Running… go test ./..."
-	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "stuck")] = "claude"
-	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", "stuck")] = "12345"
+	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "stuck")] = "Running..."
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	tool := NewWaitUntilIdleTool(mc, nil, nil)
+	tool := NewWaitUntilIdleTool(mc, nil)
 	result, err := tool.Execute(ctx, map[string]any{
 		"session_name":    "stuck",
 		"timeout_seconds": float64(10),
@@ -120,38 +147,37 @@ func TestWaitUntilIdleCancel(t *testing.T) {
 
 func TestWaitUntilIdleMissingSession(t *testing.T) {
 	mc := newMockTmuxClient()
-	tool := NewWaitUntilIdleTool(mc, nil, nil)
+	tool := NewWaitUntilIdleTool(mc, nil)
 	_, err := tool.Execute(context.Background(), map[string]any{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "session_name is required")
 }
 
-func TestWaitUntilIdleAgentDead(t *testing.T) {
+func TestWaitUntilIdleNoHookFiresAgentDead(t *testing.T) {
 	mc := newMockTmuxClient()
-	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "dead")] = "⏺ some output"
-	// No agent process — only shell running.
+	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "dead")] = "some output"
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "dead")] = "zsh"
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", "dead")] = "99999"
 
-	tool := NewWaitUntilIdleTool(mc, nil, nil)
+	// No hook fires and agent process dead -> returns agent_dead.
+	tool := NewWaitUntilIdleTool(mc, nil)
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"session_name":    "dead",
 		"timeout_seconds": float64(5),
 	})
 	require.NoError(t, err)
-	assert.Contains(t, result, `"error"`)
-	assert.Contains(t, result, "agent process not running")
+	assert.Contains(t, result, `"agent_dead"`)
 }
 
 func TestWaitUntilIdleClearsStaleNotificationBeforeWaiting(t *testing.T) {
 	mc := newMockTmuxClient()
-	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "busy")] = "⏺ Running… go test ./..."
+	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", "busy")] = "Running..."
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "busy")] = "claude"
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", "busy")] = "12345"
 	notifier := newMockNotifier()
 	notifier.seq = 1
 
-	tool := NewWaitUntilIdleTool(mc, notifier, nil)
+	tool := NewWaitUntilIdleTool(mc, notifier)
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"session_name":    "busy",
 		"timeout_seconds": float64(1),
@@ -169,7 +195,7 @@ func TestWaitUntilIdleReturnsIdleOnNotification(t *testing.T) {
 	mc := newMockTmuxClient()
 	sessionName := "worker"
 	cmd := fmt.Sprintf("capture-pane -t %s -p -S -", sessionName)
-	mc.results[cmd] = "⏺ Running… go test ./..."
+	mc.results[cmd] = "Running..."
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", sessionName)] = "claude"
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", sessionName)] = "12345"
 	notifier := newMockNotifier()
@@ -177,12 +203,12 @@ func TestWaitUntilIdleReturnsIdleOnNotification(t *testing.T) {
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		mc.mu.Lock()
-		mc.results[cmd] = "⏺ Done. All tests pass.\n❯ "
+		mc.results[cmd] = "Done. All tests pass.\n❯ "
 		mc.mu.Unlock()
-		notifier.Notify()
+		notifier.Notify("done")
 	}()
 
-	tool := NewWaitUntilIdleTool(mc, notifier, nil)
+	tool := NewWaitUntilIdleTool(mc, notifier)
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"session_name":    sessionName,
 		"timeout_seconds": float64(5),

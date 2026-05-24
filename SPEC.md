@@ -1,8 +1,8 @@
-# Spec: FingerSaver
+# Spec: Makro
 
 ## Objective
 
-FingerSaver is a Go terminal application that lets a single developer manage multiple AI coding agents (Claude Code, GitHub Copilot) simultaneously through a split-pane TUI. The left pane is a hybrid chat/command interface powered by an LLM orchestrator; the right pane renders the active tmux session via `tmux -CC` control mode. Both panes accept input simultaneously — the user can chat in the left pane while directly typing into tmux sessions in the right pane.
+Makro is a Go terminal application that lets a single developer manage multiple AI coding agents (Claude Code, GitHub Copilot) simultaneously through a split-pane TUI. The left pane is a hybrid chat/command interface powered by an LLM orchestrator; the right pane renders the active tmux session via `tmux -CC` control mode. Both panes accept input simultaneously — the user can chat in the left pane while directly typing into tmux sessions in the right pane.
 
 **Target user:** A developer who runs multiple coding agents in parallel and wants a unified control surface to switch between them, relay messages, and monitor progress — without managing multiple terminal windows manually.
 
@@ -33,7 +33,7 @@ No CGO. Pure Go for portability. tmux must be installed on the host.
 
 ```bash
 # Build
-go build -o fingersaver .
+go build -o makro .
 
 # Run
 go run .
@@ -60,7 +60,7 @@ go fmt ./...
 ## Project Structure
 
 ```
-fingersaver/
+makro/
 ├── main.go                       # Entry point, dependency wiring
 ├── internal/
 │   ├── tui/                      # Bubbletea TUI layer
@@ -89,7 +89,7 @@ fingersaver/
 │   │   ├── claude.go             # Claude Code: launch config, hook wiring, output parsing
 │   │   └── copilot.go            # Copilot: launch config, hook wiring, output parsing
 │   └── config/
-│       └── config.go             # Config loading: .claude dir for LLM model, ~/.fingersaver/ paths
+│       └── config.go             # Config loading: .claude dir for LLM model, ~/.makro/ paths
 ├── go.mod
 ├── go.sum
 ├── CLAUDE.md
@@ -272,7 +272,7 @@ func TestParseNotification(t *testing.T) {
 ### v1 MVP — Core + Both Adapters
 
 - [x] **Split-pane TUI renders** — Left chat pane + right tmux viewer, both accepting input simultaneously
-- [x] **Dedicated tmux server** — FingerSaver starts its own tmux server at `~/.fingersaver/tmux.sock`, isolated from user's existing tmux
+- [x] **Dedicated tmux server** — Makro starts its own tmux server at `~/.makro/tmux.sock`, isolated from user's existing tmux
 - [x] **tmux integration works** — App connects to its dedicated tmux server via CLI commands, parses notifications, displays output in right pane
 - [x] **Session lifecycle** — Create, list, switch, kill tmux sessions via chat commands
 - [x] **Slash commands work** — `/create <name>`, `/switch <name>`, `/kill <name>`, `/list` all functional
@@ -283,14 +283,14 @@ func TestParseNotification(t *testing.T) {
 - [x] **Hook integration** — Stop hooks fire when an agent task completes; permission hooks route approval requests to chat pane
 - [x] **Cross-agent messaging** — Orchestrator can read output from one agent and relay context to another
 - [x] **All tests pass** — `go test ./...` green (151 tests), coverage targets met per package
-- [x] **Chat persistence** — Chat history written to `~/.fingersaver/chat.md`, survives restarts
+- [x] **Chat persistence** — Chat history written to `~/.makro/chat.md`, survives restarts
 - [x] **Clean exit** — Ctrl+C cleanly shuts down dedicated tmux server and restores terminal state
 - [ ] **End-to-end integration tests** — Full lifecycle test with real tmux (build tag: `//go:build integration`)
 
 ## Resolved Questions
 
 1. **tmux session naming** — User-named. Each session maps to a coding agent, so names like `auth-service`, `frontend`, `copilot-review` are expected.
-2. **Chat persistence** — Chat history stored in `~/.fingersaver/chat.md` (Markdown format). Survives app restarts.
+2. **Chat persistence** — Chat history stored in `~/.makro/chat.md` (Markdown format). Survives app restarts.
 3. **LLM model selection** — Reads model config from `.claude` directory (reuses existing Claude Code configuration). Falls back to sensible defaults if not found.
-4. **Dedicated tmux server** — Yes. FingerSaver spawns its own tmux server via `tmux -S ~/.fingersaver/tmux.sock` so it never interferes with the user's existing tmux sessions.
-5. **tmux scrollback** — Handled by tmux itself. FingerSaver just renders what tmux sends; no additional buffering needed.
+4. **Dedicated tmux server** — Yes. Makro spawns its own tmux server via `tmux -S ~/.makro/tmux.sock` so it never interferes with the user's existing tmux sessions.
+5. **tmux scrollback** — Handled by tmux itself. Makro just renders what tmux sends; no additional buffering needed.

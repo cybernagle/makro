@@ -1,4 +1,4 @@
-# FingerSaver Task Breakdown
+# Makro Task Breakdown
 
 Task dependency order. Each task is completable in a single focused session.
 
@@ -8,11 +8,11 @@ Task dependency order. Each task is completable in a single focused session.
 
 - [x] T01: Initialize Go module and project skeleton
   - Acceptance: `go build` succeeds, `go test ./...` passes (no tests yet), `go vet ./...` clean
-  - Verify: `go build -o fingersaver . && ./fingersaver` runs without error
+  - Verify: `go build -o makro . && ./makro` runs without error
   - Files: `go.mod`, `main.go`
 
 - [x] T02: Config loading with `.claude` fallback
-  - Acceptance: `Load()` reads `~/.fingersaver/` config, falls back to `.claude` dir for model, creates data dirs, env var overrides work
+  - Acceptance: `Load()` reads `~/.makro/` config, falls back to `.claude` dir for model, creates data dirs, env var overrides work
   - Verify: `go test ./internal/config/... -v` passes
   - Files: `internal/config/config.go`, `internal/config/config_test.go`
 
@@ -150,7 +150,7 @@ Task dependency order. Each task is completable in a single focused session.
 
 ## Phase 7: Integration and Polish
 
-- [x] T25: Chat persistence — `~/.fingersaver/chat.md`
+- [x] T25: Chat persistence — `~/.makro/chat.md`
   - Acceptance: Messages written to Markdown file on every new message. Loaded on startup. Roundtrip preserves content and timestamps.
   - Verify: `go test ./internal/tui/... -run TestChatHistory -v`
   - Files: `internal/tui/chat.go`, `internal/tui/chat_test.go` (add persistence tests)

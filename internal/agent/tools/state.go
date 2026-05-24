@@ -16,7 +16,7 @@ func stateFilePath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get home dir: %w", err)
 	}
-	return filepath.Join(home, ".fingersaver", "state.json"), nil
+	return filepath.Join(home, ".makro", "state.json"), nil
 }
 
 func readStateMap(path string) (map[string]string, error) {
@@ -48,7 +48,7 @@ func writeStateMap(path string, m map[string]string) error {
 func NewSetStateTool() Tool {
 	return Tool{
 		Name:        "set_state",
-		Description: "Persist a key-value pair to ~/.fingersaver/state.json",
+		Description: "Persist a key-value pair to ~/.makro/state.json",
 		Parameters: []Param{
 			{Name: "key", Type: "string", Description: "State key", Required: true},
 			{Name: "value", Type: "string", Description: "State value", Required: true},
@@ -86,7 +86,7 @@ func NewSetStateTool() Tool {
 func NewGetStateTool() Tool {
 	return Tool{
 		Name:        "get_state",
-		Description: "Read a key from ~/.fingersaver/state.json",
+		Description: "Read a key from ~/.makro/state.json",
 		Parameters: []Param{
 			{Name: "key", Type: "string", Description: "State key", Required: true},
 		},

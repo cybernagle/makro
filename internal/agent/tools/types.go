@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 
-	"github.com/naglezhang/fingersaver/internal/tmux"
+	"github.com/naglezhang/makro/internal/tmux"
 )
 
 // Tool represents a callable tool that the orchestrator can invoke.
@@ -49,4 +49,6 @@ type Notifier interface {
 	// WaitAfter returns a channel that closes after the session receives a
 	// notification newer than after. The cancel function removes the waiter.
 	WaitAfter(session string, after uint64) (<-chan struct{}, func())
+	// LastStatus returns the most recent notification type for a session.
+	LastStatus(session string) string
 }

@@ -1,4 +1,4 @@
-# FingerSaver
+# Makro
 
 AI coding agent orchestrator with a split-pane terminal UI. Manage multiple coding agents (Claude Code, GitHub Copilot, etc.) in parallel through a unified interface.
 
@@ -17,29 +17,29 @@ AI coding agent orchestrator with a split-pane terminal UI. Manage multiple codi
 ## Install
 
 ```bash
-brew install cybernagle/tap/fingersaver
+brew install cybernagle/tap/makro
 ```
 
 Or build from source:
 
 ```bash
-go build -o fingersaver .
+go build -o makro .
 ```
 
 ## Quick Start
 
 ```bash
 # Start with default settings
-fingersaver
+makro
 
 # Use phone (vertical) layout
-fingersaver --phone
+makro --phone
 
 # CLI chat mode (no TUI, for testing)
-fingersaver --chat
+makro --chat
 
 # Show current config
-fingersaver --config
+makro --config
 ```
 
 ## Key Bindings
@@ -72,7 +72,7 @@ fingersaver --config
 
 ## Configuration
 
-FingerSaver reads configuration from `~/.fingersaver/config.json`:
+Makro reads configuration from `~/.makro/config.json`:
 
 ```json
 {
@@ -86,22 +86,22 @@ FingerSaver reads configuration from `~/.fingersaver/config.json`:
 
 | Variable | Description |
 |----------|-------------|
-| `FINGERSAVER_LLM_PROVIDER` | `anthropic` or `openai` |
-| `FINGERSAVER_LLM_API_KEY` | API key (overrides config) |
-| `FINGERSAVER_LLM_MODEL` | Model name |
+| `MAKRO_LLM_PROVIDER` | `anthropic` or `openai` |
+| `MAKRO_LLM_API_KEY` | API key (overrides config) |
+| `MAKRO_LLM_MODEL` | Model name |
 | `ANTHROPIC_API_KEY` | Anthropic API key (fallback) |
 | `OPENAI_API_KEY` | OpenAI API key (fallback) |
-| `FINGERSAVER_TMUX_MODE` | `auto`, `dedicated`, or `shared` |
+| `MAKRO_TMUX_MODE` | `auto`, `dedicated`, or `shared` |
 
 ### Claude Settings Integration
 
-FingerSaver automatically reads `.claude/settings.json` for API key and model preferences.
+Makro automatically reads `.claude/settings.json` for API key and model preferences.
 
 ## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│                  FingerSaver (main)                  │
+│                  Makro (main)                  │
 │              Bubbletea TUI - split pane              │
 ├─────────────────────┬────────────────────────────────┤
 │   Chat Pane (40%)   │    Tmux Viewer (60%)           │
@@ -115,7 +115,7 @@ FingerSaver automatically reads `.claude/settings.json` for API key and model pr
 │  - Cross-agent message relay                         │
 ├──────────────────────────────────────────────────────┤
 │                  Tmux Manager                         │
-│  - Dedicated tmux server on ~/.fingersaver/tmux.sock │
+│  - Dedicated tmux server on ~/.makro/tmux.sock │
 │  - Session/window/pane state mirror                  │
 │  - 500ms polling loop                                │
 ├──────────────────────────────────────────────────────┤
@@ -129,7 +129,7 @@ FingerSaver automatically reads `.claude/settings.json` for API key and model pr
 
 ```bash
 # Build
-go build -o fingersaver .
+go build -o makro .
 
 # Test
 go test ./...

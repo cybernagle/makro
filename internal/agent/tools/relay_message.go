@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/naglezhang/fingersaver/internal/util"
+	"github.com/naglezhang/makro/internal/util"
 )
 
 func NewRelayMessageTool(tc TmuxClient) Tool {

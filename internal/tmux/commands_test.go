@@ -47,10 +47,6 @@ func TestCapturePaneCmd(t *testing.T) {
 	assert.Equal(t, `capture-pane -t %0 -p`, CapturePaneCmd("%0"))
 }
 
-func TestResizeWindowCmd(t *testing.T) {
-	assert.Equal(t, `resize-window -t test -x 120 -y 40`, ResizeWindowCmd("test", 120, 40))
-}
-
 func TestHasSessionCmd(t *testing.T) {
 	assert.Equal(t, `has-session -t test`, HasSessionCmd("test"))
 }

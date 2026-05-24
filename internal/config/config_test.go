@@ -15,15 +15,15 @@ func TestDefaultConfig(t *testing.T) {
 	assert.NotEmpty(t, cfg.DataDir)
 	assert.NotEmpty(t, cfg.TmuxSocketPath)
 	assert.NotEmpty(t, cfg.ChatHistoryPath)
-	assert.Contains(t, cfg.DataDir, ".fingersaver")
+	assert.Contains(t, cfg.DataDir, ".makro")
 	assert.Equal(t, 40, cfg.MaxContextMessages)
 }
 
 func TestLoadCreatesDataDir(t *testing.T) {
 	tmpDir := t.TempDir()
-	dataDir := filepath.Join(tmpDir, ".fingersaver")
+	dataDir := filepath.Join(tmpDir, ".makro")
 
-	t.Setenv("FINGERSAVER_DATA_DIR", dataDir)
+	t.Setenv("MAKRO_DATA_DIR", dataDir)
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 
 	cfg, err := Load()
@@ -37,14 +37,14 @@ func TestLoadCreatesDataDir(t *testing.T) {
 
 func TestLoadFromConfigFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	dataDir := filepath.Join(tmpDir, ".fingersaver")
+	dataDir := filepath.Join(tmpDir, ".makro")
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
 
 	configData := `{"llm_provider": "openai", "llm_model": "gpt-4o"}`
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.json"), []byte(configData), 0o644))
 
-	t.Setenv("FINGERSAVER_DATA_DIR", dataDir)
-	t.Setenv("FINGERSAVER_LLM_PROVIDER", "openai")
+	t.Setenv("MAKRO_DATA_DIR", dataDir)
+	t.Setenv("MAKRO_LLM_PROVIDER", "openai")
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	cfg, err := Load()
@@ -56,9 +56,9 @@ func TestLoadFromConfigFile(t *testing.T) {
 func TestEnvOverrides(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	t.Setenv("FINGERSAVER_DATA_DIR", tmpDir)
-	t.Setenv("FINGERSAVER_LLM_PROVIDER", "openai")
-	t.Setenv("FINGERSAVER_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("MAKRO_DATA_DIR", tmpDir)
+	t.Setenv("MAKRO_LLM_PROVIDER", "openai")
+	t.Setenv("MAKRO_LLM_MODEL", "gpt-4o-mini")
 	t.Setenv("OPENAI_API_KEY", "sk-test-1234")
 
 	cfg, err := Load()
@@ -78,12 +78,12 @@ func TestClaudeDirFallback(t *testing.T) {
 	settingsData := `{"model": "claude-sonnet-4-6"}`
 	require.NoError(t, os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(settingsData), 0o644))
 
-	dataDir := filepath.Join(tmpDir, ".fingersaver")
+	dataDir := filepath.Join(tmpDir, ".makro")
 	configData := `{"claude_dir": "` + claudeDir + `"}`
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.json"), []byte(configData), 0o644))
 
-	t.Setenv("FINGERSAVER_DATA_DIR", dataDir)
+	t.Setenv("MAKRO_DATA_DIR", dataDir)
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
 
 	cfg, err := Load()
@@ -93,8 +93,8 @@ func TestClaudeDirFallback(t *testing.T) {
 
 func TestInvalidProvider(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("FINGERSAVER_DATA_DIR", tmpDir)
-	t.Setenv("FINGERSAVER_LLM_PROVIDER", "invalid")
+	t.Setenv("MAKRO_DATA_DIR", tmpDir)
+	t.Setenv("MAKRO_LLM_PROVIDER", "invalid")
 
 	_, err := Load()
 	assert.Error(t, err)
@@ -109,10 +109,10 @@ func TestKeyHint(t *testing.T) {
 
 func TestMaxContextMessagesEnv(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("FINGERSAVER_DATA_DIR", tmpDir)
-	t.Setenv("FINGERSAVER_LLM_PROVIDER", "openai")
+	t.Setenv("MAKRO_DATA_DIR", tmpDir)
+	t.Setenv("MAKRO_LLM_PROVIDER", "openai")
 	t.Setenv("OPENAI_API_KEY", "test-key")
-	t.Setenv("FINGERSAVER_MAX_CONTEXT_MESSAGES", "20")
+	t.Setenv("MAKRO_MAX_CONTEXT_MESSAGES", "20")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -121,10 +121,10 @@ func TestMaxContextMessagesEnv(t *testing.T) {
 
 func TestMaxContextMessagesZeroDisablesLimit(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("FINGERSAVER_DATA_DIR", tmpDir)
-	t.Setenv("FINGERSAVER_LLM_PROVIDER", "openai")
+	t.Setenv("MAKRO_DATA_DIR", tmpDir)
+	t.Setenv("MAKRO_LLM_PROVIDER", "openai")
 	t.Setenv("OPENAI_API_KEY", "test-key")
-	t.Setenv("FINGERSAVER_MAX_CONTEXT_MESSAGES", "0")
+	t.Setenv("MAKRO_MAX_CONTEXT_MESSAGES", "0")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -133,13 +133,13 @@ func TestMaxContextMessagesZeroDisablesLimit(t *testing.T) {
 
 func TestMaxContextMessagesFromConfigFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	dataDir := filepath.Join(tmpDir, ".fingersaver")
+	dataDir := filepath.Join(tmpDir, ".makro")
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
 
 	configData := `{"llm_provider": "openai", "max_context_messages": 60}`
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.json"), []byte(configData), 0o644))
 
-	t.Setenv("FINGERSAVER_DATA_DIR", dataDir)
+	t.Setenv("MAKRO_DATA_DIR", dataDir)
 	t.Setenv("OPENAI_API_KEY", "test-key")
 
 	cfg, err := Load()

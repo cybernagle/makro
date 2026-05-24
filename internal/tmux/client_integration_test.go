@@ -67,7 +67,7 @@ func TestIntegrationSendKeysAndCapture(t *testing.T) {
 		return client.State().FindSession("echo-test") != nil
 	})
 
-	require.NoError(t, client.SendCommand(SendKeysCmd("echo-test", "echo 'hello fingersaver'")))
+	require.NoError(t, client.SendCommand(SendKeysCmd("echo-test", "echo 'hello makro'")))
 	require.NoError(t, client.SendCommand(SendEnterCmd("echo-test")))
 
 	// Give the command time to execute.
@@ -76,7 +76,7 @@ func TestIntegrationSendKeysAndCapture(t *testing.T) {
 	// Capture pane output directly from the session.
 	output, err := client.Exec(CapturePaneCmd("echo-test"))
 	require.NoError(t, err)
-	assert.Contains(t, output, "hello fingersaver")
+	assert.Contains(t, output, "hello makro")
 }
 
 func TestIntegrationMultipleSessions(t *testing.T) {

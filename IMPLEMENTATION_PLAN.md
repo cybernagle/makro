@@ -1,4 +1,4 @@
-# FingerSaver Implementation Plan
+# Makro Implementation Plan
 
 ## Dependency Graph
 
@@ -48,14 +48,14 @@ Phase 1: config ████████
 ### Steps
 
 1. **Initialize Go module**
-   - `go mod init github.com/naglezhang/fingersaver`
+   - `go mod init github.com/naglezhang/makro`
    - Go 1.26.1+ in go.mod
    - Run `go mod tidy` after adding deps in later steps
 
 2. **Create `internal/config/config.go`**
    - `Config` struct: `LLMProvider`, `LLMModel`, `LLMAPIKey`, `TmuxSocketPath`, `DataDir`, `ChatHistoryPath`, `ClaudeDir`
-   - `Load() (*Config, error)`: XDG-compatible, reads `.claude` dir for model preferences, creates `~/.fingersaver/` tree
-   - Env var overrides: `FINGERSAVER_LLM_PROVIDER`, `FINGERSAVER_LLM_MODEL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`
+   - `Load() (*Config, error)`: XDG-compatible, reads `.claude` dir for model preferences, creates `~/.makro/` tree
+   - Env var overrides: `MAKRO_LLM_PROVIDER`, `MAKRO_LLM_MODEL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`
 
 3. **Create `internal/config/config_test.go`**
    - Table-driven tests for `Load()` with temp directories
@@ -257,7 +257,7 @@ Phase 1: config ████████
 
 ### Steps
 
-1. **Chat persistence** — `~/.fingersaver/chat.md` in Markdown format, append on every message, load on startup
+1. **Chat persistence** — `~/.makro/chat.md` in Markdown format, append on every message, load on startup
 
 2. **Hook wiring** — Claude stop hook → `HookAgentStop` → orchestrator relays; permission hook → chat pane approval prompt
 

@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/naglezhang/fingersaver/internal/tmux"
+	"github.com/naglezhang/makro/internal/tmux"
 )
 
 const defaultPageSize = 500

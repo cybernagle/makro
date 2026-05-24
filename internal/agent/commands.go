@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/naglezhang/fingersaver/internal/agent/skills"
-	"github.com/naglezhang/fingersaver/internal/agent/tools"
+	"github.com/naglezhang/makro/internal/agent/skills"
+	"github.com/naglezhang/makro/internal/agent/tools"
 )
 
 type SlashCommand struct {

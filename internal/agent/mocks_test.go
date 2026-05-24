@@ -3,7 +3,7 @@ package agent
 import (
 	"sync"
 
-	"github.com/naglezhang/fingersaver/internal/tmux"
+	"github.com/naglezhang/makro/internal/tmux"
 )
 
 // mockTmuxClient implements tools.TmuxClient for agent package tests.

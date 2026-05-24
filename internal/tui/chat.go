@@ -11,8 +11,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
 	lipgloss "charm.land/lipgloss/v2"
-	"github.com/naglezhang/fingersaver/internal/agent"
-	"github.com/naglezhang/fingersaver/internal/util"
+	"github.com/naglezhang/makro/internal/agent"
+	"github.com/naglezhang/makro/internal/util"
 )
 
 type ChatMessage struct {
@@ -477,7 +477,7 @@ func (c ChatModel) View() tea.View {
 		case "assistant":
 			source := m.Source
 			if source == "" {
-				source = "fingersaver"
+				source = "makro"
 			}
 			if m.Streaming {
 				contentLines = append(contentLines, sourceLabelStyle.Render(source))
@@ -681,7 +681,7 @@ func (c *ChatModel) AppendMessage(role, content string) {
 }
 
 func (c *ChatModel) appendMessage(role, content string) {
-	c.messages = append(c.messages, ChatMessage{Role: role, Content: content, Source: "fingersaver"})
+	c.messages = append(c.messages, ChatMessage{Role: role, Content: content, Source: "makro"})
 	if c.history != nil {
 		c.history.Append(role, content)
 	}

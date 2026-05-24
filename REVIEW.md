@@ -4,7 +4,7 @@
 | # | File | Issue | Status | Commit |
 |---|------|-------|--------|--------|
 | 1 | internal/agent/hook_config.go:43 | Preserve unknown Claude settings fields instead of rewriting settings.json through a partial struct. | ✅ fixed | 0a9a554 |
-| 2 | internal/agent/hook_config.go:63 | Use a real executable path for the stop hook instead of relying on bare fingersaver being on PATH. | ✅ fixed | 0a9a554 |
+| 2 | internal/agent/hook_config.go:63 | Use a real executable path for the stop hook instead of relying on bare makro being on PATH. | ✅ fixed | 0a9a554 |
 | 3 | internal/agent/hook_config.go:73 | Preserve the existing settings.json file mode instead of forcing 0644. | ✅ fixed | 0a9a554 |
 | 4 | internal/agent/tools/agent_alive.go:170 | Limit wrapped-agent detection to executable chains so command arguments do not create false positives. | ✅ fixed | 0a9a554 |
 | 5 | internal/agent/tools/wait_until_idle.go:59 | Remove session-wide waiter resets so concurrent waits on the same session do not interfere with each other. | ✅ fixed | 0a9a554 |
@@ -23,16 +23,16 @@
 |----|------|-------|-------|--------|--------|
 | H-1 | `internal/tmux/keepalive.go` | 72–80 | **PTY fd 泄漏。** `cmd.Wait()` goroutine 从 map 删除条目时未调用 `entry.ptmx.Close()`。进程自然退出后 ptmx 成为孤儿 fd，只能等 GC finalizer 回收。session 频繁创建销毁时可能耗尽文件描述符。修复：在 `delete(k.clients, sessionName)` 后加 `entry.ptmx.Close()`。 | ✅ fixed | uncommitted |
 | H-2 | `internal/tmux/keepalive.go` | 57–68 | **PTY master 未 drain，attach 进程会因缓冲区满被踢掉。** `pty.Start` 后没有任何 goroutine 读取 `ptmx`。tmux 连接新客户端时会立即渲染全屏内容（写入 PTY slave），内核 PTY 缓冲区（Linux 4KB / macOS 64KB）写满后 tmux 会断开该客户端 → keepalive 退出 → `attached=0` → 500ms 重建循环。这是修复 TMUX env filter 之后**仍可能存在的根本原因**。修复：`pty.Start` 后立即 `go io.Copy(io.Discard, ptmx)`。 | ✅ fixed | uncommitted |
-| H-3 | `internal/tui/chat.go` | 244, 338 | **队列消息被追加两次到历史记录（内存 + 持久化文件）。** 消息入队时 line 244 调用一次 `appendMessage("user", text)`；出队时 line 338 又调用一次。聊天窗口里同一条消息出现两次，`~/.fingersaver/chat.md` 也重复写入。`TestChatModelQueueSubmitWhileWorking` 只覆盖入队路径，出队路径未测试。修复：删除 line 338 的 `c.appendMessage("user", text)`。 | ✅ fixed | uncommitted |
+| H-3 | `internal/tui/chat.go` | 244, 338 | **队列消息被追加两次到历史记录（内存 + 持久化文件）。** 消息入队时 line 244 调用一次 `appendMessage("user", text)`；出队时 line 338 又调用一次。聊天窗口里同一条消息出现两次，`~/.makro/chat.md` 也重复写入。`TestChatModelQueueSubmitWhileWorking` 只覆盖入队路径，出队路径未测试。修复：删除 line 338 的 `c.appendMessage("user", text)`。 | ✅ fixed | uncommitted |
 
 ## 🟠 Medium (4 issues)
 
 | ID | File | Lines | Issue | Status | Commit |
 |----|------|-------|-------|--------|--------|
 | M-1 | `internal/agent/orchestrator.go` | 471–477 | **`isRetryableError` 裸子串匹配产生误判。** `strings.Contains(lower, "500")` 会匹配 `"timeout after 500ms"`、`"EOF after 5029 bytes"` 等非 LLM 错误，导致错误触发 3 分钟重试。修复：改为带 HTTP 语境的模式如 `"status 429"`、`"status 500"`。 | ✅ fixed | uncommitted |
-| M-2 | `main.go` | 447–458 | **`chat`/`send` 子命令多单词 content 静默截断。** `os.Args[3]` 只取第三个参数，`fingersaver chat assistant hello world` 只发送 `"hello"`，无任何报错。修复：`strings.Join(os.Args[3:], " ")`。 | ✅ fixed | uncommitted |
+| M-2 | `main.go` | 447–458 | **`chat`/`send` 子命令多单词 content 静默截断。** `os.Args[3]` 只取第三个参数，`makro chat assistant hello world` 只发送 `"hello"`，无任何报错。修复：`strings.Join(os.Args[3:], " ")`。 | ✅ fixed | uncommitted |
 | M-3 | `main.go` | 184–192 | **`os.Executable()` 失败后仍用空路径调用 `EnsureStopHook`。** `executablePath` 为 `""` 时会向 Claude 配置写入一个空路径的 stop hook，导致所有后续 Claude Code session 的 stop hook 失效。修复：改为 `if executablePath, err := os.Executable(); err != nil { log } else if err := agent.EnsureStopHook(...) { log }`。 | ✅ fixed | uncommitted |
-| M-4 | `main.go` | 152–157 | **`--chat` 模式下 `onChat`/`onSession` 回调未注册，`fingersaver chat` 和 `fingersaver send` 静默无效。** `--chat` 分支只调用 `notifier.Start(ctx)`，回调注册代码（lines 169–174）只在 TUI 路径执行。修复：在 chat 模式下也注册回调，或将回调注册提前到分支之前。 | ✅ fixed | uncommitted |
+| M-4 | `main.go` | 152–157 | **`--chat` 模式下 `onChat`/`onSession` 回调未注册，`makro chat` 和 `makro send` 静默无效。** `--chat` 分支只调用 `notifier.Start(ctx)`，回调注册代码（lines 169–174）只在 TUI 路径执行。修复：在 chat 模式下也注册回调，或将回调注册提前到分支之前。 | ✅ fixed | uncommitted |
 
 ## 🟡 Low (4 issues)
 
@@ -94,7 +94,7 @@ All 15 issues verified as correctly fixed, with one caveat on N-3 (see R2-N-2 be
 |----|------|-------|-------|--------|--------|
 | R2-N-1 | `internal/tui/chat.go` · `internal/agent/orchestrator.go` | 255–258 · imports | **`gofmt` violations.** `gofmt -l .` reports two files unformatted: (1) `chat.go` lines 255–258 — the L-2 queue-cap block has inconsistent tab depth (body uses extra tab, closing `}` and the following `c.pendingQueue` line are over-indented); (2) `orchestrator.go` — `"math/rand"` appears before `"log"` in the import block, which `gofmt` reorders. Fix: run `gofmt -w internal/tui/chat.go internal/agent/orchestrator.go`. | ✅ fixed | uncommitted |
 | R2-N-2 | `internal/tui/app.go` · `internal/tui/chat.go` | 216–218 · 160–161 | **N-3 fix incomplete — `ExternalChatMsg` handler in `ChatModel.Update` is dead code.** `app.go:216–218` still catches `ExternalChatMsg` and calls `a.chat.AppendMessage(...)` directly before routing to `ChatModel.Update`. The new `case ExternalChatMsg:` added to `chat.go:160–161` is therefore unreachable. Functionally equivalent, but creates a confusing split: two handlers for the same message type, only one of which runs. Fix: remove the explicit `case ExternalChatMsg:` from `app.go` so it falls through to the `default:` branch, which already routes to `ChatModel.Update`. | ❌ not fixed | — |
-| R2-N-3 | `internal/agent/hook_config.go` | 147–149 | **`buildStopHookCommand` empty-path fallback is now dead code.** Before M-3, `EnsureStopHook` could be called with `executablePath == ""`, so the `if command == "" { command = "fingersaver" }` guard was load-bearing. After M-3, the call-site is guarded by `else if`, so an empty path can never reach this function. The dead branch is harmless but misleads future readers into thinking empty-path calls are still possible. Fix: remove the fallback and document that `executablePath` must be non-empty. | ✅ fixed | uncommitted |
+| R2-N-3 | `internal/agent/hook_config.go` | 147–149 | **`buildStopHookCommand` empty-path fallback is now dead code.** Before M-3, `EnsureStopHook` could be called with `executablePath == ""`, so the `if command == "" { command = "makro" }` guard was load-bearing. After M-3, the call-site is guarded by `else if`, so an empty path can never reach this function. The dead branch is harmless but misleads future readers into thinking empty-path calls are still possible. Fix: remove the fallback and document that `executablePath` must be non-empty. | ✅ fixed | uncommitted |
 
 ---
 

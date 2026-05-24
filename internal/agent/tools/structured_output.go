@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/naglezhang/fingersaver/internal/tmux"
-	"github.com/naglezhang/fingersaver/internal/util"
+	"github.com/naglezhang/makro/internal/tmux"
+	"github.com/naglezhang/makro/internal/util"
 )
 
 type StructuredOutput struct {
@@ -66,25 +66,7 @@ func detectStatus(lines []string) string {
 		}
 	}
 
-	// Check if the last non-empty line is a shell prompt (❯).
-	// This is the strongest idle signal — overrides all ⏺ markers above it.
-	lastNonEmpty := ""
-	for i := len(recent) - 1; i >= 0; i-- {
-		trimmed := strings.TrimSpace(recent[i])
-		if trimmed == "" {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "--") && strings.Contains(trimmed, "--") {
-			continue
-		}
-		lastNonEmpty = trimmed
-		break
-	}
-	if strings.HasPrefix(lastNonEmpty, "❯") {
-		return "completed"
-	}
-
-	// No shell prompt — check for activity indicators.
+	// Check for activity indicators.
 	hasRunning := false
 	hasThinking := false
 	for _, line := range recent {
@@ -107,7 +89,7 @@ func detectStatus(lines []string) string {
 			return "error"
 		}
 	}
-	return "completed"
+	return "working"
 }
 
 func extractLastUserMessage(lines []string) string {

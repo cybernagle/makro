@@ -16,7 +16,7 @@ type OrchestratorEventMsg struct {
 	Type     string // "text", "tool_call", "tool_result", "done"
 	Content  string
 	ToolName string
-	Source   string // session name or "fingersaver"
+	Source   string // session name or "makro"
 }
 
 // SessionListMsg carries the current session list.
