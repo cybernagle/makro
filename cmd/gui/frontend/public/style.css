@@ -377,7 +377,7 @@ html, body { height: 100%; overflow: hidden; }
 
 /* ── xterm ── */
 
-.xterm { height: 100%; padding: 4px; }
+.xterm { height: 100%; }
 .xterm-viewport::-webkit-scrollbar { width: 6px; }
 .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
 .xterm-viewport::-webkit-scrollbar-thumb { background: var(--bg-active); border-radius: 3px; }

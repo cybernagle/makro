@@ -5,6 +5,7 @@ import {SendMessage, LoadChatHistory, StartMonitor} from "../bindings/github.com
 
 import {Terminal} from "@xterm/xterm";
 import {FitAddon} from "@xterm/addon-fit";
+import {WebglAddon} from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import {marked} from "marked";
 
@@ -142,12 +143,20 @@ function addTab(name) {
     wrapper.className = "terminal-wrapper"; wrapper.id = "term-" + name;
     terminalsEl.appendChild(wrapper);
     const term = new Terminal({ fontSize: 13, fontFamily: '"SF Mono", "JetBrains Mono", Menlo, Monaco, monospace', theme: { background: "#0c0c0e", foreground: "#e4e4e7", cursor: "#34d399", cursorAccent: "#0c0c0e", selectionBackground: "rgba(52,211,153,0.2)", selectionForeground: "#e4e4e7", black: "#3f3f46", red: "#f87171", green: "#34d399", yellow: "#fbbf24", blue: "#60a5fa", magenta: "#c084fc", cyan: "#22d3ee", white: "#e4e4e7", brightBlack: "#71717a", brightRed: "#fca5a5", brightGreen: "#6ee7b7", brightYellow: "#fde68a", brightBlue: "#93c5fd", brightMagenta: "#d8b4fe", brightCyan: "#67e8f9", brightWhite: "#ffffff" }, cursorBlink: true, scrollback: 10000 });
-    const fitAddon = new FitAddon(); term.loadAddon(fitAddon); term.open(wrapper); fitAddon.fit();
+    const fitAddon = new FitAddon(); term.loadAddon(fitAddon);
+    try { term.loadAddon(new WebglAddon()); } catch (e) { console.warn("WebGL not available, using canvas renderer"); }
+    term.open(wrapper);
     term.onData((data) => WriteInput(name, toBase64(data)).catch(console.error));
-    term.onResize(({cols, rows}) => ResizeTerminal(name, cols, rows).catch(console.error));
-    Events.On("terminal:" + name, (ev) => { const bytes = atob(ev.data); const arr = new Uint8Array(bytes.length); for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i); term.write(arr); });
-    Events.On("terminal:exit:" + name, () => { term.write("\r\n\x1b[33m[disconnected]\x1b[0m"); removeTab(name); });
-    const ro = new ResizeObserver(() => { try { fitAddon.fit(); } catch (e) {} });
+    term.onResize(({cols, rows}) => {
+        if (cols === term._lastCols && rows === term._lastRows) return;
+        console.log(`[resize] ${name}: ${term._lastCols}x${term._lastRows} → ${cols}x${rows} visible=${wrapper.offsetParent !== null}`);
+        term._lastCols = cols; term._lastRows = rows;
+        ResizeTerminal(name, cols, rows).catch(console.error);
+    });
+    const ro = new ResizeObserver(() => {
+        if (wrapper.offsetWidth === 0 || wrapper.offsetHeight === 0) return;
+        try { fitAddon.fit(); } catch (e) {}
+    });
     ro.observe(wrapper);
     terminals.set(name, {term, fitAddon, wrapper, ro});
     const tab = document.createElement("div");
@@ -158,15 +167,36 @@ function addTab(name) {
     tab.querySelector(".close").addEventListener("click", (e) => { e.stopPropagation(); closeTab(name); });
     tabsEl.appendChild(tab);
     emptyState.classList.add("hidden"); terminalsEl.classList.add("visible");
-    switchToTab(name); term.focus();
+    // Make wrapper visible first, then fit and register data listeners.
+    switchToTab(name);
+    fitAddon.fit();
+    console.log(`[addTab] ${name}: after fit cols=${term.cols} rows=${term.rows} _lastCols=${term._lastCols} _lastRows=${term._lastRows} wrapper=${wrapper.offsetWidth}x${wrapper.offsetHeight}`);
+    let _dataSeq = 0;
+    Events.On("terminal:" + name, (ev) => {
+        _dataSeq++;
+        const bytes = atob(ev.data);
+        const arr = new Uint8Array(bytes.length);
+        for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+        if (_dataSeq <= 3 || _dataSeq % 50 === 0) {
+            console.log(`[data] ${name} #${_dataSeq}: ${arr.length}B cols=${term.cols} visible=${wrapper.offsetParent !== null}`);
+        }
+        term.write(arr);
+    });
+    Events.On("terminal:exit:" + name, () => { term.write("\r\n\x1b[33m[disconnected]\x1b[0m"); removeTab(name); });
+    term.focus();
 }
 
 function switchToTab(name) {
-    if (!terminals.has(name)) return; activeTab = name;
+    if (!terminals.has(name)) return;
+    console.log(`[tab] switch → ${name} (from ${activeTab})`);
+    activeTab = name;
     document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.session === name));
     document.querySelectorAll(".terminal-wrapper").forEach(w => w.classList.toggle("active", w.id === "term-" + name));
-    setTimeout(() => forceResize(name), 0);
-    const entry = terminals.get(name); if (entry) entry.term.focus();
+    const entry = terminals.get(name);
+    if (entry) {
+        console.log(`[tab] ${name}: term.cols=${entry.term.cols} term.rows=${entry.term.rows} _lastCols=${entry.term._lastCols} _lastRows=${entry.term._lastRows} wrapper visible=${entry.wrapper.offsetParent !== null} ${entry.wrapper.offsetWidth}x${entry.wrapper.offsetHeight}`);
+        entry.term.focus();
+    }
 }
 
 function closeTab(name) { DetachSession(name).catch(() => {}); KillSession(name).catch(() => {}); removeTab(name); }
@@ -182,8 +212,6 @@ async function attachTo(name) {
     try {
         await AttachSession(name);
         addTab(name);
-        // Force sync actual size to PTY after attach (bypasses onResize debounce)
-        forceResize(name);
     } catch (err) { addChatMessage("system", "Attach failed: " + err); }
 }
 

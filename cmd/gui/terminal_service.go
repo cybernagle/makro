@@ -51,6 +51,10 @@ func (t *TerminalService) AttachSession(sessionName string) error {
 	// Detach stale clients for this session (leftover from previous Makro runs).
 	detachStaleClients(sessionName)
 
+	// Ensure tmux uses latest client size for this session.
+	exec.Command(tmuxBin, tmuxArgs("set-option", "-t", sessionName, "window-size", "latest")...).Run()
+	exec.Command(tmuxBin, tmuxArgs("set-option", "-t", sessionName, "aggressive-resize", "on")...).Run()
+
 	home, _ := os.UserHomeDir()
 	sockPath := filepath.Join(home, ".makro", "tmux.sock")
 	tmuxArgs := []string{"attach", "-t", sessionName}
@@ -68,7 +72,7 @@ func (t *TerminalService) AttachSession(sessionName string) error {
 	}
 	cmd.Env = append(env, "TERM=xterm-256color")
 
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 50, Cols: 120})
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 50, Cols: 200})
 	if err != nil {
 		return fmt.Errorf("start tmux attach: %w", err)
 	}

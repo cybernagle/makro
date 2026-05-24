@@ -65,8 +65,13 @@ func (s *TmuxService) CreateSession(name, workingDir string) error {
 	if workingDir != "" {
 		args = append(args, "-c", workingDir)
 	}
-	_, err := exec.Command(tmuxBin, args...).CombinedOutput()
-	return err
+	if _, err := exec.Command(tmuxBin, args...).CombinedOutput(); err != nil {
+		return err
+	}
+	// Use latest client size so the active view always fills its container.
+	exec.Command(tmuxBin, tmuxArgs("set-option", "-t", name, "window-size", "latest")...).Run()
+	exec.Command(tmuxBin, tmuxArgs("set-option", "-t", name, "aggressive-resize", "on")...).Run()
+	return nil
 }
 
 func (s *TmuxService) KillSession(name string) error {
