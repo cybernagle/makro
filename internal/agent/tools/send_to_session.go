@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/naglezhang/fingersaver/internal/tmux"
-	"github.com/naglezhang/fingersaver/internal/util"
+	"github.com/naglezhang/makro/internal/tmux"
+	"github.com/naglezhang/makro/internal/util"
 )
 
 func NewSendToSessionTool(tc TmuxClient) Tool {

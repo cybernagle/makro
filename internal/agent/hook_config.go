@@ -29,7 +29,7 @@ type hookEntry struct {
 	Timeout int    `json:"timeout"`
 }
 
-// EnsureStopHook adds a fingersaver notify Stop hook to Claude Code settings
+// EnsureStopHook adds a makro notify Stop hook to Claude Code settings
 // if one does not already exist. The function is idempotent.
 func EnsureStopHook(claudeDir, executablePath string) error {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
@@ -89,7 +89,7 @@ func EnsureStopHook(claudeDir, executablePath string) error {
 	return os.WriteFile(settingsPath, updated, info.Mode().Perm())
 }
 
-// EnsurePermissionHook adds a fingersaver permission PermissionRequest hook to
+// EnsurePermissionHook adds a makro permission PermissionRequest hook to
 // Claude Code settings if one does not already exist. The function is idempotent.
 func EnsurePermissionHook(claudeDir, executablePath string) error {
 	settingsPath := filepath.Join(claudeDir, "settings.json")
@@ -189,7 +189,7 @@ func stopHookExists(stopGroups []any) (bool, error) {
 				return false, fmt.Errorf("hooks.Stop[].hooks[] must be objects")
 			}
 			command, _ := hook["command"].(string)
-			if isFingerSaverNotifyHook(command) {
+			if isMakroNotifyHook(command) {
 				return true, nil
 			}
 		}
@@ -217,7 +217,7 @@ func permissionHookExists(permGroups []any) bool {
 				continue
 			}
 			command, _ := hook["command"].(string)
-			if isFingerSaverPermissionHook(command) {
+			if isMakroPermissionHook(command) {
 				return true
 			}
 		}
@@ -225,12 +225,12 @@ func permissionHookExists(permGroups []any) bool {
 	return false
 }
 
-func isFingerSaverNotifyHook(command string) bool {
-	return strings.Contains(command, "fingersaver") && strings.Contains(command, fsNotifyHookSuffix)
+func isMakroNotifyHook(command string) bool {
+	return strings.Contains(command, "makro") && strings.Contains(command, fsNotifyHookSuffix)
 }
 
-func isFingerSaverPermissionHook(command string) bool {
-	return strings.Contains(command, "fingersaver") && strings.Contains(command, fsPermissionHookSuffix)
+func isMakroPermissionHook(command string) bool {
+	return strings.Contains(command, "makro") && strings.Contains(command, fsPermissionHookSuffix)
 }
 
 func buildStopHookCommand(executablePath string) string {

@@ -31,7 +31,7 @@ type Session struct {
 
 func tmuxArgs(extra ...string) []string {
 	home, _ := os.UserHomeDir()
-	sock := filepath.Join(home, ".fingersaver", "tmux.sock")
+	sock := filepath.Join(home, ".makro", "tmux.sock")
 	if _, err := os.Stat(sock); err == nil {
 		return append([]string{"-S", sock}, extra...)
 	}

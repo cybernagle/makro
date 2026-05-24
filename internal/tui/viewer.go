@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/naglezhang/fingersaver/internal/util"
+	"github.com/naglezhang/makro/internal/util"
 
 	tea "charm.land/bubbletea/v2"
 	rw "github.com/mattn/go-runewidth"

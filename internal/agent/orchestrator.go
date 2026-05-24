@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/naglezhang/fingersaver/internal/agent/skills"
-	"github.com/naglezhang/fingersaver/internal/agent/tools"
-	"github.com/naglezhang/fingersaver/internal/llm"
-	"github.com/naglezhang/fingersaver/internal/util"
+	"github.com/naglezhang/makro/internal/agent/skills"
+	"github.com/naglezhang/makro/internal/agent/tools"
+	"github.com/naglezhang/makro/internal/llm"
+	"github.com/naglezhang/makro/internal/util"
 )
 
 type OrchestratorEventType int
@@ -558,7 +558,7 @@ func (o *Orchestrator) trimOldestTurn() {
 }
 
 func DefaultSystemPrompt() string {
-	return `You are FingerSaver, a coding agent orchestrator. You manage multiple tmux sessions running coding agents like Claude Code and GitHub Copilot.
+	return `You are Makro, a coding agent orchestrator. You manage multiple tmux sessions running coding agents like Claude Code and GitHub Copilot.
 
 CRITICAL RULES:
 - ALWAYS use tools to perform actions. NEVER just describe what you will do.

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/naglezhang/fingersaver/internal/tmux"
+	"github.com/naglezhang/makro/internal/tmux"
 )
 
 func NewRespondConfirmationTool(tc TmuxClient) Tool {

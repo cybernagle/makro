@@ -1,7 +1,7 @@
 import {Events} from "@wailsio/runtime";
-import {ListSessions, CreateSession, KillSession} from "../bindings/github.com/naglezhang/fingersaver/cmd/gui/tmuxservice.js";
-import {AttachSession, DetachSession, WriteInput, ResizeTerminal} from "../bindings/github.com/naglezhang/fingersaver/cmd/gui/terminalservice.js";
-import {SendMessage, LoadChatHistory, StartMonitor} from "../bindings/github.com/naglezhang/fingersaver/cmd/gui/chatservice.js";
+import {ListSessions, CreateSession, KillSession} from "../bindings/github.com/naglezhang/makro/cmd/gui/tmuxservice.js";
+import {AttachSession, DetachSession, WriteInput, ResizeTerminal} from "../bindings/github.com/naglezhang/makro/cmd/gui/terminalservice.js";
+import {SendMessage, LoadChatHistory, StartMonitor} from "../bindings/github.com/naglezhang/makro/cmd/gui/chatservice.js";
 
 import {Terminal} from "@xterm/xterm";
 import {FitAddon} from "@xterm/addon-fit";
@@ -179,7 +179,7 @@ LoadChatHistory().then(msgs => {
     }
 }).catch(() => {});
 
-addChatMessage("system", "FingerSaver GUI ready.");
+addChatMessage("system", "Makro GUI ready.");
 refreshSessions();
 
 // Periodic session sync — close tabs for killed sessions, attach new ones.

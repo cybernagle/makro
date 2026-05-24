@@ -13,7 +13,7 @@ import (
 func TestEnsureStopHookAddsHook(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "settings.json")
-	execPath := filepath.Join(dir, "bin", "fingersaver")
+	execPath := filepath.Join(dir, "bin", "makro")
 
 	initial := map[string]any{"env": map[string]string{}}
 	data, _ := json.MarshalIndent(initial, "", "  ")
@@ -36,13 +36,13 @@ func TestEnsureStopHookAddsHook(t *testing.T) {
 			}
 		}
 	}
-	assert.True(t, found, "should contain fingersaver notify hook")
+	assert.True(t, found, "should contain makro notify hook")
 }
 
 func TestEnsureStopHookIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "settings.json")
-	execPath := filepath.Join(dir, "Finger Saver", "fingersaver")
+	execPath := filepath.Join(dir, "Finger Saver", "makro")
 
 	initial := map[string]any{"env": map[string]string{}}
 	data, _ := json.MarshalIndent(initial, "", "  ")
@@ -71,7 +71,7 @@ func TestEnsureStopHookIdempotent(t *testing.T) {
 func TestEnsureStopHookPreservesExisting(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "settings.json")
-	execPath := filepath.Join(dir, "bin", "fingersaver")
+	execPath := filepath.Join(dir, "bin", "makro")
 
 	initial := map[string]any{
 		"model": "claude-3-7-sonnet",
@@ -104,7 +104,7 @@ func TestEnsureStopHookPreservesExisting(t *testing.T) {
 
 func TestEnsureStopHookNoFile(t *testing.T) {
 	dir := t.TempDir()
-	err := EnsureStopHook(dir, filepath.Join(dir, "bin", "fingersaver"))
+	err := EnsureStopHook(dir, filepath.Join(dir, "bin", "makro"))
 	assert.NoError(t, err)
 }
 
@@ -113,7 +113,7 @@ func TestEnsureStopHookMalformedSettings(t *testing.T) {
 	settingsPath := filepath.Join(dir, "settings.json")
 	require.NoError(t, os.WriteFile(settingsPath, []byte("{not valid json"), 0o644))
 
-	err := EnsureStopHook(dir, filepath.Join(dir, "bin", "fingersaver"))
+	err := EnsureStopHook(dir, filepath.Join(dir, "bin", "makro"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse settings")
 }
@@ -125,7 +125,7 @@ func TestEnsureStopHookPreservesFileMode(t *testing.T) {
 	data, _ := json.MarshalIndent(initial, "", "  ")
 	require.NoError(t, os.WriteFile(settingsPath, data, 0o600))
 
-	require.NoError(t, EnsureStopHook(dir, filepath.Join(dir, "bin", "fingersaver")))
+	require.NoError(t, EnsureStopHook(dir, filepath.Join(dir, "bin", "makro")))
 
 	info, err := os.Stat(settingsPath)
 	require.NoError(t, err)
@@ -135,7 +135,7 @@ func TestEnsureStopHookPreservesFileMode(t *testing.T) {
 func TestEnsurePermissionHookAddsHook(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "settings.json")
-	execPath := filepath.Join(dir, "bin", "fingersaver")
+	execPath := filepath.Join(dir, "bin", "makro")
 
 	initial := map[string]any{"env": map[string]string{}}
 	data, _ := json.MarshalIndent(initial, "", "  ")
@@ -158,13 +158,13 @@ func TestEnsurePermissionHookAddsHook(t *testing.T) {
 			}
 		}
 	}
-	assert.True(t, found, "should contain fingersaver permission hook")
+	assert.True(t, found, "should contain makro permission hook")
 }
 
 func TestEnsurePermissionHookIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "settings.json")
-	execPath := filepath.Join(dir, "bin", "fingersaver")
+	execPath := filepath.Join(dir, "bin", "makro")
 
 	initial := map[string]any{"env": map[string]string{}}
 	data, _ := json.MarshalIndent(initial, "", "  ")

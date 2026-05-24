@@ -1,4 +1,4 @@
-module github.com/naglezhang/fingersaver
+module github.com/naglezhang/makro
 
 go 1.26.1
 

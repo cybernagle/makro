@@ -59,7 +59,7 @@ func TestClientStateMirror(t *testing.T) {
 func TestParseNotificationFromRealOutput(t *testing.T) {
 	// Simulate real tmux -CC output lines.
 	lines := []string{
-		"%session-changed $0 __fingersaver_control",
+		"%session-changed $0 __makro_control",
 		"%window-add @0",
 		"%window-pane-changed @0 %0",
 		"%layout-change @0 0000x24,0{0;0,80,24,0} 0000x24,0{0;0,80,24,0} 0",

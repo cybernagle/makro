@@ -16,7 +16,7 @@ func main() {
 	chatSvc := NewChatService(nil)
 
 	app := application.New(application.Options{
-		Name:        "FingerSaver",
+		Name:        "Makro",
 		Description: "Multi-agent coding orchestrator",
 		Services: []application.Service{
 			application.NewService(tmuxSvc),
@@ -32,7 +32,7 @@ func main() {
 	})
 
 	app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:            "FingerSaver",
+		Title:            "Makro",
 		Width:            1200,
 		Height:           800,
 		MinWidth:         800,

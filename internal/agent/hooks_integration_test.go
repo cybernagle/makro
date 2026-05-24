@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/naglezhang/fingersaver/internal/agent/tools"
-	"github.com/naglezhang/fingersaver/internal/llm"
+	"github.com/naglezhang/makro/internal/agent/tools"
+	"github.com/naglezhang/makro/internal/llm"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

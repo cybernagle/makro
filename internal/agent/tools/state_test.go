@@ -77,7 +77,7 @@ func TestSetStateMerges(t *testing.T) {
 	setTool.Execute(context.Background(), map[string]any{"key": "a", "value": "1"})
 	setTool.Execute(context.Background(), map[string]any{"key": "b", "value": "2"})
 
-	data, err := os.ReadFile(filepath.Join(dir, ".fingersaver", "state.json"))
+	data, err := os.ReadFile(filepath.Join(dir, ".makro", "state.json"))
 	require.NoError(t, err)
 
 	var m map[string]string

@@ -10,9 +10,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
-	"github.com/naglezhang/fingersaver/internal/agent"
-	"github.com/naglezhang/fingersaver/internal/agent/tools"
-	"github.com/naglezhang/fingersaver/internal/tmux"
+	"github.com/naglezhang/makro/internal/agent"
+	"github.com/naglezhang/makro/internal/agent/tools"
+	"github.com/naglezhang/makro/internal/tmux"
 )
 
 type Focus int
@@ -373,7 +373,7 @@ func trimToLines(s string, maxLines int) string {
 
 func (a *AppModel) processOrchestratorInput(text string) {
 	log.Printf("[tui] processOrchestratorInput start textLen=%d", len(text))
-	source := "fingersaver"
+	source := "makro"
 	if name, _ := agent.ExtractMention(text); name != "" {
 		source = name
 	}

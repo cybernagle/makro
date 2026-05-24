@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Vision
 
-**FingerSaver** is a Go application that manages multiple coding agents (Claude Code, Copilot, etc.) through a split-pane terminal UI. The left pane is a chat interface for orchestrating agents; the right pane renders tmux sessions. Users `@mention` sessions to switch context and issue commands to different coding agents. Both panes accept input simultaneously via Tab focus toggle.
+**Makro** is a Go application that manages multiple coding agents (Claude Code, Copilot, etc.) through a split-pane terminal UI. The left pane is a chat interface for orchestrating agents; the right pane renders tmux sessions. Users `@mention` sessions to switch context and issue commands to different coding agents. Both panes accept input simultaneously via Tab focus toggle.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    FingerSaver (main)                    │
+│                    Makro (main)                    │
 │              Bubbletea TUI - split pane                  │
 ├──────────────────────┬──────────────────────────────────┤
 │   Chat Pane (left)   │    Tmux Viewer (right)           │
@@ -48,14 +48,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **tmux via CLI, not control mode**: `tmux -CC` exits immediately without an interactive terminal. Instead, we use direct `tmux -S <socket> <command>` calls via `sh -c` with polling.
 - **Bubbletea v2**: Uses `charm.land/bubbletea/v2` (module path changed from github.com). `View()` returns `tea.View` struct, not string. `tea.KeyPressMsg` replaces `tea.KeyMsg`.
-- **Dedicated tmux server**: Runs on `~/.fingersaver/tmux.sock`, isolated from user's tmux.
-- **Chat persistence**: Markdown format at `~/.fingersaver/chat.md`, append on every message.
+- **Dedicated tmux server**: Runs on `~/.makro/tmux.sock`, isolated from user's tmux.
+- **Chat persistence**: Markdown format at `~/.makro/chat.md`, append on every message.
 - **LLM model from .claude**: Reads `.claude/settings.json` for model preference, falls back to provider defaults.
 
 ## Go Project Structure
 
 ```
-fingersaver/
+makro/
 ├── main.go
 ├── internal/
 │   ├── config/           # Config loading, .claude fallback
@@ -102,7 +102,7 @@ fingersaver/
 ## Build & Dev Commands
 
 ```bash
-go build -o fingersaver .
+go build -o makro .
 go run .
 go test ./...
 go test ./internal/tmux/...

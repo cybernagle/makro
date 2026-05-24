@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/naglezhang/fingersaver/internal/util"
+	"github.com/naglezhang/makro/internal/util"
 )
 
 func contextBaseDir() (string, error) {
@@ -17,7 +17,7 @@ func contextBaseDir() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get home dir: %w", err)
 	}
-	return filepath.Join(home, ".fingersaver", "contexts"), nil
+	return filepath.Join(home, ".makro", "contexts"), nil
 }
 
 func NewSaveContextTool(tc TmuxClient) Tool {

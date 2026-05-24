@@ -49,7 +49,7 @@ func (t *TerminalService) AttachSession(sessionName string) error {
 	t.mu.Unlock()
 
 	home, _ := os.UserHomeDir()
-	sockPath := filepath.Join(home, ".fingersaver", "tmux.sock")
+	sockPath := filepath.Join(home, ".makro", "tmux.sock")
 	tmuxArgs := []string{"attach", "-t", sessionName}
 	if _, err := os.Stat(sockPath); err == nil {
 		tmuxArgs = append([]string{"-S", sockPath}, tmuxArgs...)

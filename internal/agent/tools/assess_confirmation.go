@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/naglezhang/fingersaver/internal/util"
+	"github.com/naglezhang/makro/internal/util"
 )
 
 func NewAssessConfirmationTool(tc TmuxClient, assessor Assessor) Tool {

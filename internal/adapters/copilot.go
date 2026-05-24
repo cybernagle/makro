@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/naglezhang/fingersaver/internal/tmux"
+	"github.com/naglezhang/makro/internal/tmux"
 )
 
 // CopilotAdapter manages GitHub Copilot CLI running inside a tmux session.

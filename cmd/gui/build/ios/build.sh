@@ -2,10 +2,10 @@
 set -e
 
 # Build configuration
-APP_NAME="gui"
-BUNDLE_ID="com.example.gui"
-VERSION="0.1.0"
-BUILD_NUMBER="0.1.0"
+APP_NAME="Makro"
+BUNDLE_ID="com.cybernagle.makro"
+VERSION="0.0.1"
+BUILD_NUMBER="0.0.1"
 BUILD_DIR="build/ios"
 TARGET="simulator"
 

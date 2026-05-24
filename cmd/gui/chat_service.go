@@ -10,11 +10,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/naglezhang/fingersaver/internal/agent"
-	"github.com/naglezhang/fingersaver/internal/agent/tools"
-	"github.com/naglezhang/fingersaver/internal/config"
-	"github.com/naglezhang/fingersaver/internal/llm"
-	"github.com/naglezhang/fingersaver/internal/tmux"
+	"github.com/naglezhang/makro/internal/agent"
+	"github.com/naglezhang/makro/internal/agent/tools"
+	"github.com/naglezhang/makro/internal/config"
+	"github.com/naglezhang/makro/internal/llm"
+	"github.com/naglezhang/makro/internal/tmux"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -80,8 +80,8 @@ func (s *ChatService) init() {
 	orch.SetCommandRegistry(agent.NewCommandRegistry(tc))
 	homeDir, _ := os.UserHomeDir()
 	skillDirs := []string{
-		filepath.Join(homeDir, ".fingersaver", "skills"),
-		filepath.Join(".", ".fingersaver", "skills"),
+		filepath.Join(homeDir, ".makro", "skills"),
+		filepath.Join(".", ".makro", "skills"),
 	}
 	orch.LoadSkills(skillDirs)
 	orch.SetModel(cfg.LLMModel)
@@ -343,7 +343,7 @@ func (s *ChatService) reportError(format string, args ...any) {
 
 func detectTmuxSocket() string {
 	home, _ := os.UserHomeDir()
-	sock := filepath.Join(home, ".fingersaver", "tmux.sock")
+	sock := filepath.Join(home, ".makro", "tmux.sock")
 	if _, err := os.Stat(sock); err == nil {
 		return sock
 	}

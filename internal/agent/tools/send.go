@@ -3,7 +3,7 @@ package tools
 import (
 	"fmt"
 
-	"github.com/naglezhang/fingersaver/internal/tmux"
+	"github.com/naglezhang/makro/internal/tmux"
 )
 
 func sendText(tc TmuxClient, sessionName, text string) error {

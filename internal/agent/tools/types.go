@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 
-	"github.com/naglezhang/fingersaver/internal/tmux"
+	"github.com/naglezhang/makro/internal/tmux"
 )
 
 // Tool represents a callable tool that the orchestrator can invoke.

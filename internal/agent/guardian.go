@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/naglezhang/fingersaver/internal/agent/tools"
-	"github.com/naglezhang/fingersaver/internal/llm"
-	"github.com/naglezhang/fingersaver/internal/util"
+	"github.com/naglezhang/makro/internal/agent/tools"
+	"github.com/naglezhang/makro/internal/llm"
+	"github.com/naglezhang/makro/internal/util"
 )
 
 const defaultAssessorPrompt = `You are a session guardian. You monitor a coding agent in a terminal and decide how to respond to its confirmation prompts.

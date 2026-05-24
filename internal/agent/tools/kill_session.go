@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/naglezhang/fingersaver/internal/tmux"
+	"github.com/naglezhang/makro/internal/tmux"
 )
 
 func NewKillSessionTool(tc TmuxClient) Tool {

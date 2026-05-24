@@ -48,7 +48,7 @@ func NewAgentNotifier() *AgentNotifier {
 		waiters:    make(map[string]map[uint64]chan struct{}),
 		seq:        make(map[string]uint64),
 		lastStatus: make(map[string]string),
-		sockPath:   filepath.Join(home, ".fingersaver", "hooks.sock"),
+		sockPath:   filepath.Join(home, ".makro", "hooks.sock"),
 		done:       make(chan struct{}),
 	}
 }

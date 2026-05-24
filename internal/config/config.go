@@ -39,7 +39,7 @@ func homeDir() string {
 
 func DefaultConfig() *Config {
 	home := homeDir()
-	dataDir := filepath.Join(home, ".fingersaver")
+	dataDir := filepath.Join(home, ".makro")
 	return &Config{
 		LLMProvider:        "",
 		LLMModel:           "",
@@ -93,24 +93,24 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) applyEnvOverrides() {
-	if v := os.Getenv("FINGERSAVER_LLM_PROVIDER"); v != "" {
+	if v := os.Getenv("MAKRO_LLM_PROVIDER"); v != "" {
 		c.LLMProvider = v
 	}
-	if v := os.Getenv("FINGERSAVER_LLM_MODEL"); v != "" {
+	if v := os.Getenv("MAKRO_LLM_MODEL"); v != "" {
 		c.LLMModel = v
 	}
-	if v := os.Getenv("FINGERSAVER_TMUX_MODE"); v != "" {
+	if v := os.Getenv("MAKRO_TMUX_MODE"); v != "" {
 		c.TmuxMode = v
 	}
-	if v := os.Getenv("FINGERSAVER_DATA_DIR"); v != "" {
+	if v := os.Getenv("MAKRO_DATA_DIR"); v != "" {
 		c.DataDir = v
 		c.TmuxSocketPath = filepath.Join(v, "tmux.sock")
 		c.ChatHistoryPath = filepath.Join(v, "chat.md")
 	}
-	if v := os.Getenv("FINGERSAVER_TMUX_SOCKET"); v != "" {
+	if v := os.Getenv("MAKRO_TMUX_SOCKET"); v != "" {
 		c.TmuxSocketPath = v
 	}
-	if v := os.Getenv("FINGERSAVER_CHAT_HISTORY"); v != "" {
+	if v := os.Getenv("MAKRO_CHAT_HISTORY"); v != "" {
 		c.ChatHistoryPath = v
 	}
 
@@ -129,7 +129,7 @@ func (c *Config) applyEnvOverrides() {
 			c.LLMProvider = "openai"
 		}
 	}
-	if v := os.Getenv("FINGERSAVER_LLM_API_KEY"); v != "" {
+	if v := os.Getenv("MAKRO_LLM_API_KEY"); v != "" {
 		c.LLMAPIKey = v
 	}
 
@@ -139,14 +139,14 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("OPENAI_BASE_URL"); v != "" {
 		c.LLMBaseURL = v
 	}
-	if v := os.Getenv("FINGERSAVER_LLM_BASE_URL"); v != "" {
+	if v := os.Getenv("MAKRO_LLM_BASE_URL"); v != "" {
 		c.LLMBaseURL = v
 	}
-	if v := os.Getenv("FINGERSAVER_MAX_CONTEXT_MESSAGES"); v != "" {
+	if v := os.Getenv("MAKRO_MAX_CONTEXT_MESSAGES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			c.MaxContextMessages = n
 		} else if err != nil {
-			log.Printf("[config] warning: invalid FINGERSAVER_MAX_CONTEXT_MESSAGES: %q, ignored", v)
+			log.Printf("[config] warning: invalid MAKRO_MAX_CONTEXT_MESSAGES: %q, ignored", v)
 		}
 	}
 }
@@ -266,7 +266,7 @@ func (c *Config) Save() error {
 
 func (c *Config) Summary() string {
 	var sb strings.Builder
-	sb.WriteString("FingerSaver Configuration:\n")
+	sb.WriteString("Makro Configuration:\n")
 	sb.WriteString(fmt.Sprintf("  Provider:    %s\n", c.LLMProvider))
 	sb.WriteString(fmt.Sprintf("  Model:       %s\n", c.LLMModel))
 	sb.WriteString(fmt.Sprintf("  API Key:     %s\n", keyHint(c.LLMAPIKey)))
