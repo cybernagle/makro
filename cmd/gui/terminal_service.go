@@ -48,6 +48,9 @@ func (t *TerminalService) AttachSession(sessionName string) error {
 	}
 	t.mu.Unlock()
 
+	// Detach stale clients for this session (leftover from previous Makro runs).
+	detachStaleClients(sessionName)
+
 	home, _ := os.UserHomeDir()
 	sockPath := filepath.Join(home, ".makro", "tmux.sock")
 	tmuxArgs := []string{"attach", "-t", sessionName}
@@ -65,7 +68,7 @@ func (t *TerminalService) AttachSession(sessionName string) error {
 	}
 	cmd.Env = append(env, "TERM=xterm-256color")
 
-	ptmx, err := pty.Start(cmd)
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 50, Cols: 120})
 	if err != nil {
 		return fmt.Errorf("start tmux attach: %w", err)
 	}
@@ -139,6 +142,33 @@ func (t *TerminalService) DetachSession(sessionName string) error {
 	tp.ptmx.Close()
 	syscall.Kill(tp.pid, syscall.SIGTERM)
 	return nil
+}
+
+// detachStaleClients removes orphaned GUI PTY clients for a session.
+// These accumulate when Makro restarts without cleaning up PTY processes.
+// We identify stale clients by their small width (GUI PTY starts at 97 cols before clamp).
+func detachStaleClients(sessionName string) {
+	args := tmuxArgs("list-clients", "-t", sessionName, "-F", "#{client_tty}:#{client_width}")
+	out, err := exec.Command(tmuxBin, args...).Output()
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		tty, wStr := parts[0], parts[1]
+		var width int
+		fmt.Sscanf(wStr, "%d", &width)
+		// Detach clients smaller than 150 cols — these are stale GUI PTYs or xterm.js instances.
+		if width > 0 && width < 150 {
+			exec.Command(tmuxBin, tmuxArgs("detach-client", "-t", tty)...).Run()
+		}
+	}
 }
 
 func setWinsize(f *os.File, cols, rows int) error {

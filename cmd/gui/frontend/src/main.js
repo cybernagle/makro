@@ -15,6 +15,8 @@ function toBase64(str) {
 
 const terminals = new Map();
 let activeTab = null;
+let activeAssistantEl = null;
+let currentToolEl = null;
 
 const chatPanel    = document.getElementById("chat-panel");
 const chatMessages = document.getElementById("chat-messages");
@@ -59,15 +61,30 @@ function sendChat(text) {
 
     addChatMessage("user", text);
     chatInput.disabled = true;
-    addChatMessage("assistant", "");
-    SendMessage(text).catch(err => { appendToLastMsg("[error: " + err + "]"); chatInput.disabled = false; });
+    activeAssistantEl = addChatMessage("assistant", "");
+    currentToolEl = null;
+    SendMessage(text).catch(err => { appendToEl(activeAssistantEl, "[error: " + err + "]"); chatInput.disabled = false; });
 }
 
-Events.On("chat:text", (ev) => appendToLastMsg(ev.data));
-Events.On("chat:tool_call", (ev) => { const d = JSON.parse(ev.data); appendToLastMsg("\n\n**▸ " + d.tool + "**\n"); });
-Events.On("chat:tool_result", (ev) => { const d = JSON.parse(ev.data); appendToLastMsg("\n```\n" + d.result.substring(0, 500) + "\n```\n"); });
-Events.On("chat:done", () => { chatInput.disabled = false; chatInput.focus(); });
-Events.On("chat:error", (ev) => { appendToLastMsg("[error: " + ev.data + "]"); chatInput.disabled = false; });
+Events.On("chat:text", (ev) => {
+    if (currentToolEl) {
+        const newEl = document.createElement("div");
+        newEl.className = "chat-msg assistant";
+        newEl.dataset.raw = "";
+        if (currentToolEl.nextSibling) {
+            chatMessages.insertBefore(newEl, currentToolEl.nextSibling);
+        } else {
+            chatMessages.appendChild(newEl);
+        }
+        activeAssistantEl = newEl;
+        currentToolEl = null;
+    }
+    appendToEl(activeAssistantEl, ev.data);
+});
+Events.On("chat:tool_call", (ev) => { const d = JSON.parse(ev.data); currentToolEl = addToolCall(d.tool); });
+Events.On("chat:tool_result", (ev) => { const d = JSON.parse(ev.data); if (currentToolEl) setToolResult(currentToolEl, d.result); });
+Events.On("chat:done", () => { chatInput.disabled = false; chatInput.focus(); activeAssistantEl = null; currentToolEl = null; });
+Events.On("chat:error", (ev) => { appendToEl(activeAssistantEl, "[error: " + ev.data + "]"); chatInput.disabled = false; });
 Events.On("chat:init_error", (ev) => { addChatMessage("system", "Init error: " + ev.data); });
 Events.On("chat:system", (ev) => { addChatMessage("system", ev.data); });
 Events.On("chat:switch_tab", (ev) => { if (ev.data) switchToTab(ev.data); });
@@ -86,12 +103,37 @@ function addChatMessage(role, text) {
     return div;
 }
 
-function appendToLastMsg(text) {
-    const msgs = chatMessages.querySelectorAll(".chat-msg.assistant");
-    if (msgs.length === 0) return;
-    const last = msgs[msgs.length - 1];
-    last.dataset.raw = (last.dataset.raw || "") + text;
-    last.innerHTML = marked.parse(last.dataset.raw);
+function appendToEl(el, text) {
+    if (!el) return;
+    el.dataset.raw = (el.dataset.raw || "") + text;
+    el.innerHTML = marked.parse(el.dataset.raw);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function addToolCall(toolName) {
+    const div = document.createElement("div");
+    div.className = "tool-call";
+    const header = document.createElement("div");
+    header.className = "tool-call-header";
+    header.innerHTML = '<span class="arrow">▼</span><span class="tool-name"></span>';
+    header.querySelector(".tool-name").textContent = toolName;
+    header.addEventListener("click", () => div.classList.toggle("collapsed"));
+    const body = document.createElement("div");
+    body.className = "tool-call-body";
+    div.appendChild(header);
+    div.appendChild(body);
+    const ref = currentToolEl || activeAssistantEl;
+    if (ref && ref.nextSibling) {
+        chatMessages.insertBefore(div, ref.nextSibling);
+    } else {
+        chatMessages.appendChild(div);
+    }
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return div;
+}
+
+function setToolResult(toolEl, result) {
+    toolEl.querySelector(".tool-call-body").textContent = result.substring(0, 1000);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
@@ -243,6 +285,11 @@ document.addEventListener("keydown", (e) => {
         // Two-phase resize: catch mid-transition and post-transition
         setTimeout(refitAll, 50);
         setTimeout(refitAll, 300);
+        // If collapsed, move focus to terminal
+        if (chatPanel.classList.contains("collapsed")) {
+            const entry = activeTab && terminals.get(activeTab);
+            if (entry) setTimeout(() => entry.term.focus(), 300);
+        }
         return;
     }
 
@@ -263,10 +310,15 @@ document.addEventListener("keydown", (e) => {
     }
 });
 
-// Cmd+J focus chat input
+// Cmd+J toggle focus between chat input and terminal
 document.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "j") {
         e.preventDefault();
-        chatInput.focus();
+        if (document.activeElement === chatInput) {
+            const entry = activeTab && terminals.get(activeTab);
+            if (entry) entry.term.focus();
+        } else {
+            chatInput.focus();
+        }
     }
 });

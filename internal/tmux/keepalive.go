@@ -65,7 +65,7 @@ func (k *KeepAlive) Add(sessionName string) error {
 	}
 	cmd.Env = env
 
-	ptmx, err := pty.Start(cmd)
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 50, Cols: 200})
 	if err != nil {
 		log.Printf("[keepalive] pty.Start %s error: %v", sessionName, err)
 		return err
