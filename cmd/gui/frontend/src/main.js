@@ -1,11 +1,11 @@
 import {Events} from "@wailsio/runtime";
-import {ListSessions, CreateSession, KillSession} from "../bindings/github.com/naglezhang/makro/cmd/gui/tmuxservice.js";
+import {ListSessions, CreateSession, KillSession, CapturePane} from "../bindings/github.com/naglezhang/makro/cmd/gui/tmuxservice.js";
 import {AttachSession, DetachSession, WriteInput, ResizeTerminal} from "../bindings/github.com/naglezhang/makro/cmd/gui/terminalservice.js";
 import {SendMessage, LoadChatHistory, StartMonitor} from "../bindings/github.com/naglezhang/makro/cmd/gui/chatservice.js";
 
 import {Terminal} from "@xterm/xterm";
 import {FitAddon} from "@xterm/addon-fit";
-import {WebglAddon} from "@xterm/addon-webgl";
+import {Unicode11Addon} from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import {marked} from "marked";
 
@@ -142,16 +142,30 @@ function addTab(name) {
     const wrapper = document.createElement("div");
     wrapper.className = "terminal-wrapper"; wrapper.id = "term-" + name;
     terminalsEl.appendChild(wrapper);
-    const term = new Terminal({ fontSize: 13, fontFamily: '"SF Mono", "JetBrains Mono", Menlo, Monaco, monospace', theme: { background: "#0c0c0e", foreground: "#e4e4e7", cursor: "#34d399", cursorAccent: "#0c0c0e", selectionBackground: "rgba(52,211,153,0.2)", selectionForeground: "#e4e4e7", black: "#3f3f46", red: "#f87171", green: "#34d399", yellow: "#fbbf24", blue: "#60a5fa", magenta: "#c084fc", cyan: "#22d3ee", white: "#e4e4e7", brightBlack: "#71717a", brightRed: "#fca5a5", brightGreen: "#6ee7b7", brightYellow: "#fde68a", brightBlue: "#93c5fd", brightMagenta: "#d8b4fe", brightCyan: "#67e8f9", brightWhite: "#ffffff" }, cursorBlink: true, scrollback: 10000 });
+    const term = new Terminal({ fontSize: 13, allowProposedApi: true, convertEol: false, fontFamily: '"SF Mono", "JetBrains Mono", Menlo, Monaco, "PingFang SC", "Noto Sans CJK SC", monospace', theme: { background: "#0c0c0e", foreground: "#e4e4e7", cursor: "#34d399", cursorAccent: "#0c0c0e", selectionBackground: "rgba(52,211,153,0.2)", selectionForeground: "#e4e4e7", black: "#3f3f46", red: "#f87171", green: "#34d399", yellow: "#fbbf24", blue: "#60a5fa", magenta: "#c084fc", cyan: "#22d3ee", white: "#e4e4e7", brightBlack: "#71717a", brightRed: "#fca5a5", brightGreen: "#6ee7b7", brightYellow: "#fde68a", brightBlue: "#93c5fd", brightMagenta: "#d8b4fe", brightCyan: "#67e8f9", brightWhite: "#ffffff" }, cursorBlink: true, scrollback: 10000 });
     const fitAddon = new FitAddon(); term.loadAddon(fitAddon);
-    try { term.loadAddon(new WebglAddon()); } catch (e) { console.warn("WebGL not available, using canvas renderer"); }
+    const u11 = new Unicode11Addon();
+    term.loadAddon(u11);
+    term.unicode.activeVersion = '11';
     term.open(wrapper);
     term.onData((data) => WriteInput(name, toBase64(data)).catch(console.error));
+    // Cmd/Ctrl+C: copy selection if exists, else fall through to PTY (SIGINT).
+    wrapper.addEventListener("keydown", (e) => {
+        const mod = e.metaKey || e.ctrlKey;
+        if (mod && e.key.toLowerCase() === "c") {
+            const sel = term.getSelection();
+            if (sel) { e.preventDefault(); e.stopPropagation(); navigator.clipboard.writeText(sel).catch(() => {}); }
+        } else if (mod && e.key.toLowerCase() === "v") {
+            e.preventDefault(); e.stopPropagation();
+            navigator.clipboard.readText().then(text => { if (text) WriteInput(name, toBase64(text)).catch(console.error); }).catch(() => {});
+        }
+    }, true);
+    let _resizeTimer = null;
     term.onResize(({cols, rows}) => {
         if (cols === term._lastCols && rows === term._lastRows) return;
-        console.log(`[resize] ${name}: ${term._lastCols}x${term._lastRows} → ${cols}x${rows} visible=${wrapper.offsetParent !== null}`);
         term._lastCols = cols; term._lastRows = rows;
-        ResizeTerminal(name, cols, rows).catch(console.error);
+        if (_resizeTimer) clearTimeout(_resizeTimer);
+        _resizeTimer = setTimeout(() => ResizeTerminal(name, cols, rows).catch(console.error), 150);
     });
     const ro = new ResizeObserver(() => {
         if (wrapper.offsetWidth === 0 || wrapper.offsetHeight === 0) return;
@@ -171,16 +185,14 @@ function addTab(name) {
     switchToTab(name);
     fitAddon.fit();
     console.log(`[addTab] ${name}: after fit cols=${term.cols} rows=${term.rows} _lastCols=${term._lastCols} _lastRows=${term._lastRows} wrapper=${wrapper.offsetWidth}x${wrapper.offsetHeight}`);
-    let _dataSeq = 0;
+    let _refreshTimer = null;
     Events.On("terminal:" + name, (ev) => {
-        _dataSeq++;
         const bytes = atob(ev.data);
         const arr = new Uint8Array(bytes.length);
         for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-        if (_dataSeq <= 3 || _dataSeq % 50 === 0) {
-            console.log(`[data] ${name} #${_dataSeq}: ${arr.length}B cols=${term.cols} visible=${wrapper.offsetParent !== null}`);
-        }
         term.write(arr);
+        if (_refreshTimer) clearTimeout(_refreshTimer);
+        _refreshTimer = setTimeout(() => { try { term.refresh(0, term.rows - 1); } catch (e) {} }, 30);
     });
     Events.On("terminal:exit:" + name, () => { term.write("\r\n\x1b[33m[disconnected]\x1b[0m"); removeTab(name); });
     term.focus();
@@ -188,13 +200,19 @@ function addTab(name) {
 
 function switchToTab(name) {
     if (!terminals.has(name)) return;
-    console.log(`[tab] switch → ${name} (from ${activeTab})`);
+    const prevTab = activeTab;
     activeTab = name;
     document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.session === name));
     document.querySelectorAll(".terminal-wrapper").forEach(w => w.classList.toggle("active", w.id === "term-" + name));
     const entry = terminals.get(name);
     if (entry) {
-        console.log(`[tab] ${name}: term.cols=${entry.term.cols} term.rows=${entry.term.rows} _lastCols=${entry.term._lastCols} _lastRows=${entry.term._lastRows} wrapper visible=${entry.wrapper.offsetParent !== null} ${entry.wrapper.offsetWidth}x${entry.wrapper.offsetHeight}`);
+        if (prevTab !== name) {
+            // Force repaint after becoming visible — resize triggers full re-render.
+            requestAnimationFrame(() => {
+                try { entry.fitAddon.fit(); } catch (e) {}
+                entry.term.refresh(0, entry.term.rows - 1);
+            });
+        }
         entry.term.focus();
     }
 }
@@ -210,7 +228,7 @@ function removeTab(name) {
 async function attachTo(name) {
     if (terminals.has(name)) { switchToTab(name); return; }
     try {
-        await AttachSession(name);
+        await AttachSession(name, 200, 50);
         addTab(name);
     } catch (err) { addChatMessage("system", "Attach failed: " + err); }
 }

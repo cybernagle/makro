@@ -12,10 +12,12 @@ import * as application$0 from "../../../../wailsapp/wails/v3/pkg/application/mo
 
 /**
  * @param {string} sessionName
+ * @param {number} cols
+ * @param {number} rows
  * @returns {$CancellablePromise<void>}
  */
-export function AttachSession(sessionName) {
-    return $Call.ByID(592160856, sessionName);
+export function AttachSession(sessionName, cols, rows) {
+    return $Call.ByID(592160856, sessionName, cols, rows);
 }
 
 /**

@@ -78,3 +78,12 @@ func (s *TmuxService) KillSession(name string) error {
 	_, err := exec.Command(tmuxBin, tmuxArgs("kill-session", "-t", name)...).CombinedOutput()
 	return err
 }
+
+// CapturePane returns the current visible content of a tmux session's pane.
+func (s *TmuxService) CapturePane(name string) (string, error) {
+	out, err := exec.Command(tmuxBin, tmuxArgs("capture-pane", "-t", name, "-p")...).Output()
+	if err != nil {
+		return "", fmt.Errorf("capture-pane %q: %w", name, err)
+	}
+	return string(out), nil
+}
