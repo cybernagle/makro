@@ -6,20 +6,27 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
-var tmuxBin = findTmux()
+var tmuxBin string
+var tmuxOnce sync.Once
 
-func findTmux() string {
-	if p, err := exec.LookPath("tmux"); err == nil {
-		return p
-	}
-	for _, p := range []string{"/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"} {
-		if _, err := os.Stat(p); err == nil {
-			return p
+func getTmuxBin() string {
+	tmuxOnce.Do(func() {
+		if p, err := exec.LookPath("tmux"); err == nil {
+			tmuxBin = p
+			return
 		}
-	}
-	return "tmux"
+		for _, p := range []string{"/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"} {
+			if _, err := os.Stat(p); err == nil {
+				tmuxBin = p
+				return
+			}
+		}
+		tmuxBin = "tmux"
+	})
+	return tmuxBin
 }
 
 type TmuxService struct{}
@@ -39,7 +46,7 @@ func tmuxArgs(extra ...string) []string {
 }
 
 func (s *TmuxService) ListSessions() ([]Session, error) {
-	out, err := exec.Command(tmuxBin, tmuxArgs("list-sessions", "-F", "#{session_name} #{session_attached}")...).CombinedOutput()
+	out, err := exec.Command(getTmuxBin(), tmuxArgs("list-sessions", "-F", "#{session_name} #{session_attached}")...).CombinedOutput()
 	if err != nil {
 		if strings.Contains(string(out), "no server running") || strings.Contains(string(out), "no sessions") {
 			return []Session{}, nil
@@ -65,23 +72,23 @@ func (s *TmuxService) CreateSession(name, workingDir string) error {
 	if workingDir != "" {
 		args = append(args, "-c", workingDir)
 	}
-	if _, err := exec.Command(tmuxBin, args...).CombinedOutput(); err != nil {
+	if _, err := exec.Command(getTmuxBin(), args...).CombinedOutput(); err != nil {
 		return err
 	}
 	// Use latest client size so the active view always fills its container.
-	exec.Command(tmuxBin, tmuxArgs("set-option", "-t", name, "window-size", "latest")...).Run()
-	exec.Command(tmuxBin, tmuxArgs("set-option", "-t", name, "aggressive-resize", "on")...).Run()
+	exec.Command(getTmuxBin(), tmuxArgs("set-option", "-t", name, "window-size", "latest")...).Run()
+	exec.Command(getTmuxBin(), tmuxArgs("set-option", "-t", name, "aggressive-resize", "on")...).Run()
 	return nil
 }
 
 func (s *TmuxService) KillSession(name string) error {
-	_, err := exec.Command(tmuxBin, tmuxArgs("kill-session", "-t", name)...).CombinedOutput()
+	_, err := exec.Command(getTmuxBin(), tmuxArgs("kill-session", "-t", name)...).CombinedOutput()
 	return err
 }
 
 // CapturePane returns the current visible content of a tmux session's pane.
 func (s *TmuxService) CapturePane(name string) (string, error) {
-	out, err := exec.Command(tmuxBin, tmuxArgs("capture-pane", "-t", name, "-p")...).Output()
+	out, err := exec.Command(getTmuxBin(), tmuxArgs("capture-pane", "-t", name, "-p")...).Output()
 	if err != nil {
 		return "", fmt.Errorf("capture-pane %q: %w", name, err)
 	}

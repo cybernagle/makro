@@ -1,0 +1,79 @@
+{
+  "version": "1.0",
+  "layers": [
+    {
+      "id": "entry",
+      "name": "Entry Points",
+      "tag": "Layer 1 / 6",
+      "desc": "Makro 有两个入口。TUI 入口解析 CLI 参数，加载配置，初始化 LLM provider、tmux client、agent orchestrator，然后启动 Bubbletea TUI。GUI 入口注册三个 Wails service，嵌入前端资源，启动桌面窗口。",
+      "components": [
+        { "id": "main-tui", "name": "main.go", "path": "main.go", "loc": 498, "detail": "TUI 入口 · CLI 解析 · 配置加载 · Bubbletea 启动 · 子命令: notify, chat, send, permission" },
+        { "id": "main-gui", "name": "cmd/gui/main.go", "path": "cmd/gui/main.go", "loc": 56, "detail": "GUI 入口 · Wails v3 · 注册 TmuxService + TerminalService + ChatService · macOS 窗口配置" }
+      ],
+      "deps": ["presentation", "agent"]
+    },
+    {
+      "id": "presentation",
+      "name": "Presentation",
+      "tag": "Layer 2 / 6",
+      "desc": "两套前端共享同一个 Agent 核心层。TUI 用 Bubbletea v2 做分屏（左聊天 + 右 tmux viewer）。GUI 用 Wails + xterm.js 做桌面应用（终端 tab + 聊天面板）。两者都支持 @session 切换、斜杠命令、Markdown 渲染。",
+      "components": [
+        { "id": "tui", "name": "internal/tui/", "path": "internal/tui/", "loc": 1727, "detail": "app.go (632) · chat.go (776) · viewer.go (328) · 分屏布局 · 快捷键 · @mention 自动补全" },
+        { "id": "frontend", "name": "cmd/gui/frontend/", "path": "cmd/gui/frontend/src/main.js", "loc": 376, "detail": "main.js · xterm.js v5 + Unicode11 + WebGL · marked markdown · Wails Events · Cmd+B/J/L 快捷键" }
+      ],
+      "deps": ["services", "infra"]
+    },
+    {
+      "id": "services",
+      "name": "GUI Services",
+      "tag": "Layer 3 / 6",
+      "desc": "Wails 服务层，Go 后端与 JS 前端的桥梁。TmuxService 封装 tmux CLI。TerminalService 管理 PTY 生命周期（tmux new-session -A + base64 编码推送）。ChatService 持有完整的 Orchestrator 实例，通过 Wails Events 流式推送 LLM 响应。",
+      "components": [
+        { "id": "tmux-svc", "name": "TmuxService", "path": "cmd/gui/tmux_service.go", "loc": 89, "detail": "ListSessions · CreateSession · KillSession · CapturePane · 专用 socket ~/.makro/tmux.sock" },
+        { "id": "term-svc", "name": "TerminalService", "path": "cmd/gui/terminal_service.go", "loc": 219, "detail": "AttachSession (new-session -A) · WriteInput (base64) · ResizeTerminal · PTY 32KB buffer · ensureTerm (UTF-8)" },
+        { "id": "chat-svc", "name": "ChatService", "path": "cmd/gui/chat_service.go + chat_history.go", "loc": 467, "detail": "SendMessage · StartMonitor · LoadChatHistory · Events: chat:text/tool_call/done/error · Markdown 历史" }
+      ],
+      "deps": ["agent", "infra"]
+    },
+    {
+      "id": "agent",
+      "name": "Agent Orchestrator",
+      "tag": "Layer 4 / 6",
+      "desc": "Makro 的核心，占代码库 70%。Orchestrator 管理无限工具调用循环：接收用户输入 → 构建 LLM 消息 → 流式调用 Provider → 解析工具调用 → 执行工具 → 回到 LLM。23 个工具覆盖 session 管理、文件操作、状态持久化、跨 agent 协调。Skill 系统支持从 ~/.makro/skills/ 加载可复用 prompt 模板。Hook 系统通过 Unix socket 与 Claude Code 集成。",
+      "components": [
+        { "id": "orchestrator", "name": "orchestrator.go", "path": "internal/agent/orchestrator.go", "loc": 591, "detail": "ProcessInput → handleLLM (infinite loop) → handleToolCall → tool execution → back to LLM" },
+        { "id": "tools", "name": "tools/ (23)", "path": "internal/agent/tools/", "loc": 1887, "detail": "session: create/kill/switch/list · I/O: send/read/relay · file: read/write/list · state: set/get/save/restore · agent: wait_idle/assess/respond/alive" },
+        { "id": "skills", "name": "skills/", "path": "internal/agent/skills/", "loc": 356, "detail": "SKILL.md 加载器 · YAML frontmatter · {{.Args}} 模板 · 工具白名单" },
+        { "id": "hooks", "name": "hooks + notifier", "path": "internal/agent/{hooks,notifier}.go", "loc": 613, "detail": "Unix socket ~/.makro/hooks.sock · before/after_tool_call · agent_stop · permission_request · 版本化等待" }
+      ],
+      "deps": ["infra"]
+    },
+    {
+      "id": "infra",
+      "name": "Infrastructure",
+      "tag": "Layer 5 / 6",
+      "desc": "四个独立的基础设施包，通过接口解耦。LLM 包抽象 Anthropic/OpenAI 的流式 API。Tmux 包通过直接 CLI 调用管理 tmux 会话（500ms 轮询）。Adapters 包抽象不同 coding agent CLI（Claude Code、Copilot）。Config 包从多源加载配置，优先级：env > config.json > .claude/settings > 默认值。",
+      "components": [
+        { "id": "llm", "name": "internal/llm/", "path": "internal/llm/", "loc": 492, "detail": "interface: Provider (Stream, Complete) · anthropic.go · openai.go · Message/StreamEvent 类型" },
+        { "id": "tmux", "name": "internal/tmux/", "path": "internal/tmux/", "loc": 946, "detail": "interface: TmuxClient · Client (500ms poll) · StateMirror (thread-safe) · Parser (20+ notification types) · Commands builder" },
+        { "id": "adapters", "name": "internal/adapters/", "path": "internal/adapters/", "loc": 288, "detail": "interface: AgentAdapter · claude.go (--dangerously-skip-permissions) · copilot.go · output parsing (ready/working/completed/error)" },
+        { "id": "config", "name": "internal/config/", "path": "internal/config/", "loc": 290, "detail": "多源配置 · MAKRO_* env · ~/.makro/config.json · ~/.claude/settings.json · 自动 provider 检测" }
+      ],
+      "deps": ["external"]
+    },
+    {
+      "id": "external",
+      "name": "External",
+      "tag": "Layer 6 / 6",
+      "desc": "Makro 依赖的外部系统。tmux 是核心依赖，通过专用 socket 隔离。Anthropic 和 OpenAI 提供 LLM 能力。PTY 提供伪终端。Claude Code 的 settings.json 提供模型偏好和 API key 回退。",
+      "components": [
+        { "id": "ext-anthropic", "name": "Anthropic API", "path": "anthropic-sdk-go", "loc": 0, "detail": "streaming · tool use · claude-opus-4-7 / claude-sonnet-4-6" },
+        { "id": "ext-openai", "name": "OpenAI API", "path": "openai-go/v3", "loc": 0, "detail": "streaming · function calling · BigModel URL rewriting" },
+        { "id": "ext-tmux", "name": "tmux CLI", "path": "~/.makro/tmux.sock", "loc": 0, "detail": "new-session -A · capture-pane · 专用服务器隔离" },
+        { "id": "ext-pty", "name": "PTY", "path": "creack/pty", "loc": 0, "detail": "伪终端 · xterm-256color · LANG=en_US.UTF-8 · 32KB buffer" },
+        { "id": "ext-settings", "name": ".claude/settings.json", "path": "~/.claude/settings.json", "loc": 0, "detail": "模型偏好 · API key 回退 · 配置优先级链的最后一环" }
+      ],
+      "deps": []
+    }
+  ]
+}

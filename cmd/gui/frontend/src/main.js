@@ -142,7 +142,7 @@ function addTab(name) {
     const wrapper = document.createElement("div");
     wrapper.className = "terminal-wrapper"; wrapper.id = "term-" + name;
     terminalsEl.appendChild(wrapper);
-    const term = new Terminal({ fontSize: 13, allowProposedApi: true, convertEol: false, fontFamily: '"SF Mono", "JetBrains Mono", Menlo, Monaco, "PingFang SC", "Noto Sans CJK SC", monospace', theme: { background: "#0c0c0e", foreground: "#e4e4e7", cursor: "#34d399", cursorAccent: "#0c0c0e", selectionBackground: "rgba(52,211,153,0.2)", selectionForeground: "#e4e4e7", black: "#3f3f46", red: "#f87171", green: "#34d399", yellow: "#fbbf24", blue: "#60a5fa", magenta: "#c084fc", cyan: "#22d3ee", white: "#e4e4e7", brightBlack: "#71717a", brightRed: "#fca5a5", brightGreen: "#6ee7b7", brightYellow: "#fde68a", brightBlue: "#93c5fd", brightMagenta: "#d8b4fe", brightCyan: "#67e8f9", brightWhite: "#ffffff" }, cursorBlink: true, scrollback: 10000 });
+    const term = new Terminal({ fontSize: 13, allowProposedApi: true, convertEol: false, rendererType: 'dom', fontFamily: '"SF Mono", "JetBrains Mono", Menlo, Monaco, "PingFang SC", "Noto Sans CJK SC", monospace', theme: { background: "#0c0c0e", foreground: "#e4e4e7", cursor: "#34d399", cursorAccent: "#0c0c0e", selectionBackground: "rgba(52,211,153,0.2)", selectionForeground: "#e4e4e7", black: "#3f3f46", red: "#f87171", green: "#34d399", yellow: "#fbbf24", blue: "#60a5fa", magenta: "#c084fc", cyan: "#22d3ee", white: "#e4e4e7", brightBlack: "#71717a", brightRed: "#fca5a5", brightGreen: "#6ee7b7", brightYellow: "#fde68a", brightBlue: "#93c5fd", brightMagenta: "#d8b4fe", brightCyan: "#67e8f9", brightWhite: "#ffffff" }, cursorBlink: true, scrollback: 10000 });
     const fitAddon = new FitAddon(); term.loadAddon(fitAddon);
     const u11 = new Unicode11Addon();
     term.loadAddon(u11);
@@ -160,6 +160,7 @@ function addTab(name) {
             navigator.clipboard.readText().then(text => { if (text) WriteInput(name, toBase64(text)).catch(console.error); }).catch(() => {});
         }
     }, true);
+    wrapper.addEventListener("mouseup", () => { try { term.refresh(0, term.rows - 1); } catch (e) {} });
     let _resizeTimer = null;
     term.onResize(({cols, rows}) => {
         if (cols === term._lastCols && rows === term._lastRows) return;
@@ -170,6 +171,7 @@ function addTab(name) {
     const ro = new ResizeObserver(() => {
         if (wrapper.offsetWidth === 0 || wrapper.offsetHeight === 0) return;
         try { fitAddon.fit(); } catch (e) {}
+        requestAnimationFrame(() => { try { term.refresh(0, term.rows - 1); } catch (e) {} });
     });
     ro.observe(wrapper);
     terminals.set(name, {term, fitAddon, wrapper, ro});
@@ -238,6 +240,7 @@ function forceResize(name) {
     if (!entry) return;
     try { entry.fitAddon.fit(); } catch (e) {}
     ResizeTerminal(name, entry.term.cols, entry.term.rows).catch(console.error);
+    requestAnimationFrame(() => { try { entry.term.refresh(0, entry.term.rows - 1); } catch (e) {} });
 }
 
 async function refreshSessions() {

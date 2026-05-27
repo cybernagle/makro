@@ -62,7 +62,7 @@ func (t *TerminalService) AttachSession(sessionName string, cols, rows int) erro
 		"-x", fmt.Sprintf("%d", cols),
 		"-y", fmt.Sprintf("%d", rows))
 
-	cmd := exec.Command(tmuxBin, args...)
+	cmd := exec.Command(getTmuxBin(), args...)
 	cmd.Env = ensureTerm(os.Environ())
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
@@ -146,7 +146,7 @@ func (t *TerminalService) DetachSession(sessionName string) error {
 // We identify stale clients by their small width (GUI PTY starts at 97 cols before clamp).
 func detachStaleClients(sessionName string) {
 	args := tmuxArgs("list-clients", "-t", sessionName, "-F", "#{client_tty}:#{client_width}")
-	out, err := exec.Command(tmuxBin, args...).Output()
+	out, err := exec.Command(getTmuxBin(), args...).Output()
 	if err != nil {
 		return
 	}
@@ -163,7 +163,7 @@ func detachStaleClients(sessionName string) {
 		fmt.Sscanf(wStr, "%d", &width)
 		// Detach clients smaller than 150 cols — these are stale GUI PTYs or xterm.js instances.
 		if width > 0 && width < 150 {
-			exec.Command(tmuxBin, tmuxArgs("detach-client", "-t", tty)...).Run()
+			exec.Command(getTmuxBin(), tmuxArgs("detach-client", "-t", tty)...).Run()
 		}
 	}
 }
