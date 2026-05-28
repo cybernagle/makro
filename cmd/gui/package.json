@@ -1,0 +1,48 @@
+{
+  "name": "makro",
+  "version": "0.1.0",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "MAKRO_DEV=1 electron .",
+    "build:frontend": "cd frontend && npm run build",
+    "build:go": "go build -o bin/makro-serve ./cmd/gui/",
+    "pack": "electron-builder --mac",
+    "start": "electron ."
+  },
+  "build": {
+    "appId": "com.cybernagle.makro",
+    "productName": "Makro",
+    "files": [
+      "electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "bin/makro-serve",
+        "to": "bin/makro-serve"
+      },
+      {
+        "from": "frontend/dist",
+        "to": "frontend/dist"
+      },
+      {
+        "from": "frontend/public",
+        "to": "frontend/public"
+      }
+    ],
+    "afterPack": "./electron/afterPack.js",
+    "mac": {
+      "target": "dmg",
+      "identity": null,
+      "category": "public.app-category.developer-tools",
+      "icon": "build/darwin/icons.icns"
+    },
+    "directories": {
+      "output": "release"
+    }
+  },
+  "devDependencies": {
+    "electron": "^35.7.5",
+    "electron-builder": "^26.0.0"
+  }
+}

@@ -325,10 +325,10 @@ html, body { height: 100%; overflow: hidden; }
 .terminal-wrapper {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
-  display: none;
+  visibility: hidden;
   padding: 4px;
 }
-.terminal-wrapper.active { display: block; }
+.terminal-wrapper.active { visibility: visible; }
 
 /* ── Empty State ── */
 

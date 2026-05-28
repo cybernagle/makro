@@ -1,23 +1,17 @@
-import {Events} from "@wailsio/runtime";
-import {ListSessions, CreateSession, KillSession, CapturePane} from "../bindings/github.com/naglezhang/makro/cmd/gui/tmuxservice.js";
-import {AttachSession, DetachSession, WriteInput, ResizeTerminal} from "../bindings/github.com/naglezhang/makro/cmd/gui/terminalservice.js";
-import {SendMessage, LoadChatHistory, StartMonitor} from "../bindings/github.com/naglezhang/makro/cmd/gui/chatservice.js";
+// Makro GUI — fetch/WebSocket version (no Wails bindings)
+const BACKEND = window.makro?.backendUrl || 'http://127.0.0.1:7070';
+const WS_URL = window.makro?.wsUrl || 'ws://127.0.0.1:7070';
 
 import {Terminal} from "@xterm/xterm";
 import {FitAddon} from "@xterm/addon-fit";
-import {Unicode11Addon} from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import {marked} from "marked";
-
-// btoa doesn't handle multi-byte Unicode — use TextEncoder for proper UTF-8→base64
-function toBase64(str) {
-    return btoa(String.fromCharCode(...new TextEncoder().encode(str)));
-}
 
 const terminals = new Map();
 let activeTab = null;
 let activeAssistantEl = null;
 let currentToolEl = null;
+let chatWs = null;
 
 const chatPanel    = document.getElementById("chat-panel");
 const chatMessages = document.getElementById("chat-messages");
@@ -44,51 +38,61 @@ btnSend.addEventListener("click", () => {
     if (chatInput.value.trim()) { sendChat(chatInput.value); chatInput.value = ""; }
 });
 
+// ── API helpers ──
+async function api(path, opts) { return fetch(BACKEND + path, opts).then(r => r.json()); }
+
+// ── Chat ──
 function sendChat(text) {
-    // &session: monitor mode — don't create assistant bubble.
     if (text.trim().startsWith("&")) {
         addChatMessage("user", text);
-        SendMessage(text).catch(err => addChatMessage("system", "Error: " + err));
+        fetch(BACKEND + "/api/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text})}).catch(err => addChatMessage("system", "Error: " + err));
         chatInput.disabled = false;
         chatInput.focus();
         return;
     }
-
-    // @session: switch terminal tab.
     const mention = text.trim().match(/^@(\S+)/);
-    if (mention) {
-        switchToTab(mention[1]);
-    }
-
+    if (mention) { switchToTab(mention[1]); }
     addChatMessage("user", text);
     chatInput.disabled = true;
     activeAssistantEl = addChatMessage("assistant", "");
     currentToolEl = null;
-    SendMessage(text).catch(err => { appendToEl(activeAssistantEl, "[error: " + err + "]"); chatInput.disabled = false; });
+    fetch(BACKEND + "/api/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text})}).catch(err => { appendToEl(activeAssistantEl, "[error: " + err + "]"); chatInput.disabled = false; });
 }
 
-Events.On("chat:text", (ev) => {
-    if (currentToolEl) {
-        const newEl = document.createElement("div");
-        newEl.className = "chat-msg assistant";
-        newEl.dataset.raw = "";
-        if (currentToolEl.nextSibling) {
-            chatMessages.insertBefore(newEl, currentToolEl.nextSibling);
-        } else {
-            chatMessages.appendChild(newEl);
-        }
-        activeAssistantEl = newEl;
-        currentToolEl = null;
-    }
-    appendToEl(activeAssistantEl, ev.data);
-});
-Events.On("chat:tool_call", (ev) => { const d = JSON.parse(ev.data); currentToolEl = addToolCall(d.tool); });
-Events.On("chat:tool_result", (ev) => { const d = JSON.parse(ev.data); if (currentToolEl) setToolResult(currentToolEl, d.result); });
-Events.On("chat:done", () => { chatInput.disabled = false; chatInput.focus(); activeAssistantEl = null; currentToolEl = null; });
-Events.On("chat:error", (ev) => { appendToEl(activeAssistantEl, "[error: " + ev.data + "]"); chatInput.disabled = false; });
-Events.On("chat:init_error", (ev) => { addChatMessage("system", "Init error: " + ev.data); });
-Events.On("chat:system", (ev) => { addChatMessage("system", ev.data); });
-Events.On("chat:switch_tab", (ev) => { if (ev.data) switchToTab(ev.data); });
+function connectChatWs() {
+    if (chatWs) return;
+    chatWs = new WebSocket(WS_URL + "/ws/chat");
+    chatWs.onmessage = (ev) => {
+        try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === "ping") return;
+            if (msg.type === "user") return;
+            if (msg.type === "assistant") {
+                if (currentToolEl) {
+                    const newEl = document.createElement("div");
+                    newEl.className = "chat-msg assistant";
+                    newEl.dataset.raw = "";
+                    if (currentToolEl.nextSibling) { chatMessages.insertBefore(newEl, currentToolEl.nextSibling); } else { chatMessages.appendChild(newEl); }
+                    activeAssistantEl = newEl;
+                    currentToolEl = null;
+                }
+                appendToEl(activeAssistantEl, msg.data);
+            } else if (msg.type === "tool_call") {
+                currentToolEl = addToolCall(msg.data);
+            } else if (msg.type === "tool_result") {
+                if (currentToolEl) setToolResult(currentToolEl, msg.data);
+            } else if (msg.type === "done") {
+                chatInput.disabled = false; chatInput.focus(); activeAssistantEl = null; currentToolEl = null;
+            } else if (msg.type === "error") {
+                appendToEl(activeAssistantEl, "[error: " + msg.data + "]"); chatInput.disabled = false;
+            } else if (msg.type === "system") {
+                addChatMessage("system", msg.data);
+            }
+        } catch (e) {}
+    };
+    chatWs.onclose = () => { chatWs = null; setTimeout(connectChatWs, 2000); };
+    chatWs.onerror = () => { chatWs.close(); };
+}
 
 function addChatMessage(role, text) {
     const div = document.createElement("div");
@@ -124,11 +128,7 @@ function addToolCall(toolName) {
     div.appendChild(header);
     div.appendChild(body);
     const ref = currentToolEl || activeAssistantEl;
-    if (ref && ref.nextSibling) {
-        chatMessages.insertBefore(div, ref.nextSibling);
-    } else {
-        chatMessages.appendChild(div);
-    }
+    if (ref && ref.nextSibling) { chatMessages.insertBefore(div, ref.nextSibling); } else { chatMessages.appendChild(div); }
     chatMessages.scrollTop = chatMessages.scrollHeight;
     return div;
 }
@@ -138,18 +138,50 @@ function setToolResult(toolEl, result) {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
+// ── Terminal tabs ──
 function addTab(name) {
     const wrapper = document.createElement("div");
     wrapper.className = "terminal-wrapper"; wrapper.id = "term-" + name;
     terminalsEl.appendChild(wrapper);
-    const term = new Terminal({ fontSize: 13, allowProposedApi: true, convertEol: false, rendererType: 'dom', fontFamily: '"SF Mono", "JetBrains Mono", Menlo, Monaco, "PingFang SC", "Noto Sans CJK SC", monospace', theme: { background: "#0c0c0e", foreground: "#e4e4e7", cursor: "#34d399", cursorAccent: "#0c0c0e", selectionBackground: "rgba(52,211,153,0.2)", selectionForeground: "#e4e4e7", black: "#3f3f46", red: "#f87171", green: "#34d399", yellow: "#fbbf24", blue: "#60a5fa", magenta: "#c084fc", cyan: "#22d3ee", white: "#e4e4e7", brightBlack: "#71717a", brightRed: "#fca5a5", brightGreen: "#6ee7b7", brightYellow: "#fde68a", brightBlue: "#93c5fd", brightMagenta: "#d8b4fe", brightCyan: "#67e8f9", brightWhite: "#ffffff" }, cursorBlink: true, scrollback: 10000 });
+    const term = new Terminal({
+        fontSize: 13,
+        fontFamily: '"SF Mono", "JetBrains Mono", Menlo, Monaco, "PingFang SC", "Noto Sans CJK SC", monospace',
+        theme: {
+            background: "#0c0c0e", foreground: "#e4e4e7", cursor: "#34d399", cursorAccent: "#0c0c0e",
+            selectionBackground: "rgba(52,211,153,0.2)", selectionForeground: "#e4e4e7",
+            black: "#3f3f46", red: "#f87171", green: "#34d399", yellow: "#fbbf24",
+            blue: "#60a5fa", magenta: "#c084fc", cyan: "#22d3ee", white: "#e4e4e7",
+            brightBlack: "#71717a", brightRed: "#fca5a5", brightGreen: "#6ee7b7",
+            brightYellow: "#fde68a", brightBlue: "#93c5fd", brightMagenta: "#d8b4fe",
+            brightCyan: "#67e8f9", brightWhite: "#ffffff"
+        },
+        cursorBlink: true, scrollback: 10000,
+    });
     const fitAddon = new FitAddon(); term.loadAddon(fitAddon);
-    const u11 = new Unicode11Addon();
-    term.loadAddon(u11);
-    term.unicode.activeVersion = '11';
     term.open(wrapper);
-    term.onData((data) => WriteInput(name, toBase64(data)).catch(console.error));
-    // Cmd/Ctrl+C: copy selection if exists, else fall through to PTY (SIGINT).
+
+    // WebSocket for this terminal (sin-golang pattern: binary frames)
+    const ws = new WebSocket(WS_URL + "/ws/xterm/" + name + "?cols=" + term.cols + "&rows=" + term.rows);
+    ws.binaryType = "arraybuffer";
+
+    ws.onmessage = (ev) => {
+        // Binary frame = PTY output
+        if (ev.data instanceof ArrayBuffer) {
+            term.write(new Uint8Array(ev.data));
+        }
+    };
+    ws.onclose = () => {
+        term.write("\r\n\x1b[33m[disconnected]\x1b[0m");
+        removeTab(name);
+    };
+
+    term.onData((data) => {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(new TextEncoder().encode(data));
+        }
+    });
+
+    // Copy/paste
     wrapper.addEventListener("keydown", (e) => {
         const mod = e.metaKey || e.ctrlKey;
         if (mod && e.key.toLowerCase() === "c") {
@@ -157,24 +189,25 @@ function addTab(name) {
             if (sel) { e.preventDefault(); e.stopPropagation(); navigator.clipboard.writeText(sel).catch(() => {}); }
         } else if (mod && e.key.toLowerCase() === "v") {
             e.preventDefault(); e.stopPropagation();
-            navigator.clipboard.readText().then(text => { if (text) WriteInput(name, toBase64(text)).catch(console.error); }).catch(() => {});
+            navigator.clipboard.readText().then(text => { if (text && ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(text)); }).catch(() => {});
         }
     }, true);
-    wrapper.addEventListener("mouseup", () => { try { term.refresh(0, term.rows - 1); } catch (e) {} });
-    let _resizeTimer = null;
+
+    // Resize
     term.onResize(({cols, rows}) => {
-        if (cols === term._lastCols && rows === term._lastRows) return;
-        term._lastCols = cols; term._lastRows = rows;
-        if (_resizeTimer) clearTimeout(_resizeTimer);
-        _resizeTimer = setTimeout(() => ResizeTerminal(name, cols, rows).catch(console.error), 150);
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({type: "resize", cols, rows}));
+        }
     });
     const ro = new ResizeObserver(() => {
         if (wrapper.offsetWidth === 0 || wrapper.offsetHeight === 0) return;
         try { fitAddon.fit(); } catch (e) {}
-        requestAnimationFrame(() => { try { term.refresh(0, term.rows - 1); } catch (e) {} });
     });
     ro.observe(wrapper);
-    terminals.set(name, {term, fitAddon, wrapper, ro});
+
+    terminals.set(name, {term, fitAddon, wrapper, ro, ws});
+
+    // Tab UI
     const tab = document.createElement("div");
     tab.className = "tab"; tab.dataset.session = name;
     tab.innerHTML = '<span class="name"></span><button class="close">×</button>';
@@ -183,20 +216,8 @@ function addTab(name) {
     tab.querySelector(".close").addEventListener("click", (e) => { e.stopPropagation(); closeTab(name); });
     tabsEl.appendChild(tab);
     emptyState.classList.add("hidden"); terminalsEl.classList.add("visible");
-    // Make wrapper visible first, then fit and register data listeners.
     switchToTab(name);
     fitAddon.fit();
-    console.log(`[addTab] ${name}: after fit cols=${term.cols} rows=${term.rows} _lastCols=${term._lastCols} _lastRows=${term._lastRows} wrapper=${wrapper.offsetWidth}x${wrapper.offsetHeight}`);
-    let _refreshTimer = null;
-    Events.On("terminal:" + name, (ev) => {
-        const bytes = atob(ev.data);
-        const arr = new Uint8Array(bytes.length);
-        for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-        term.write(arr);
-        if (_refreshTimer) clearTimeout(_refreshTimer);
-        _refreshTimer = setTimeout(() => { try { term.refresh(0, term.rows - 1); } catch (e) {} }, 30);
-    });
-    Events.On("terminal:exit:" + name, () => { term.write("\r\n\x1b[33m[disconnected]\x1b[0m"); removeTab(name); });
     term.focus();
 }
 
@@ -209,75 +230,87 @@ function switchToTab(name) {
     const entry = terminals.get(name);
     if (entry) {
         if (prevTab !== name) {
-            // Force repaint after becoming visible — resize triggers full re-render.
             requestAnimationFrame(() => {
                 try { entry.fitAddon.fit(); } catch (e) {}
-                entry.term.refresh(0, entry.term.rows - 1);
             });
         }
         entry.term.focus();
     }
 }
 
-function closeTab(name) { DetachSession(name).catch(() => {}); KillSession(name).catch(() => {}); removeTab(name); }
-
-function removeTab(name) {
-    const entry = terminals.get(name); if (entry) { if (entry.ro) entry.ro.disconnect(); entry.term.dispose(); entry.wrapper.remove(); terminals.delete(name); }
+function closeTab(name) {
+    const entry = terminals.get(name);
+    if (entry) {
+        if (entry.ws) entry.ws.close();
+        if (entry.ro) entry.ro.disconnect();
+        entry.term.dispose();
+        entry.wrapper.remove();
+        terminals.delete(name);
+    }
+    fetch(BACKEND + "/api/sessions/" + name, {method: "DELETE"}).catch(() => {});
     const tab = document.querySelector(`.tab[data-session="${name}"]`); if (tab) tab.remove();
-    if (activeTab === name) { const r = Array.from(terminals.keys()); if (r.length > 0) switchToTab(r[r.length - 1]); else { activeTab = null; emptyState.classList.remove("hidden"); terminalsEl.classList.remove("visible"); } }
-}
-
-async function attachTo(name) {
-    if (terminals.has(name)) { switchToTab(name); return; }
-    try {
-        await AttachSession(name, 200, 50);
-        addTab(name);
-    } catch (err) { addChatMessage("system", "Attach failed: " + err); }
+    if (activeTab === name) {
+        const r = Array.from(terminals.keys());
+        if (r.length > 0) switchToTab(r[r.length - 1]);
+        else { activeTab = null; emptyState.classList.remove("hidden"); terminalsEl.classList.remove("visible"); }
+    }
 }
 
 function forceResize(name) {
     const entry = terminals.get(name);
     if (!entry) return;
     try { entry.fitAddon.fit(); } catch (e) {}
-    ResizeTerminal(name, entry.term.cols, entry.term.rows).catch(console.error);
-    requestAnimationFrame(() => { try { entry.term.refresh(0, entry.term.rows - 1); } catch (e) {} });
 }
 
 async function refreshSessions() {
     try {
-        const sessions = await ListSessions();
+        const sessions = await api("/api/sessions");
         const alive = new Set((sessions || []).map(s => s.name));
-        // Close tabs for sessions that no longer exist.
         for (const name of Array.from(terminals.keys())) {
             if (!alive.has(name)) removeTab(name);
         }
-        // Attach new sessions.
         for (const s of (sessions || [])) {
-            if (!terminals.has(s.name)) await attachTo(s.name);
+            if (!terminals.has(s.name)) addTab(s.name);
         }
     } catch (err) { addChatMessage("system", "Refresh error: " + err); }
 }
 
+function removeTab(name) {
+    const entry = terminals.get(name);
+    if (entry) {
+        if (entry.ro) entry.ro.disconnect();
+        entry.term.dispose();
+        entry.wrapper.remove();
+        terminals.delete(name);
+    }
+    const tab = document.querySelector(`.tab[data-session="${name}"]`); if (tab) tab.remove();
+    if (activeTab === name) {
+        const r = Array.from(terminals.keys());
+        if (r.length > 0) switchToTab(r[r.length - 1]);
+        else { activeTab = null; emptyState.classList.remove("hidden"); terminalsEl.classList.remove("visible"); }
+    }
+}
+
 function refitAll() { for (const [name] of terminals) forceResize(name); }
-btnNew.addEventListener("click", () => { const name = prompt("Session name:"); if (name) CreateSession(name, "").then(() => attachTo(name)).then(() => refreshSessions()).catch(err => addChatMessage("system", "Error: " + err)); });
+
+btnNew.addEventListener("click", () => {
+    const name = prompt("Session name:");
+    if (name) fetch(BACKEND + "/api/sessions", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name})}).then(() => refreshSessions()).catch(err => addChatMessage("system", "Error: " + err));
+});
 btnRefresh.addEventListener("click", () => refreshSessions());
 btnStart.addEventListener("click", () => refreshSessions());
 
-// Load chat history from disk.
-LoadChatHistory().then(msgs => {
-    if (msgs && msgs.length > 0) {
-        for (const m of msgs) addChatMessage(m.role, m.content);
-    }
+// ── Init ──
+fetch(BACKEND + "/api/chat/history").then(r => r.json()).then(msgs => {
+    if (msgs && msgs.length > 0) { for (const m of msgs) addChatMessage(m.role, m.content); }
 }).catch(() => {});
 
 addChatMessage("system", "Makro GUI ready.");
 refreshSessions();
-
-// Periodic session sync — close tabs for killed sessions, attach new ones.
+connectChatWs();
 setInterval(refreshSessions, 5000);
 
-// ── @ and & autocomplete hints ──
-
+// ── Autocomplete ──
 const hintEl = document.createElement("div");
 hintEl.id = "input-hint";
 chatPanel.appendChild(hintEl);
@@ -293,9 +326,7 @@ chatInput.addEventListener("input", () => {
         hintEl.classList.add("visible");
         hintEl.querySelectorAll(".hint-item").forEach(el => {
             el.addEventListener("click", () => {
-                const name = el.dataset.name;
-                const rest = trimmed.includes(" ") ? trimmed.slice(trimmed.indexOf(" ")) : " ";
-                chatInput.value = "@" + name + rest;
+                chatInput.value = "@" + el.dataset.name;
                 hintEl.classList.remove("visible");
                 chatInput.focus();
             });
@@ -318,31 +349,23 @@ chatInput.addEventListener("input", () => {
 });
 
 chatInput.addEventListener("blur", () => setTimeout(() => hintEl.classList.remove("visible"), 150));
-chatInput.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") hintEl.classList.remove("visible");
-});
+chatInput.addEventListener("keydown", (e) => { if (e.key === "Escape") hintEl.classList.remove("visible"); });
 
-// Keyboard shortcuts
+// ── Keyboard shortcuts ──
 document.addEventListener("keydown", (e) => {
     if (!(e.metaKey || e.ctrlKey)) return;
-
-    // Cmd+B toggle chat panel
     if (e.key === "b") {
         e.preventDefault();
         chatPanel.classList.toggle("collapsed");
         btnToggle.classList.toggle("collapsed", chatPanel.classList.contains("collapsed"));
-        // Two-phase resize: catch mid-transition and post-transition
         setTimeout(refitAll, 50);
         setTimeout(refitAll, 300);
-        // If collapsed, move focus to terminal
         if (chatPanel.classList.contains("collapsed")) {
             const entry = activeTab && terminals.get(activeTab);
             if (entry) setTimeout(() => entry.term.focus(), 300);
         }
         return;
     }
-
-    // Cmd+1..9 switch to tab by index
     const num = parseInt(e.key);
     if (num >= 1 && num <= 9) {
         e.preventDefault();
@@ -350,8 +373,6 @@ document.addEventListener("keydown", (e) => {
         if (num <= names.length) switchToTab(names[num - 1]);
         return;
     }
-
-    // Cmd+L focus terminal input
     if (e.key === "l") {
         e.preventDefault();
         const entry = activeTab && terminals.get(activeTab);
@@ -359,7 +380,6 @@ document.addEventListener("keydown", (e) => {
     }
 });
 
-// Cmd+J toggle focus between chat input and terminal
 document.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "j") {
         e.preventDefault();
