@@ -11,6 +11,15 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 import * as $models from "./models.js";
 
 /**
+ * CapturePane returns the current visible content of a tmux session's pane.
+ * @param {string} name
+ * @returns {$CancellablePromise<string>}
+ */
+export function CapturePane(name) {
+    return $Call.ByID(3708230577, name);
+}
+
+/**
  * @param {string} name
  * @param {string} workingDir
  * @returns {$CancellablePromise<void>}

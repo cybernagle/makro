@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"log"
+	"os"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -11,6 +12,18 @@ import (
 var assets embed.FS
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		addr := "127.0.0.1:7070"
+		if len(os.Args) > 3 && os.Args[2] == "--addr" {
+			addr = os.Args[3]
+		}
+		if err := serve(addr); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	// Default: Wails GUI mode
 	tmuxSvc := &TmuxService{}
 	termSvc := NewTerminalService()
 	chatSvc := NewChatService(nil)
@@ -49,8 +62,7 @@ func main() {
 	termSvc.SetApp(app)
 	chatSvc.SetApp(app)
 
-	err := app.Run()
-	if err != nil {
+	if err := app.Run(); err != nil {
 		log.Fatal(err)
 	}
 }

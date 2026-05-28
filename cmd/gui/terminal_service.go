@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -40,7 +39,7 @@ func (t *TerminalService) SetApp(app *application.App) {
 
 func (t *TerminalService) Startup(ctx application.Context) {}
 
-func (t *TerminalService) AttachSession(sessionName string) error {
+func (t *TerminalService) AttachSession(sessionName string, cols, rows int) error {
 	t.mu.Lock()
 	if _, exists := t.terminals[sessionName]; exists {
 		t.mu.Unlock()
@@ -48,29 +47,27 @@ func (t *TerminalService) AttachSession(sessionName string) error {
 	}
 	t.mu.Unlock()
 
+	if cols <= 0 {
+		cols = 200
+	}
+	if rows <= 0 {
+		rows = 50
+	}
+
 	// Detach stale clients for this session (leftover from previous Makro runs).
 	detachStaleClients(sessionName)
 
-	home, _ := os.UserHomeDir()
-	sockPath := filepath.Join(home, ".makro", "tmux.sock")
-	tmuxArgs := []string{"attach", "-t", sessionName}
-	if _, err := os.Stat(sockPath); err == nil {
-		tmuxArgs = append([]string{"-S", sockPath}, tmuxArgs...)
-	}
+	// tmux new-session -A: attach if exists, create if not. Initial size via -x/-y.
+	args := tmuxArgs("new-session", "-A", "-s", sessionName,
+		"-x", fmt.Sprintf("%d", cols),
+		"-y", fmt.Sprintf("%d", rows))
 
-	cmd := exec.Command(tmuxBin, tmuxArgs...)
-	var env []string
-	for _, e := range os.Environ() {
-		if strings.HasPrefix(e, "TMUX") {
-			continue
-		}
-		env = append(env, e)
-	}
-	cmd.Env = append(env, "TERM=xterm-256color")
+	cmd := exec.Command(getTmuxBin(), args...)
+	cmd.Env = ensureTerm(os.Environ())
 
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 50, Cols: 120})
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	if err != nil {
-		return fmt.Errorf("start tmux attach: %w", err)
+		return fmt.Errorf("start tmux pty: %w", err)
 	}
 
 	tp := &terminalProcess{ptmx: ptmx, pid: cmd.Process.Pid}
@@ -80,7 +77,7 @@ func (t *TerminalService) AttachSession(sessionName string) error {
 	t.mu.Unlock()
 
 	go func() {
-		buf := make([]byte, 8192)
+		buf := make([]byte, 32*1024)
 		for {
 			n, err := ptmx.Read(buf)
 			if n > 0 {
@@ -149,7 +146,7 @@ func (t *TerminalService) DetachSession(sessionName string) error {
 // We identify stale clients by their small width (GUI PTY starts at 97 cols before clamp).
 func detachStaleClients(sessionName string) {
 	args := tmuxArgs("list-clients", "-t", sessionName, "-F", "#{client_tty}:#{client_width}")
-	out, err := exec.Command(tmuxBin, args...).Output()
+	out, err := exec.Command(getTmuxBin(), args...).Output()
 	if err != nil {
 		return
 	}
@@ -166,7 +163,7 @@ func detachStaleClients(sessionName string) {
 		fmt.Sscanf(wStr, "%d", &width)
 		// Detach clients smaller than 150 cols — these are stale GUI PTYs or xterm.js instances.
 		if width > 0 && width < 150 {
-			exec.Command(tmuxBin, tmuxArgs("detach-client", "-t", tty)...).Run()
+			exec.Command(getTmuxBin(), tmuxArgs("detach-client", "-t", tty)...).Run()
 		}
 	}
 }
@@ -185,4 +182,38 @@ type winsize struct {
 	Cols uint16
 	X    uint16
 	Y    uint16
+}
+
+// ensureTerm returns env with TERM forced to xterm-256color when missing or
+// set to a value tmux refuses (empty / "dumb"). It also ensures LANG / LC_ALL
+// pick a UTF-8 locale so tmux + downstream programs render CJK correctly.
+func ensureTerm(env []string) []string {
+	out := make([]string, 0, len(env)+2)
+	hasGood := false
+	hasLang := false
+	hasLcAll := false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TERM=") {
+			val := strings.TrimPrefix(kv, "TERM=")
+			if val != "" && val != "dumb" {
+				hasGood = true
+				out = append(out, kv)
+			}
+			continue
+		}
+		if strings.HasPrefix(kv, "LANG=") {
+			hasLang = true
+		}
+		if strings.HasPrefix(kv, "LC_ALL=") {
+			hasLcAll = true
+		}
+		out = append(out, kv)
+	}
+	if !hasGood {
+		out = append(out, "TERM=xterm-256color")
+	}
+	if !hasLang && !hasLcAll {
+		out = append(out, "LANG=en_US.UTF-8")
+	}
+	return out
 }

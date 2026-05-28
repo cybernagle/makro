@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Makro Architecture</title>
+<style>
+  :root {
+    --bg: #0a0a0c; --surface: #111114; --border: #1e1e24; --border-hi: #27272a;
+    --text: #e4e4e7; --dim: #71717a; --mid: #a1a1aa;
+    --accent: #34d399; --blue: #60a5fa; --purple: #a78bfa; --yellow: #fbbf24;
+    --orange: #f97316; --red: #f87171; --cyan: #22d3ee;
+    --added: #22c55e; --removed: #ef4444; --changed: #eab308;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, "SF Mono", "JetBrains Mono", Menlo, monospace; }
+
+  /* Toolbar */
+  #toolbar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 24px; background: var(--surface); border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  #toolbar .brand { font-weight: 700; color: var(--accent); font-size: 14px; margin-right: 16px; }
+  #toolbar label { color: var(--dim); }
+  #toolbar select, #toolbar input[type="file"] {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 8px; border-radius: 4px; font-family: inherit; font-size: 11px;
+  }
+  #toolbar select:focus, #toolbar input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  .mode-badge {
+    padding: 2px 10px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase;
+  }
+  .mode-badge.current { background: #0f2918; color: var(--accent); border: 1px solid var(--accent); }
+  .mode-badge.diff { background: #291a0f; color: var(--yellow); border: 1px solid var(--yellow); }
+  .diff-legend { display: flex; gap: 12px; margin-left: auto; }
+  .diff-legend span { font-size: 10px; color: var(--dim); }
+  .diff-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+
+  /* Layout */
+  #app { display: grid; grid-template-columns: 1fr 1fr; max-width: 1400px; margin: 0 auto; padding-top: 40px; }
+
+  /* Left: Sticky SVG */
+  #left {
+    position: sticky; top: 40px; height: calc(100vh - 40px);
+    display: flex; align-items: center; justify-content: center;
+    border-right: 1px solid var(--border); overflow: hidden;
+  }
+  #arch-svg { width: 100%; max-width: 520px; }
+
+  /* Right: Scroll sections */
+  .section {
+    min-height: calc(100vh - 40px);
+    display: flex; flex-direction: column; justify-content: center;
+    padding: 80px 48px; border-bottom: 1px solid var(--border);
+    opacity: 0.25; transition: opacity 0.4s ease;
+  }
+  .section.active { opacity: 1; }
+
+  .section-tag { font-size: 10px; text-transform: uppercase; letter-spacing: 3px; color: var(--dim); margin-bottom: 12px; }
+  .section-title { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+  .section-path { font-size: 12px; color: var(--dim); margin-bottom: 24px; }
+  .section-desc { font-size: 14px; line-height: 1.8; color: var(--mid); max-width: 520px; margin-bottom: 32px; }
+
+  .component-list { list-style: none; }
+  .component-list li {
+    padding: 12px 16px; margin-bottom: 8px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    transition: border-color 0.2s;
+  }
+  .component-list li:hover { border-color: var(--accent); }
+  .comp-name { font-weight: 600; font-size: 14px; }
+  .comp-detail { font-size: 11px; color: var(--dim); margin-top: 4px; }
+  .comp-loc { color: var(--yellow); font-size: 11px; float: right; margin-top: 2px; }
+  .dep-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 24px; }
+  .dep-tag { font-size: 10px; padding: 3px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; color: var(--dim); }
+
+  /* Diff highlight classes */
+  .diff-added { border-color: var(--added) !important; background: #0f2918 !important; }
+  .diff-removed { border-color: var(--removed) !important; background: #291018 !important; opacity: 0.5; text-decoration: line-through; }
+  .diff-changed { border-color: var(--changed) !important; background: #291a0f !important; }
+  .diff-badge {
+    font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 3px;
+    text-transform: uppercase; margin-left: 8px; vertical-align: middle;
+  }
+  .diff-badge.added { background: var(--added); color: #000; }
+  .diff-badge.removed { background: var(--removed); color: #fff; }
+  .diff-badge.changed { background: var(--changed); color: #000; }
+
+  /* SVG layer styles */
+  .layer-group { cursor: pointer; transition: opacity 0.3s; }
+  .layer-group.dim { opacity: 0.7; }
+  .layer-group.active .layer-bg { stroke: var(--accent); stroke-width: 2; }
+  .layer-bg { fill: var(--surface); stroke: var(--border-hi); stroke-width: 1; rx: 8; transition: all 0.3s; }
+  .layer-label { fill: var(--mid); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 2px; transition: fill 0.3s; }
+  .layer-group.active .layer-label { fill: var(--accent); }
+  .inner-box { opacity: 0; transition: opacity 0.3s 0.1s; }
+  .layer-group.expanded .inner-box { opacity: 1; }
+  .layer-group.dim .inner-box { opacity: 1; }
+  .inner-bg { rx: 4; stroke: var(--border-hi); stroke-width: 0.5; }
+  .inner-name { fill: var(--text); font-size: 9px; font-weight: 600; }
+  .inner-loc { fill: var(--yellow); font-size: 8px; }
+
+  /* SVG diff styles */
+  .inner-bg.diff-added { fill: #0f2918; stroke: var(--added); }
+  .inner-bg.diff-removed { fill: #291018; stroke: var(--removed); }
+  .inner-bg.diff-changed { fill: #291a0f; stroke: var(--changed); }
+  .layer-bg.diff-added { fill: #0f2918; stroke: var(--added); }
+  .layer-bg.diff-removed { fill: #291018; stroke: var(--removed); }
+  .layer-bg.diff-changed { fill: #291a0f; stroke: var(--changed); }
+
+  .flow-line { stroke: var(--border-hi); stroke-width: 1; stroke-dasharray: 3 2; opacity: 0; transition: opacity 0.3s; }
+  .flow-line.visible { opacity: 0.6; stroke: var(--accent); stroke-dasharray: none; }
+  .flow-line.visible.diff-added { stroke: var(--added); }
+  .flow-line.visible.diff-removed { stroke: var(--removed); stroke-dasharray: 4 4; }
+
+  /* Layer color themes */
+  .layer-group[data-layer="entry"] .layer-bg { fill: #132e1f; }
+  .layer-group[data-layer="presentation"] .layer-bg { fill: #131f30; }
+  .layer-group[data-layer="services"] .layer-bg { fill: #201330; }
+  .layer-group[data-layer="agent"] .layer-bg { fill: #302013; }
+  .layer-group[data-layer="infra"] .layer-bg { fill: #1f1f28; }
+  .layer-group[data-layer="external"] .layer-bg { fill: #281515; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <span class="brand">Makro</span>
+  <span id="mode-badge" class="mode-badge current">Current</span>
+  <label>Proposed:
+    <input type="file" id="proposed-input" accept=".json"/>
+  </label>
+  <button id="btn-clear" style="display:none;background:var(--bg);border:1px solid var(--border);color:var(--dim);padding:4px 12px;border-radius:4px;font-family:inherit;font-size:11px;cursor:pointer">Clear Diff</button>
+  <div class="diff-legend" id="diff-legend" style="display:none">
+    <span><span class="dot" style="background:var(--added)"></span>Added</span>
+    <span><span class="dot" style="background:var(--removed)"></span>Removed</span>
+    <span><span class="dot" style="background:var(--changed)"></span>Changed</span>
+  </div>
+</div>
+
+<div id="app">
+  <div id="left"><svg id="arch-svg" viewBox="0 0 480 620" xmlns="http://www.w3.org/2000/svg"></svg></div>
+  <div id="right"></div>
+</div>
+
+<script>
+const SVG_NS = "http://www.w3.org/2000/svg";
+let currentData = null;
+let proposedData = null;
+let currentLayer = null;
+let diffMode = false;
+
+// ── Load current architecture ──
+fetch('architecture.json').then(r => r.json()).then(data => {
+  currentData = data;
+  render(currentData);
+}).catch(e => console.error('Failed to load architecture.json:', e));
+
+// ── File input for proposed changes ──
+document.getElementById('proposed-input').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      proposedData = JSON.parse(ev.target.result);
+      diffMode = true;
+      renderDiff(currentData, proposedData);
+      document.getElementById('btn-clear').style.display = 'inline-block';
+      document.getElementById('diff-legend').style.display = 'flex';
+      document.getElementById('mode-badge').className = 'mode-badge diff';
+      document.getElementById('mode-badge').textContent = 'Diff';
+    } catch (err) { alert('Invalid JSON: ' + err.message); }
+  };
+  reader.readAsText(file);
+});
+
+document.getElementById('btn-clear').addEventListener('click', () => {
+  proposedData = null;
+  diffMode = false;
+  document.getElementById('proposed-input').value = '';
+  document.getElementById('btn-clear').style.display = 'none';
+  document.getElementById('diff-legend').style.display = 'none';
+  document.getElementById('mode-badge').className = 'mode-badge current';
+  document.getElementById('mode-badge').textContent = 'Current';
+  render(currentData);
+});
+
+// ── Render from data ──
+function render(data) {
+  renderSVG(data, null);
+  renderSections(data, null);
+  activateFirst();
+}
+
+function renderDiff(current, proposed) {
+  renderSVG(current, proposed);
+  renderSections(current, proposed);
+  activateFirst();
+}
+
+// ── SVG Rendering ──
+function renderSVG(current, proposed) {
+  const svg = document.getElementById('arch-svg');
+  svg.innerHTML = '';
+  const layers = current.layers;
+  const yPositions = [];
+  let y = 20;
+
+  layers.forEach((layer, i) => {
+    const h = layer.id === 'agent' ? 90 : (layer.id === 'infra' ? 90 : 60);
+    yPositions.push(y);
+
+    const g = el('g', { class: 'layer-group', 'data-layer': layer.id, transform: `translate(20, ${y})` });
+    g.addEventListener('click', () => {
+      const section = document.querySelector(`.section[data-layer="${layer.id}"]`);
+      if (section) section.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+
+    // Diff check for layer
+    const layerDiff = proposed ? getLayerDiff(layer, proposed.layers.find(l => l.id === layer.id)) : null;
+    const bgClass = layerDiff ? `layer-bg diff-${layerDiff.type}` : 'layer-bg';
+
+    g.appendChild(el('rect', { class: bgClass, width: 440, height: h }));
+    g.appendChild(el('text', { class: 'layer-label', x: 16, y: 20 }, layer.name));
+
+    // Expanded inner components
+    const innerG = el('g', { class: 'inner-box' });
+    let x = 12;
+    const compH = 24;
+    const innerY = 28;
+    layer.components.forEach((comp) => {
+      const w = Math.max(80, comp.name.length * 7.5 + 40);
+      if (x + w > 440) { /* skip if too wide, will be truncated */ }
+      const compDiff = layerDiff ? (layerDiff.components[comp.id] || null) : null;
+      const innerClass = compDiff ? `inner-bg diff-${compDiff.type}` : 'inner-bg';
+
+      innerG.appendChild(el('rect', { class: innerClass, x, y: innerY, width: w, height: compH, fill: getLayerColor(layer.id) }));
+      innerG.appendChild(el('text', { class: 'inner-name', x: x + 8, y: innerY + 16 }, comp.name));
+      if (comp.loc > 0) {
+        innerG.appendChild(el('text', { class: 'inner-loc', x: x + w - 8, y: innerY + 16, 'text-anchor': 'end' }, String(comp.loc)));
+      }
+      x += w + 13;
+    });
+    g.appendChild(innerG);
+    svg.appendChild(g);
+
+    y += h + 20;
+  });
+
+  // Draw flow lines
+  layers.forEach((layer, i) => {
+    (layer.deps || []).forEach(depId => {
+      const j = layers.findIndex(l => l.id === depId);
+      if (j < 0) return;
+      const y1 = yPositions[i] + (layer.id === 'agent' || layer.id === 'infra' ? 90 : 60);
+      const y2 = yPositions[j];
+      const depDiff = proposed ? getDepDiff(layer.id, depId, current, proposed) : null;
+      const cls = depDiff ? `flow-line visible diff-${depDiff}` : 'flow-line';
+      svg.appendChild(el('line', { class: cls, x1: 240, y1: y1 + 20, x2: 240, y2: y2 + 20, 'data-from': layer.id, 'data-to': depId }));
+    });
+  });
+}
+
+function getLayerColor(id) {
+  const colors = { entry: '#132e1f', presentation: '#131f30', services: '#201330', agent: '#302013', infra: '#1f1f28', external: '#281515' };
+  return colors[id] || '#1a1a1f';
+}
+
+// ── Sections Rendering ──
+function renderSections(current, proposed) {
+  const right = document.getElementById('right');
+  right.innerHTML = '';
+  current.layers.forEach(layer => {
+    const proposedLayer = proposed ? proposed.layers.find(l => l.id === layer.id) : null;
+    const layerDiff = proposed ? getLayerDiff(layer, proposedLayer) : null;
+
+    const section = el('div', { class: 'section', 'data-layer': layer.id });
+    section.innerHTML = `
+      <div class="section-tag">${layer.tag}${layerDiff ? ` <span class="diff-badge ${layerDiff.type}">${layerDiff.type}</span>` : ''}</div>
+      <div class="section-title">${layer.name}</div>
+      <div class="section-path">${layer.components.map(c => c.path).join(' · ')}</div>
+      <div class="section-desc">${layer.desc}</div>
+      <ul class="component-list">
+        ${layer.components.map(comp => {
+          const compDiff = layerDiff ? (layerDiff.components[comp.id] || null) : null;
+          const cls = compDiff ? `diff-${compDiff.type}` : '';
+          const badge = compDiff ? `<span class="diff-badge ${compDiff.type}">${compDiff.type}</span>` : '';
+          return `<li class="${cls}">
+            ${comp.loc > 0 ? `<span class="comp-loc">${comp.loc} loc</span>` : ''}
+            <div class="comp-name">${comp.name} ${badge}</div>
+            <div class="comp-detail">${comp.detail}</div>
+          </li>`;
+        }).join('')}
+      </ul>
+      ${layer.deps.length ? `<div class="dep-row">${layer.deps.map(d => {
+        const depDiff = proposed ? getDepDiff(layer.id, d, current, proposed) : null;
+        const badge = depDiff ? `<span class="diff-badge ${depDiff}" style="font-size:8px">${depDiff}</span>` : '';
+        return `<span class="dep-tag">→ ${d} ${badge}</span>`;
+      }).join('')}</div>` : ''}
+    `;
+    right.appendChild(section);
+  });
+}
+
+// ── Diff Logic ──
+function getLayerDiff(currentLayer, proposedLayer) {
+  if (!proposedLayer) return { type: 'removed', components: {} };
+  const components = {};
+  const currentIds = new Set(currentLayer.components.map(c => c.id));
+  const proposedIds = new Set(proposedLayer.components.map(c => c.id));
+
+  // Added components
+  proposedLayer.components.filter(c => !currentIds.has(c.id)).forEach(c => { components[c.id] = { type: 'added' }; });
+  // Removed components
+  currentLayer.components.filter(c => !proposedIds.has(c.id)).forEach(c => { components[c.id] = { type: 'removed' }; });
+  // Changed components
+  currentLayer.components.forEach(cc => {
+    const pc = proposedLayer.components.find(p => p.id === cc.id);
+    if (pc && (pc.loc !== cc.loc || pc.detail !== cc.detail || pc.name !== cc.name)) {
+      components[cc.id] = { type: 'changed', from: cc, to: pc };
+    }
+  });
+
+  const hasChanges = Object.keys(components).length > 0 || JSON.stringify(currentLayer.deps) !== JSON.stringify(proposedLayer.deps);
+  if (!hasChanges) return null;
+  return { type: 'changed', components };
+}
+
+function getDepDiff(fromId, toId, current, proposed) {
+  const curLayer = current.layers.find(l => l.id === fromId);
+  const proLayer = proposed.layers.find(l => l.id === fromId);
+  if (!curLayer || !proLayer) return null;
+  const curHas = (curLayer.deps || []).includes(toId);
+  const proHas = (proLayer.deps || []).includes(toId);
+  if (!curHas && proHas) return 'added';
+  if (curHas && !proHas) return 'removed';
+  return null;
+}
+
+// ── Scroll Observer ──
+function activateFirst() {
+  const sections = document.querySelectorAll('.section');
+  const layers = document.querySelectorAll('.layer-group');
+  const flows = document.querySelectorAll('.flow-line');
+  currentLayer = null;
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting && entry.intersectionRatio > 0.3) {
+        const layer = entry.target.dataset.layer;
+        if (layer !== currentLayer) {
+          currentLayer = layer;
+          sections.forEach(s => s.classList.toggle('active', s.dataset.layer === layer));
+          layers.forEach(g => {
+            const isLayer = g.dataset.layer === layer;
+            g.classList.toggle('active', isLayer);
+            g.classList.toggle('expanded', true);
+            g.classList.toggle('dim', !isLayer);
+          });
+          flows.forEach(f => {
+            const from = f.dataset.from;
+            const to = f.dataset.to;
+            const visible = from === layer || to === layer;
+            // Keep diff-added/removed classes visible, toggle base visibility
+            if (!f.classList.contains('diff-added') && !f.classList.contains('diff-removed')) {
+              f.classList.toggle('visible', visible);
+            } else {
+              f.classList.toggle('visible', true); // always show diff arrows
+            }
+          });
+        }
+      }
+    });
+  }, { threshold: 0.3 });
+
+  sections.forEach(s => observer.observe(s));
+  // Activate first
+  if (sections[0]) { sections[0].classList.add('active'); }
+  if (layers[0]) { layers[0].classList.add('active', 'expanded'); currentLayer = layers[0].dataset.layer; }
+}
+
+// ── Helpers ──
+const SVG_TAGS = new Set(['svg','g','rect','text','line','circle','path','polygon','defs','marker']);
+function el(tag, attrs, text) {
+  const e = SVG_TAGS.has(tag) ? document.createElementNS(SVG_NS, tag) : document.createElement(tag);
+  if (attrs) Object.entries(attrs).forEach(([k, v]) => { if (v !== undefined && v !== null) e.setAttribute(k, String(v)); });
+  if (text) e.textContent = text;
+  return e;
+}
+</script>
+</body>
+</html>
