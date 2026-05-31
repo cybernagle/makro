@@ -141,6 +141,14 @@ func serve(addr string) error {
 	mux.HandleFunc("/ws/chat", chatWSHandler(hub))
 	mux.HandleFunc("/api/chat/cancel", chatCancelHandler(chatSvc))
 
+	// Task API
+	taskStore, err := NewTaskStore()
+	if err != nil {
+		log.Printf("[server] task store init: %v", err)
+	}
+	mux.HandleFunc("/api/tasks", tasksHandler(taskStore))
+	mux.HandleFunc("/api/tasks/", taskRouteHandler(taskStore))
+
 	// Serve frontend static files (for Electron mode).
 	// Look for frontend/dist relative to the binary, then fall back to working dir.
 	staticDir := findStaticDir()
@@ -400,6 +408,139 @@ func chatWSHandler(hub *chatHub) http.HandlerFunc {
 			}
 		}
 	}
+}
+
+// ── Task API ──
+
+func tasksHandler(store *TaskStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			tasks, err := store.Load()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(tasks)
+		case "POST":
+			var body struct {
+				Title   string `json:"title"`
+				Content string `json:"content"`
+				Column  string `json:"column"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid json", http.StatusBadRequest)
+				return
+			}
+			if body.Column == "" {
+				body.Column = "todo"
+			}
+			t, err := store.Create(body.Title, body.Content, body.Column)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(t)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func taskRouteHandler(store *TaskStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// /api/tasks/:id or /api/tasks/:id/send
+		path := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
+		path = strings.TrimSuffix(path, "/")
+		if path == "" {
+			http.Error(w, "missing task id", http.StatusBadRequest)
+			return
+		}
+
+		// Check for /send sub-route
+		if strings.HasSuffix(path, "/send") {
+			id := strings.TrimSuffix(path, "/send")
+			if r.Method != "POST" {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			handleTaskSend(store, w, r, id)
+			return
+		}
+
+		id := path
+		switch r.Method {
+		case "PUT":
+			var patch map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+				http.Error(w, "invalid json", http.StatusBadRequest)
+				return
+			}
+			t, err := store.Update(id, patch)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(t)
+		case "DELETE":
+			if err := store.Delete(id); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func handleTaskSend(store *TaskStore, w http.ResponseWriter, r *http.Request, id string) {
+	var body struct {
+		Session string `json:"session"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if body.Session == "" {
+		http.Error(w, "missing session", http.StatusBadRequest)
+		return
+	}
+	task, err := store.Get(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	if err := sendToTmuxSession(body.Session, task.Content); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Mark as assigned and move to in-progress
+	session := body.Session
+	store.Update(id, map[string]any{"assigned_session": session, "column": "in-progress"})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func sendToTmuxSession(session, text string) error {
+	if len(text) <= 10 {
+		if err := tmuxSendKeys(session, text); err != nil {
+			return err
+		}
+		return tmuxSendEnter(session)
+	}
+	payload := fmt.Sprintf("\033[200~%s\033[201~\r", text)
+	return tmuxSendKeys(session, payload)
+}
+
+func tmuxSendKeys(session, text string) error {
+	return exec.Command(getTmuxBin(), tmuxArgs("send-keys", "-t", session, "-l", text)...).Run()
+}
+
+func tmuxSendEnter(session string) error {
+	return exec.Command(getTmuxBin(), tmuxArgs("send-keys", "-t", session, "Enter")...).Run()
 }
 
 // ── Helpers ──

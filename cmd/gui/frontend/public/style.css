@@ -56,12 +56,16 @@ html, body { height: 100%; overflow: hidden; }
 #tabs {
   display: flex;
   flex: 1;
+  min-width: 0;
   overflow-x: auto;
   gap: 2px;
   -webkit-app-region: no-drag;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-active) transparent;
 }
-#tabs::-webkit-scrollbar { display: none; }
+#tabs::-webkit-scrollbar { height: 3px; }
+#tabs::-webkit-scrollbar-track { background: transparent; }
+#tabs::-webkit-scrollbar-thumb { background: var(--bg-active); border-radius: 2px; }
 
 .tab {
   display: flex;
@@ -105,7 +109,7 @@ html, body { height: 100%; overflow: hidden; }
 .tab .close:hover { background: rgba(248,113,113,0.15); color: var(--red); }
 .tab .close:active { transform: scale(0.88); }
 
-#toolbar-spacer { flex: 1; }
+#toolbar-spacer { flex: 0 0 auto; width: 8px; }
 
 #btn-new, #btn-refresh, #btn-toggle {
   width: 28px; height: 28px;
@@ -624,3 +628,252 @@ html, body { height: 100%; overflow: hidden; }
 }
 .hint-item:hover { background: var(--accent-muted); color: var(--accent); }
 .hint-empty { padding: 5px 12px; font-size: 12px; color: var(--text-tertiary); }
+
+/* ── View Toggle Bar ── */
+
+#view-toggle-bar {
+  position: absolute;
+  right: 0; top: 0; bottom: 0;
+  width: 28px;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-default);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 6px;
+  gap: 2px;
+  z-index: 10;
+}
+
+#view-toggle-bar button {
+  width: 22px; height: 22px;
+  border: none; border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+  transition: all 0.15s ease;
+}
+#view-toggle-bar button:hover { background: var(--bg-hover); color: var(--text-secondary); }
+#view-toggle-bar button.active { background: var(--accent-muted); color: var(--accent); }
+
+#terminal-panel { position: relative; }
+#terminal-panel.dashboard-active #terminals,
+#terminal-panel.dashboard-active #empty-state { display: none; }
+#dashboard-view { display: none; height: 100%; }
+#terminal-panel.dashboard-active #dashboard-view { display: flex; flex-direction: column; }
+
+/* ── Dashboard View ── */
+
+#dashboard-view {
+  padding: 16px;
+  padding-right: 36px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-active) transparent;
+}
+
+#dashboard-sessions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.session-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: default;
+  transition: all 0.15s ease;
+  position: relative;
+}
+.session-card:hover { border-color: var(--border-default); }
+.session-card .session-name {
+  font-size: 12px; font-weight: 500;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  margin-bottom: 4px;
+}
+.session-card .session-status {
+  font-size: 10px; color: var(--text-tertiary);
+  display: flex; align-items: center; gap: 4px;
+}
+.session-card .status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.session-card .status-dot.active { background: var(--accent); }
+.session-card.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+  box-shadow: 0 0 12px rgba(52,211,153,0.15);
+}
+
+@keyframes cardPulse {
+  0% { box-shadow: 0 0 0 0 rgba(52,211,153,0.3); }
+  100% { box-shadow: 0 0 0 10px rgba(52,211,153,0); }
+}
+.session-card.pulse { animation: cardPulse 0.4s ease-out; }
+
+/* ── Kanban Board ── */
+
+#kanban-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.kanban-title {
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+#btn-add-task {
+  padding: 4px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 5px;
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+  font-size: 11px; font-family: var(--font-sans); font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+#btn-add-task:hover { background: var(--bg-hover); color: var(--accent); border-color: var(--accent); }
+
+#kanban-board {
+  display: flex;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+.kanban-column {
+  flex: 1;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 120px;
+  transition: border-color 0.15s ease;
+}
+
+.kanban-column-header {
+  padding: 8px 12px;
+  font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.kanban-cards {
+  flex: 1;
+  padding: 6px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-active) transparent;
+}
+
+.kanban-column.drag-over {
+  border-color: var(--accent);
+}
+
+.kanban-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  cursor: grab;
+  transition: all 0.12s ease;
+  position: relative;
+}
+.kanban-card:hover { border-color: var(--border-default); }
+.kanban-card:active { cursor: grabbing; }
+.kanban-card.dragging { opacity: 0.4; }
+.kanban-card .card-title {
+  font-size: 12px; color: var(--text-primary);
+  margin-bottom: 4px;
+  word-break: break-word;
+}
+.kanban-card .card-content {
+  font-size: 11px; color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 40px;
+  overflow: hidden;
+}
+.kanban-card .card-actions {
+  position: absolute;
+  top: 4px; right: 4px;
+  display: flex; gap: 2px;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.kanban-card:hover .card-actions { opacity: 1; }
+.kanban-card .card-actions button {
+  width: 18px; height: 18px;
+  border: none; border-radius: 3px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+}
+.kanban-card .card-actions button:hover { background: var(--bg-hover); color: var(--text-secondary); }
+.kanban-card .card-actions .btn-delete:hover { background: rgba(248,113,113,0.15); color: var(--red); }
+
+.drag-placeholder {
+  height: 3px;
+  background: var(--accent);
+  border-radius: 2px;
+  margin: 2px 0;
+}
+
+/* ── Task Edit Modal ── */
+
+.task-modal-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 200;
+}
+.task-modal {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  padding: 16px;
+  width: 360px;
+  max-width: 90vw;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.task-modal input, .task-modal textarea {
+  width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.task-modal input:focus, .task-modal textarea:focus { border-color: var(--border-focus); }
+.task-modal textarea { min-height: 80px; resize: vertical; }
+.task-modal .modal-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.task-modal .modal-actions button {
+  padding: 5px 14px;
+  border: none; border-radius: 6px;
+  font-size: 12px; font-family: var(--font-sans); font-weight: 500;
+  cursor: pointer;
+}
+.task-modal .btn-save { background: var(--accent); color: var(--bg-base); }
+.task-modal .btn-save:hover { background: var(--accent-hover); }
+.task-modal .btn-cancel { background: var(--bg-raised); color: var(--text-secondary); border: 1px solid var(--border-default) !important; }
+.task-modal .btn-cancel:hover { background: var(--bg-hover); }

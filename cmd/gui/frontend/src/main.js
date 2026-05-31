@@ -511,3 +511,215 @@ document.addEventListener("keydown", (e) => {
         }
     }
 });
+
+// ── Dashboard / Kanban ──
+
+let currentView = "terminal";
+let tasks = [];
+let draggedTaskId = null;
+
+const terminalPanel = document.getElementById("terminal-panel");
+const dashboardView = document.getElementById("dashboard-view");
+const btnViewTerminal = document.getElementById("btn-view-terminal");
+const btnViewDashboard = document.getElementById("btn-view-dashboard");
+const dashboardSessions = document.getElementById("dashboard-sessions");
+const kanbanBoard = document.getElementById("kanban-board");
+const btnAddTask = document.getElementById("btn-add-task");
+
+btnViewTerminal.addEventListener("click", () => switchView("terminal"));
+btnViewDashboard.addEventListener("click", () => switchView("dashboard"));
+
+function switchView(view) {
+    currentView = view;
+    btnViewTerminal.classList.toggle("active", view === "terminal");
+    btnViewDashboard.classList.toggle("active", view === "dashboard");
+    terminalPanel.classList.toggle("dashboard-active", view === "dashboard");
+    tabsEl.style.display = view === "dashboard" ? "none" : "flex";
+    if (view === "dashboard") {
+        renderDashboard();
+    } else {
+        refitAll();
+    }
+}
+
+async function loadTasks() {
+    try {
+        tasks = await api("/api/tasks") || [];
+    } catch (e) { tasks = []; }
+}
+
+async function renderDashboard() {
+    const sessions = await api("/api/sessions").catch(() => []);
+    await loadTasks();
+    renderSessionCards(sessions || []);
+    renderKanbanBoard();
+}
+
+function renderSessionCards(sessions) {
+    dashboardSessions.innerHTML = "";
+    for (const s of sessions) {
+        const card = document.createElement("div");
+        card.className = "session-card";
+        card.dataset.session = s.name;
+        card.innerHTML = '<div class="session-name"></div><div class="session-status"><span class="status-dot"></span><span class="status-text"></span></div>';
+        card.querySelector(".session-name").textContent = s.name;
+        const dot = card.querySelector(".status-dot");
+        const txt = card.querySelector(".status-text");
+        if (s.active) {
+            dot.classList.add("active");
+            txt.textContent = "active";
+        } else {
+            txt.textContent = "idle";
+        }
+        // Drop target
+        card.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            card.classList.add("drag-over");
+        });
+        card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+        card.addEventListener("drop", (e) => {
+            e.preventDefault();
+            card.classList.remove("drag-over");
+            const taskId = e.dataTransfer.getData("text/plain");
+            if (!taskId) return;
+            sendTaskToSession(taskId, s.name);
+            card.classList.add("pulse");
+            setTimeout(() => card.classList.remove("pulse"), 400);
+        });
+        // Click to navigate to session
+        card.style.cursor = "pointer";
+        card.addEventListener("click", () => {
+            switchToTab(s.name);
+            switchView("terminal");
+        });
+        dashboardSessions.appendChild(card);
+    }
+}
+
+function renderKanbanBoard() {
+    const columns = { "todo": [], "in-progress": [], "done": [] };
+    for (const t of tasks) {
+        const col = columns[t.column] || columns["todo"];
+        col.push(t);
+    }
+    for (const [col, colTasks] of Object.entries(columns)) {
+        colTasks.sort((a, b) => (a.order || 0) - (b.order || 0));
+        const container = kanbanBoard.querySelector(`.kanban-column[data-column="${col}"] .kanban-cards`);
+        if (!container) continue;
+        container.innerHTML = "";
+        for (const t of colTasks) {
+            container.appendChild(createKanbanCard(t));
+        }
+        // Column drop
+        const colEl = kanbanBoard.querySelector(`.kanban-column[data-column="${col}"]`);
+        colEl.ondragover = (e) => { e.preventDefault(); colEl.classList.add("drag-over"); };
+        colEl.ondragleave = (e) => { if (!colEl.contains(e.relatedTarget)) colEl.classList.remove("drag-over"); };
+        colEl.ondrop = (e) => {
+            e.preventDefault();
+            colEl.classList.remove("drag-over");
+            const taskId = e.dataTransfer.getData("text/plain");
+            if (!taskId) return;
+            // Check if dropped on a card within column (reorder)
+            const afterEl = getDragAfterElement(container, e.clientY);
+            const idx = afterEl ? [...container.children].indexOf(afterEl) : container.children.length;
+            updateTask(taskId, { column: col, order: idx });
+        };
+    }
+}
+
+function createKanbanCard(task) {
+    const card = document.createElement("div");
+    card.className = "kanban-card";
+    card.draggable = true;
+    card.dataset.taskId = task.id;
+    card.innerHTML = '<div class="card-title"></div><div class="card-content"></div><div class="card-actions"><button class="btn-edit" title="Edit">✎</button><button class="btn-delete" title="Delete">×</button></div>';
+    card.querySelector(".card-title").textContent = task.title;
+    const contentEl = card.querySelector(".card-content");
+    contentEl.textContent = task.content || "";
+    if (!task.content) contentEl.style.display = "none";
+
+    card.addEventListener("dragstart", (e) => {
+        draggedTaskId = task.id;
+        e.dataTransfer.setData("text/plain", task.id);
+        e.dataTransfer.effectAllowed = "move";
+        requestAnimationFrame(() => card.classList.add("dragging"));
+    });
+    card.addEventListener("dragend", () => {
+        card.classList.remove("dragging");
+        draggedTaskId = null;
+        document.querySelectorAll(".drag-over").forEach(el => el.classList.remove("drag-over"));
+    });
+
+    card.querySelector(".btn-edit").addEventListener("click", (e) => { e.stopPropagation(); openTaskModal(task); });
+    card.querySelector(".btn-delete").addEventListener("click", (e) => { e.stopPropagation(); deleteTask(task.id); });
+    card.addEventListener("dblclick", () => openTaskModal(task));
+
+    return card;
+}
+
+function getDragAfterElement(container, y) {
+    const els = [...container.querySelectorAll(".kanban-card:not(.dragging)")];
+    return els.reduce((closest, child) => {
+        const box = child.getBoundingClientRect();
+        const offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > closest.offset) {
+            return { offset, element: child };
+        }
+        return closest;
+    }, { offset: Number.NEGATIVE_INFINITY }).element;
+}
+
+async function createTask(title, content) {
+    await fetch(BACKEND + "/api/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, content }) });
+    renderDashboard();
+}
+
+async function updateTask(id, patch) {
+    await fetch(BACKEND + "/api/tasks/" + id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+    renderDashboard();
+}
+
+async function deleteTask(id) {
+    await fetch(BACKEND + "/api/tasks/" + id, { method: "DELETE" });
+    renderDashboard();
+}
+
+async function sendTaskToSession(taskId, sessionName) {
+    await fetch(BACKEND + "/api/tasks/" + taskId + "/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session: sessionName }) });
+    addChatMessage("system", `Sent task to @${sessionName}`);
+    renderDashboard();
+}
+
+function openTaskModal(task) {
+    const overlay = document.createElement("div");
+    overlay.className = "task-modal-overlay";
+    const isEdit = !!task;
+    overlay.innerHTML = `<div class="task-modal"><input class="modal-title" placeholder="Task title" value="${isEdit ? task.title.replace(/"/g, "&quot;") : ""}"/><textarea class="modal-content" placeholder="Content to send to session">${isEdit ? (task.content || "") : ""}</textarea><div class="modal-actions"><button class="btn-cancel">Cancel</button><button class="btn-save">${isEdit ? "Save" : "Create"}</button></div></div>`;
+    const titleInput = overlay.querySelector(".modal-title");
+    const contentInput = overlay.querySelector(".modal-content");
+    overlay.querySelector(".btn-cancel").addEventListener("click", () => overlay.remove());
+    overlay.querySelector(".btn-save").addEventListener("click", () => {
+        const title = titleInput.value.trim();
+        const content = contentInput.value.trim();
+        if (!title) return;
+        if (isEdit) {
+            updateTask(task.id, { title, content });
+        } else {
+            createTask(title, content);
+        }
+        overlay.remove();
+    });
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+    titleInput.focus();
+}
+
+btnAddTask.addEventListener("click", () => openTaskModal(null));
+
+// Refresh dashboard when session list refreshes
+const _origRefresh = refreshSessions;
+refreshSessions = async function() {
+    await _origRefresh();
+    if (currentView === "dashboard") renderDashboard();
+};
