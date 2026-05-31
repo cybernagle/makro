@@ -20,6 +20,7 @@ import (
 
 type ChatService struct {
 	app      *application.App
+	hub      *chatHub
 	orch     *agent.Orchestrator
 	tc       *tmux.Client
 	notifier *agent.AgentNotifier
@@ -31,11 +32,39 @@ type ChatService struct {
 }
 
 func NewChatService(app *application.App) *ChatService {
-	return &ChatService{app: app, monitors: make(map[string]context.CancelFunc)}
+	s := &ChatService{app: app, monitors: make(map[string]context.CancelFunc)}
+	// Initialize chat history immediately (doesn't need orchestrator).
+	s.initHistory()
+	return s
 }
 
 func (s *ChatService) SetApp(app *application.App) {
 	s.app = app
+}
+
+func (s *ChatService) initHistory() {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Printf("[chat_service] config load for history: %v", err)
+		return
+	}
+	if cfg.ChatHistoryPath == "" {
+		return
+	}
+	// Migrate old markdown format if JSONL doesn't exist yet.
+	jsonlPath := strings.TrimSuffix(cfg.ChatHistoryPath, ".md") + ".jsonl"
+	if _, err := os.Stat(jsonlPath); os.IsNotExist(err) {
+		if err := MigrateFromMarkdown(cfg.ChatHistoryPath, jsonlPath); err != nil {
+			log.Printf("[chat_service] migration: %v", err)
+		}
+	}
+	history, err := NewChatHistory(jsonlPath)
+	if err != nil {
+		log.Printf("[chat_service] history init: %v", err)
+		return
+	}
+	s.history = history
+	log.Printf("[chat_service] history loaded from %s", jsonlPath)
 }
 
 func (s *ChatService) Startup(ctx application.Context) {
@@ -112,15 +141,6 @@ func (s *ChatService) init() {
 
 	go notifier.Start(context.Background())
 
-	// Chat history persistence.
-	if cfg.ChatHistoryPath != "" {
-		if history, err := NewChatHistory(cfg.ChatHistoryPath); err == nil {
-			s.history = history
-		} else {
-			log.Printf("[chat_service] history init: %v", err)
-		}
-	}
-
 	s.orch = orch
 	s.tc = tc
 	s.notifier = notifier
@@ -181,6 +201,8 @@ func (s *ChatService) SendMessage(input string) error {
 		var assistantText strings.Builder
 		for ev := range ch {
 			switch ev.Type {
+			case agent.EventThinking:
+				s.emit("chat:thinking", ev.Content)
 			case agent.EventText:
 				s.emit("chat:text", ev.Content)
 				assistantText.WriteString(ev.Content)
@@ -321,7 +343,8 @@ func (s *ChatService) LoadChatHistory() []HistoryMessage {
 	if s.history == nil {
 		return nil
 	}
-	msgs, err := s.history.Load()
+	// Live context: last 50 messages
+	msgs, err := s.history.Load(50)
 	if err != nil {
 		log.Printf("[chat_service] load history: %v", err)
 		return nil
@@ -330,6 +353,27 @@ func (s *ChatService) LoadChatHistory() []HistoryMessage {
 }
 
 func (s *ChatService) emit(event string, data string) {
+	if s.hub != nil {
+		switch event {
+		case "chat:thinking":
+			s.hub.Emit("thinking", data)
+		case "chat:text":
+			s.hub.Emit("assistant", data)
+		case "chat:tool_call":
+			s.hub.Emit("tool_call", data)
+		case "chat:tool_result":
+			s.hub.Emit("tool_result", data)
+		case "chat:done":
+			s.hub.Emit("done", "")
+		case "chat:error":
+			s.hub.Emit("error", data)
+		case "chat:system":
+			s.hub.Emit("system", data)
+		case "chat:switch_tab":
+			s.hub.Emit("switch_tab", data)
+		}
+		return
+	}
 	if s.app != nil {
 		s.app.Event.Emit(event, data)
 	}

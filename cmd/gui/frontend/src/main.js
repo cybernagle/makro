@@ -6,7 +6,44 @@ import {Terminal} from "@xterm/xterm";
 import {FitAddon} from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import {marked} from "marked";
+import hljs from "highlight.js/lib/core";
+import js from "highlight.js/lib/languages/javascript";
+import ts from "highlight.js/lib/languages/typescript";
+import go from "highlight.js/lib/languages/go";
+import python from "highlight.js/lib/languages/python";
+import bash from "highlight.js/lib/languages/bash";
+import json from "highlight.js/lib/languages/json";
+import css from "highlight.js/lib/languages/css";
+import html from "highlight.js/lib/languages/xml";
+import yaml from "highlight.js/lib/languages/yaml";
+import markdown from "highlight.js/lib/languages/markdown";
+import "highlight.js/styles/github-dark-dimmed.css";
 
+hljs.registerLanguage("javascript", js);
+hljs.registerLanguage("typescript", ts);
+hljs.registerLanguage("go", go);
+hljs.registerLanguage("python", python);
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("shell", bash);
+hljs.registerLanguage("sh", bash);
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("css", css);
+hljs.registerLanguage("html", html);
+hljs.registerLanguage("xml", html);
+hljs.registerLanguage("yaml", yaml);
+hljs.registerLanguage("yml", yaml);
+hljs.registerLanguage("markdown", markdown);
+
+marked.setOptions({
+    highlight: (code, lang) => {
+        if (lang && hljs.getLanguage(lang)) {
+            try { return hljs.highlight(code, {language: lang}).value; } catch (e) {}
+        }
+        return hljs.highlightAuto(code).value;
+    },
+});
+
+let activeThinkingEl = null;
 const terminals = new Map();
 let activeTab = null;
 let activeAssistantEl = null;
@@ -32,9 +69,14 @@ btnToggle.addEventListener("click", () => {
 });
 
 chatInput.addEventListener("keydown", (e) => {
+    if (e.isComposing) return;
     if (e.key === "Enter" && chatInput.value.trim()) { sendChat(chatInput.value); chatInput.value = ""; }
 });
 btnSend.addEventListener("click", () => {
+    if (chatInput.disabled) {
+        fetch(BACKEND + "/api/chat/cancel", {method: "POST"}).catch(() => {});
+        return;
+    }
     if (chatInput.value.trim()) { sendChat(chatInput.value); chatInput.value = ""; }
 });
 
@@ -44,7 +86,7 @@ async function api(path, opts) { return fetch(BACKEND + path, opts).then(r => r.
 // ── Chat ──
 function sendChat(text) {
     if (text.trim().startsWith("&")) {
-        addChatMessage("user", text);
+        addChatMessage("user", text, new Date().toISOString());
         fetch(BACKEND + "/api/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text})}).catch(err => addChatMessage("system", "Error: " + err));
         chatInput.disabled = false;
         chatInput.focus();
@@ -52,11 +94,12 @@ function sendChat(text) {
     }
     const mention = text.trim().match(/^@(\S+)/);
     if (mention) { switchToTab(mention[1]); }
-    addChatMessage("user", text);
+    addChatMessage("user", text, new Date().toISOString());
     chatInput.disabled = true;
-    activeAssistantEl = addChatMessage("assistant", "");
+    btnSend.textContent = "Stop";
+    activeAssistantEl = addChatMessage("assistant", "", new Date().toISOString());
     currentToolEl = null;
-    fetch(BACKEND + "/api/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text})}).catch(err => { appendToEl(activeAssistantEl, "[error: " + err + "]"); chatInput.disabled = false; });
+    fetch(BACKEND + "/api/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text})}).catch(err => { appendToEl(activeAssistantEl, "[error: " + err + "]"); chatInput.disabled = false; btnSend.textContent = "Send"; });
 }
 
 function connectChatWs() {
@@ -67,11 +110,37 @@ function connectChatWs() {
             const msg = JSON.parse(ev.data);
             if (msg.type === "ping") return;
             if (msg.type === "user") return;
-            if (msg.type === "assistant") {
+            if (msg.type === "thinking") {
+                if (!activeThinkingEl) {
+                    activeThinkingEl = document.createElement("div");
+                    activeThinkingEl.className = "thinking-block collapsed";
+                    const header = document.createElement("div");
+                    header.className = "thinking-header";
+                    header.innerHTML = '<span class="arrow">▼</span><span class="thinking-badge">thinking</span>';
+                    header.addEventListener("click", () => activeThinkingEl.classList.toggle("collapsed"));
+                    const body = document.createElement("div");
+                    body.className = "thinking-body";
+                    activeThinkingEl.appendChild(header);
+                    activeThinkingEl.appendChild(body);
+                    chatMessages.appendChild(activeThinkingEl);
+                }
+                const body = activeThinkingEl.querySelector(".thinking-body");
+                body.textContent += msg.data;
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            } else if (msg.type === "assistant") {
+                // Close thinking block when assistant text starts
+                if (activeThinkingEl) { activeThinkingEl = null; }
                 if (currentToolEl) {
                     const newEl = document.createElement("div");
                     newEl.className = "chat-msg assistant";
-                    newEl.dataset.raw = "";
+                    const tsEl = document.createElement("div");
+                    tsEl.className = "chat-ts";
+                    tsEl.textContent = formatTs(new Date().toISOString());
+                    newEl.appendChild(tsEl);
+                    const bodyEl = document.createElement("div");
+                    bodyEl.className = "chat-body";
+                    bodyEl.dataset.raw = "";
+                    newEl.appendChild(bodyEl);
                     if (currentToolEl.nextSibling) { chatMessages.insertBefore(newEl, currentToolEl.nextSibling); } else { chatMessages.appendChild(newEl); }
                     activeAssistantEl = newEl;
                     currentToolEl = null;
@@ -82,11 +151,13 @@ function connectChatWs() {
             } else if (msg.type === "tool_result") {
                 if (currentToolEl) setToolResult(currentToolEl, msg.data);
             } else if (msg.type === "done") {
-                chatInput.disabled = false; chatInput.focus(); activeAssistantEl = null; currentToolEl = null;
+                chatInput.disabled = false; btnSend.textContent = "Send"; chatInput.focus(); activeAssistantEl = null; currentToolEl = null; activeThinkingEl = null;
             } else if (msg.type === "error") {
-                appendToEl(activeAssistantEl, "[error: " + msg.data + "]"); chatInput.disabled = false;
+                appendToEl(activeAssistantEl, "[error: " + msg.data + "]"); chatInput.disabled = false; btnSend.textContent = "Send";
             } else if (msg.type === "system") {
                 addChatMessage("system", msg.data);
+            } else if (msg.type === "switch_tab") {
+                if (msg.data) switchToTab(msg.data);
             }
         } catch (e) {}
     };
@@ -94,33 +165,60 @@ function connectChatWs() {
     chatWs.onerror = () => { chatWs.close(); };
 }
 
-function addChatMessage(role, text) {
+function addChatMessage(role, text, timestamp) {
     const div = document.createElement("div");
     div.className = "chat-msg " + role;
+    if (timestamp) {
+        const ts = document.createElement("div");
+        ts.className = "chat-ts";
+        ts.textContent = formatTs(timestamp);
+        div.appendChild(ts);
+    }
     if (role === "assistant") {
-        div.innerHTML = marked.parse(text || "");
-        div.dataset.raw = text || "";
+        const body = document.createElement("div");
+        body.className = "chat-body";
+        body.innerHTML = marked.parse(text || "");
+        body.dataset.raw = text || "";
+        div.appendChild(body);
+    } else if (role === "user") {
+        const body = document.createElement("div");
+        body.className = "chat-body";
+        body.textContent = text;
+        div.appendChild(body);
     } else {
-        div.textContent = (role === "user" ? "> " : "") + text;
+        div.textContent = text;
     }
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
     return div;
 }
 
+function formatTs(iso) {
+    try {
+        const d = new Date(iso);
+        const now = new Date();
+        const isToday = d.toDateString() === now.toDateString();
+        const h = d.getHours().toString().padStart(2, "0");
+        const m = d.getMinutes().toString().padStart(2, "0");
+        if (isToday) return h + ":" + m;
+        return (d.getMonth() + 1) + "/" + d.getDate() + " " + h + ":" + m;
+    } catch (e) { return ""; }
+}
+
 function appendToEl(el, text) {
     if (!el) return;
-    el.dataset.raw = (el.dataset.raw || "") + text;
-    el.innerHTML = marked.parse(el.dataset.raw);
+    const body = el.querySelector(".chat-body") || el;
+    body.dataset.raw = (body.dataset.raw || "") + text;
+    body.innerHTML = marked.parse(body.dataset.raw);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
 function addToolCall(toolName) {
     const div = document.createElement("div");
-    div.className = "tool-call";
+    div.className = "tool-call collapsed";
     const header = document.createElement("div");
     header.className = "tool-call-header";
-    header.innerHTML = '<span class="arrow">▼</span><span class="tool-name"></span>';
+    header.innerHTML = '<span class="arrow">▼</span><span class="tool-badge">tool</span><span class="tool-name"></span>';
     header.querySelector(".tool-name").textContent = toolName;
     header.addEventListener("click", () => div.classList.toggle("collapsed"));
     const body = document.createElement("div");
@@ -210,8 +308,9 @@ function addTab(name) {
     // Tab UI
     const tab = document.createElement("div");
     tab.className = "tab"; tab.dataset.session = name;
-    tab.innerHTML = '<span class="name"></span><button class="close">×</button>';
+    tab.innerHTML = '<span class="tab-idx"></span><span class="name"></span><button class="close">×</button>';
     tab.querySelector(".name").textContent = name;
+    updateTabIndices();
     tab.addEventListener("click", (e) => { if (!e.target.classList.contains("close")) switchToTab(name); });
     tab.querySelector(".close").addEventListener("click", (e) => { e.stopPropagation(); closeTab(name); });
     tabsEl.appendChild(tab);
@@ -254,6 +353,7 @@ function closeTab(name) {
         if (r.length > 0) switchToTab(r[r.length - 1]);
         else { activeTab = null; emptyState.classList.remove("hidden"); terminalsEl.classList.remove("visible"); }
     }
+    updateTabIndices();
 }
 
 function forceResize(name) {
@@ -293,6 +393,15 @@ function removeTab(name) {
 
 function refitAll() { for (const [name] of terminals) forceResize(name); }
 
+function updateTabIndices() {
+    const names = Array.from(terminals.keys());
+    document.querySelectorAll(".tab").forEach(t => {
+        const idx = names.indexOf(t.dataset.session);
+        const idxEl = t.querySelector(".tab-idx");
+        if (idxEl && idx >= 0) idxEl.textContent = idx + 1;
+    });
+}
+
 btnNew.addEventListener("click", () => {
     const name = prompt("Session name:");
     if (name) fetch(BACKEND + "/api/sessions", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name})}).then(() => refreshSessions()).catch(err => addChatMessage("system", "Error: " + err));
@@ -302,7 +411,13 @@ btnStart.addEventListener("click", () => refreshSessions());
 
 // ── Init ──
 fetch(BACKEND + "/api/chat/history").then(r => r.json()).then(msgs => {
-    if (msgs && msgs.length > 0) { for (const m of msgs) addChatMessage(m.role, m.content); }
+    if (msgs && msgs.length > 0) {
+        // Separator for restored history
+        const sep = document.createElement("div");
+        sep.className = "chat-separator";
+        chatMessages.appendChild(sep);
+        for (const m of msgs) addChatMessage(m.role, m.content, m.timestamp);
+    }
 }).catch(() => {});
 
 addChatMessage("system", "Makro GUI ready.");
@@ -353,6 +468,11 @@ chatInput.addEventListener("keydown", (e) => { if (e.key === "Escape") hintEl.cl
 
 // ── Keyboard shortcuts ──
 document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === ".") {
+        e.preventDefault();
+        fetch(BACKEND + "/api/chat/cancel", {method: "POST"}).catch(() => {});
+        return;
+    }
     if (!(e.metaKey || e.ctrlKey)) return;
     if (e.key === "b") {
         e.preventDefault();

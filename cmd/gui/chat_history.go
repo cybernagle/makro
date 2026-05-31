@@ -2,18 +2,24 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 )
 
 type HistoryMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Timestamp string `json:"timestamp,omitempty"`
 }
 
+// ChatHistory stores messages in a JSONL file (one JSON object per line).
+// Live context = last N messages loaded on startup.
+// Full history = all messages on disk, searchable on demand.
 type ChatHistory struct {
 	mu   sync.Mutex
 	path string
@@ -21,8 +27,9 @@ type ChatHistory struct {
 }
 
 func NewChatHistory(path string) (*ChatHistory, error) {
-	if err := os.MkdirAll(strings.TrimSuffix(path, "/chat.md"), 0o755); err != nil {
-		// path might not end with /chat.md — try parent dir
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("mkdir chat history: %w", err)
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
 	if err != nil {
@@ -35,25 +42,24 @@ func (ch *ChatHistory) Append(role, content string) error {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	var header string
-	switch role {
-	case "user":
-		header = fmt.Sprintf("### [%s] User", timestamp)
-	case "assistant":
-		header = fmt.Sprintf("### [%s] Assistant", timestamp)
-	default:
-		header = fmt.Sprintf("### [%s] System", timestamp)
+	msg := HistoryMessage{
+		Role:      role,
+		Content:   content,
+		Timestamp: time.Now().Format(time.RFC3339),
 	}
-
-	_, err := fmt.Fprintf(ch.file, "\n%s\n\n%s\n", header, content)
+	data, err := json.Marshal(msg)
 	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if _, err := ch.file.Write(data); err != nil {
 		return err
 	}
 	return ch.file.Sync()
 }
 
-func (ch *ChatHistory) Load() ([]HistoryMessage, error) {
+// Load returns the last N messages (live context).
+func (ch *ChatHistory) Load(n int) ([]HistoryMessage, error) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
@@ -61,13 +67,57 @@ func (ch *ChatHistory) Load() ([]HistoryMessage, error) {
 		return nil, err
 	}
 
-	var messages []HistoryMessage
+	var all []HistoryMessage
 	scanner := bufio.NewScanner(ch.file)
+	// Allow longer lines (tool results can be large)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		var msg HistoryMessage
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			continue
+		}
+		all = append(all, msg)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	// Return last N
+	if n > 0 && len(all) > n {
+		all = all[len(all)-n:]
+	}
+	return all, nil
+}
+
+// LoadAll returns all messages (long-lived context, for search/export).
+func (ch *ChatHistory) LoadAll() ([]HistoryMessage, error) {
+	return ch.Load(0)
+}
+
+// MigrateFromMarkdown reads the old markdown format and converts to JSONL.
+func MigrateFromMarkdown(mdPath, jsonlPath string) error {
+	data, err := os.ReadFile(mdPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+
+	// Parse markdown format
+	var messages []HistoryMessage
+	lines := strings.Split(string(data), "\n")
 	var currentRole string
 	var currentContent strings.Builder
 
-	for scanner.Scan() {
-		line := scanner.Text()
+	for _, line := range lines {
 		if strings.HasPrefix(line, "### [") {
 			if currentRole != "" {
 				content := strings.TrimSpace(currentContent.String())
@@ -82,7 +132,6 @@ func (ch *ChatHistory) Load() ([]HistoryMessage, error) {
 			currentContent.WriteString("\n")
 		}
 	}
-
 	if currentRole != "" {
 		content := strings.TrimSpace(currentContent.String())
 		if content != "" {
@@ -90,13 +139,23 @@ func (ch *ChatHistory) Load() ([]HistoryMessage, error) {
 		}
 	}
 
-	return messages, scanner.Err()
-}
+	if len(messages) == 0 {
+		return nil
+	}
 
-func (ch *ChatHistory) Close() error {
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
-	return ch.file.Close()
+	// Write as JSONL
+	f, err := os.OpenFile(jsonlPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	for _, msg := range messages {
+		data, _ := json.Marshal(msg)
+		data = append(data, '\n')
+		f.Write(data)
+	}
+	return nil
 }
 
 func parseRoleFromHeader(header string) string {

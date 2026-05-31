@@ -38,6 +38,7 @@ type StreamEventType int
 
 const (
 	EventTextDelta StreamEventType = iota
+	EventThinkingDelta
 	EventToolCallStart
 	EventToolCallDelta
 	EventDone
@@ -47,6 +48,7 @@ const (
 func (t StreamEventType) String() string {
 	names := map[StreamEventType]string{
 		EventTextDelta:     "text_delta",
+		EventThinkingDelta: "thinking_delta",
 		EventToolCallStart: "tool_call_start",
 		EventToolCallDelta: "tool_call_delta",
 		EventDone:          "done",
@@ -71,6 +73,7 @@ type StreamEvent struct {
 // CompleteResult holds the non-streaming LLM response.
 type CompleteResult struct {
 	Content    string
+	Thinking   string
 	ToolCalls  []ToolCall
 	StopReason string
 }

@@ -27,6 +27,7 @@ type TmuxClient interface {
 // we use direct CLI commands and poll for output.
 type Client struct {
 	socketPath string
+	binPath    string
 	owned      bool
 	notifs     chan Notification
 	state      *StateMirror
@@ -39,10 +40,30 @@ type Client struct {
 func NewClient(socketPath string, owned bool) *Client {
 	return &Client{
 		socketPath: socketPath,
+		binPath:    findTmuxBin(),
 		owned:      owned,
 		notifs:     make(chan Notification, 256),
 		state:      NewStateMirror(),
 	}
+}
+
+func (c *Client) bin() string {
+	if c.binPath != "" {
+		return c.binPath
+	}
+	return "tmux"
+}
+
+func findTmuxBin() string {
+	for _, p := range []string{"/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	if p, err := exec.LookPath("tmux"); err == nil {
+		return p
+	}
+	return "tmux"
 }
 
 func (c *Client) Start(ctx context.Context) error {
@@ -60,7 +81,7 @@ func (c *Client) Start(ctx context.Context) error {
 
 	// Start the dedicated tmux server (only for owned servers).
 	if c.owned {
-		startCmd := exec.CommandContext(ctx, "tmux", c.tmuxArgs("start-server")...)
+		startCmd := exec.CommandContext(ctx, c.bin(), c.tmuxArgs("start-server")...)
 		if err := startCmd.Run(); err != nil {
 			// Server may already be running, try to continue.
 		}
@@ -109,7 +130,7 @@ func (c *Client) Stop() error {
 
 	// Only kill owned servers; shared servers are left running.
 	if c.owned {
-		exec.Command("tmux", c.tmuxArgs("kill-server")...).Run()
+		exec.Command(c.bin(), c.tmuxArgs("kill-server")...).Run()
 		os.Remove(c.socketPath)
 	}
 
@@ -139,7 +160,7 @@ func (c *Client) Exec(cmd string) (string, error) {
 
 	args := c.tmuxArgs()
 	args = append(args, parseTmuxArgs(cmd)...)
-	out, err := exec.CommandContext(ctx, "tmux", args...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, c.bin(), args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("tmux %s: %w (%s)", cmd, err, strings.TrimSpace(string(out)))
 	}
@@ -234,7 +255,7 @@ func (c *Client) pollSessions(ctx context.Context, knownSessions map[string]stri
 	defer cancel()
 
 	args := c.tmuxArgs("list-sessions", "-F", "#{session_id}:#{session_name}:#{session_attached}")
-	out, err := exec.CommandContext(ctx, "tmux", args...).Output()
+	out, err := exec.CommandContext(ctx, c.bin(), args...).Output()
 	if err != nil {
 		// No sessions or server not running.
 		return

@@ -48,7 +48,9 @@ func (p *AnthropicProvider) Stream(ctx context.Context, messages []Message, opts
 			event := stream.Current()
 			switch e := event.AsAny().(type) {
 			case anthropic.ContentBlockStartEvent:
-				if block, ok := e.ContentBlock.AsAny().(anthropic.ToolUseBlock); ok {
+				if block, ok := e.ContentBlock.AsAny().(anthropic.ThinkingBlock); ok {
+					_ = block
+				} else if block, ok := e.ContentBlock.AsAny().(anthropic.ToolUseBlock); ok {
 					activeToolID = block.ID
 					toolCount++
 					log.Printf("[llm/anthropic] tool_call_start id=%s name=%s", block.ID, block.Name)
@@ -65,6 +67,12 @@ func (p *AnthropicProvider) Stream(ctx context.Context, messages []Message, opts
 				}
 			case anthropic.ContentBlockDeltaEvent:
 				switch delta := e.Delta.AsAny().(type) {
+				case anthropic.ThinkingDelta:
+					select {
+					case ch <- StreamEvent{Type: EventThinkingDelta, Text: delta.Thinking}:
+					case <-ctx.Done():
+						return
+					}
 				case anthropic.TextDelta:
 					textCount++
 					select {

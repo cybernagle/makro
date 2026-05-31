@@ -125,11 +125,7 @@ var upgrader = websocket.Upgrader{
 func serve(addr string) error {
 	hub := newChatHub()
 	chatSvc := NewChatService(nil)
-
-	// Wire chat service events into the hub.
-	// ChatService uses Wails events internally; we intercept them.
-	// For now, use a simpler approach: ChatService writes to hub directly.
-	_ = chatSvc
+	chatSvc.hub = hub
 
 	mux := http.NewServeMux()
 
@@ -143,6 +139,7 @@ func serve(addr string) error {
 	mux.HandleFunc("/api/chat/history", chatHistoryHandler(chatSvc))
 	mux.HandleFunc("/ws/xterm/", xtermWSHandler)
 	mux.HandleFunc("/ws/chat", chatWSHandler(hub))
+	mux.HandleFunc("/api/chat/cancel", chatCancelHandler(chatSvc))
 
 	// Serve frontend static files (for Electron mode).
 	// Look for frontend/dist relative to the binary, then fall back to working dir.
@@ -150,6 +147,7 @@ func serve(addr string) error {
 	if staticDir != "" {
 		fileSrv := http.FileServer(http.Dir(staticDir))
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			// Serve static files; fall back to index.html for SPA routing.
 			fpath := filepath.Join(staticDir, filepath.Clean(r.URL.Path))
 			if _, err := os.Stat(fpath); err != nil {
@@ -252,9 +250,19 @@ func chatHandler(chatSvc *ChatService, hub *chatHub) http.HandlerFunc {
 			http.Error(w, "empty text", http.StatusBadRequest)
 			return
 		}
-		// TODO: wire into ChatService properly (it currently uses Wails events)
-		hub.Emit("user", body.Text)
+		go chatSvc.SendMessage(body.Text)
 		w.WriteHeader(http.StatusAccepted)
+	}
+}
+
+func chatCancelHandler(chatSvc *ChatService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		chatSvc.Cancel()
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

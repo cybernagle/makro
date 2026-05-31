@@ -20,6 +20,7 @@ type OrchestratorEventType int
 
 const (
 	EventText OrchestratorEventType = iota
+	EventThinking
 	EventToolCall
 	EventToolResult
 	EventDone
@@ -28,6 +29,7 @@ const (
 func (t OrchestratorEventType) String() string {
 	names := map[OrchestratorEventType]string{
 		EventText:       "text",
+		EventThinking:   "thinking",
 		EventToolCall:   "tool_call",
 		EventToolResult: "tool_result",
 		EventDone:       "done",
@@ -384,6 +386,9 @@ func (o *Orchestrator) handleLLM(ctx context.Context, ch chan<- OrchestratorEven
 
 		log.Printf("[orchestrator] complete done text_len=%d tools=%d stop=%s", len(result.Content), len(result.ToolCalls), result.StopReason)
 
+		if result.Thinking != "" {
+			ch <- OrchestratorEvent{Type: EventThinking, Content: result.Thinking}
+		}
 		if result.Content != "" {
 			ch <- OrchestratorEvent{Type: EventText, Content: result.Content}
 		}

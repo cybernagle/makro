@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -54,6 +55,31 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message, opts Ge
 				case ch <- StreamEvent{Type: EventTextDelta, Text: delta.Content}:
 				case <-ctx.Done():
 					return
+				}
+			}
+
+			// Capture reasoning/thinking (BigModel, DeepSeek, QwQ, etc.)
+			if raw := evt.RawJSON(); raw != "" {
+				var chunk struct {
+					Choices []struct {
+						Delta struct {
+							ReasoningContent string `json:"reasoning_content"`
+							Reasoning        string `json:"reasoning"`
+						} `json:"delta"`
+					} `json:"choices"`
+				}
+				if json.Unmarshal([]byte(raw), &chunk) == nil && len(chunk.Choices) > 0 {
+					rc := chunk.Choices[0].Delta.ReasoningContent
+					if rc == "" {
+						rc = chunk.Choices[0].Delta.Reasoning
+					}
+					if rc != "" {
+						select {
+						case ch <- StreamEvent{Type: EventThinkingDelta, Text: rc}:
+						case <-ctx.Done():
+							return
+						}
+					}
 				}
 			}
 
@@ -129,6 +155,24 @@ func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, opts 
 	result := &CompleteResult{
 		Content:    choice.Message.Content,
 		StopReason: string(choice.FinishReason),
+	}
+
+	// Extract thinking/reasoning from raw JSON (BigModel, DeepSeek, etc.)
+	if raw := resp.RawJSON(); raw != "" {
+		var rj struct {
+			Choices []struct {
+				Message struct {
+					ReasoningContent string `json:"reasoning_content"`
+					Reasoning        string `json:"reasoning"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal([]byte(raw), &rj) == nil && len(rj.Choices) > 0 {
+			result.Thinking = rj.Choices[0].Message.ReasoningContent
+			if result.Thinking == "" {
+				result.Thinking = rj.Choices[0].Message.Reasoning
+			}
+		}
 	}
 
 	for _, tc := range choice.Message.ToolCalls {

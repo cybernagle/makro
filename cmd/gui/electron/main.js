@@ -66,6 +66,8 @@ function createWindow() {
     },
   });
 
+  win.webContents.openDevTools();
+
   // In dev, load from Vite dev server; in production, load from Go HTTP server.
   const isDev = process.env.MAKRO_DEV === '1';
   if (isDev) {
