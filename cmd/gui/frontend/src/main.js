@@ -474,6 +474,11 @@ document.addEventListener("keydown", (e) => {
         return;
     }
     if (!(e.metaKey || e.ctrlKey)) return;
+    if (e.key === "d") {
+        e.preventDefault();
+        switchView(currentView === "dashboard" ? "terminal" : "dashboard");
+        return;
+    }
     if (e.key === "b") {
         e.preventDefault();
         chatPanel.classList.toggle("collapsed");
