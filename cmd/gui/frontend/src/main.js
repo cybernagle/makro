@@ -113,11 +113,12 @@ function connectChatWs() {
             if (msg.type === "thinking") {
                 if (!activeThinkingEl) {
                     activeThinkingEl = document.createElement("div");
-                    activeThinkingEl.className = "thinking-block collapsed";
+                    activeThinkingEl.className = "thinking-block";
                     const header = document.createElement("div");
                     header.className = "thinking-header";
                     header.innerHTML = '<span class="arrow">▼</span><span class="thinking-badge">thinking</span>';
-                    header.addEventListener("click", () => activeThinkingEl.classList.toggle("collapsed"));
+                    const block = activeThinkingEl;
+                    header.addEventListener("click", () => block.classList.toggle("collapsed"));
                     const body = document.createElement("div");
                     body.className = "thinking-body";
                     activeThinkingEl.appendChild(header);
@@ -128,8 +129,8 @@ function connectChatWs() {
                 body.textContent += msg.data;
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             } else if (msg.type === "assistant") {
-                // Close thinking block when assistant text starts
-                if (activeThinkingEl) { activeThinkingEl = null; }
+                // Collapse thinking block when assistant text starts
+                if (activeThinkingEl) { activeThinkingEl.classList.add("collapsed"); activeThinkingEl = null; }
                 if (currentToolEl) {
                     const newEl = document.createElement("div");
                     newEl.className = "chat-msg assistant";
