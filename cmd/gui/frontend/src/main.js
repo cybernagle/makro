@@ -474,9 +474,14 @@ document.addEventListener("keydown", (e) => {
         return;
     }
     if (!(e.metaKey || e.ctrlKey)) return;
+    if (e.key === "t") {
+        e.preventDefault();
+        if (currentView !== "terminal") switchView("terminal");
+        return;
+    }
     if (e.key === "d") {
         e.preventDefault();
-        switchView(currentView === "dashboard" ? "terminal" : "dashboard");
+        if (currentView !== "dashboard") switchView("dashboard");
         return;
     }
     if (e.key === "b") {
