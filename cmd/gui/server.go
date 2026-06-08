@@ -122,15 +122,28 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-func serve(addr string) error {
+func serve(addr string, tlsCert, tlsKey, password string) error {
 	hub := newChatHub()
 	chatSvc := NewChatService(nil)
 	chatSvc.hub = hub
 
+	// Recover tmux sessions from snapshot (if tmux crashed) before serving.
+	if n := RecoverFromSnapshot(); n > 0 {
+		hub.Emit("system", fmt.Sprintf("Recovered %d tmux sessions from snapshot", n))
+	}
+
+	// Start periodic snapshot loop (every 5 minutes).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	StartSnapshotLoop(ctx, 5*time.Minute)
+
 	mux := http.NewServeMux()
 
-	// CORS middleware for dev.
-	handler := corsMiddleware(mux)
+	var handler http.Handler = mux
+	if password != "" {
+		handler = authMiddleware(handler, password)
+	}
+	handler = corsMiddleware(handler)
 
 	// ── API routes ──
 	mux.HandleFunc("/api/sessions", sessionsHandler)
@@ -140,6 +153,8 @@ func serve(addr string) error {
 	mux.HandleFunc("/ws/xterm/", xtermWSHandler)
 	mux.HandleFunc("/ws/chat", chatWSHandler(hub))
 	mux.HandleFunc("/api/chat/cancel", chatCancelHandler(chatSvc))
+	mux.HandleFunc("/api/snapshot", snapshotHandler)
+	mux.HandleFunc("/api/recover", recoveryHandler)
 
 	// Task API
 	taskStore, err := NewTaskStore()
@@ -166,8 +181,19 @@ func serve(addr string) error {
 		})
 	}
 
-	log.Printf("[server] listening on %s (static: %s)", addr, staticDir)
+	proto := "http"
+	if tlsCert != "" && tlsKey != "" {
+		proto = "https"
+	}
+	authStatus := "no auth"
+	if password != "" {
+		authStatus = "password protected"
+	}
+	log.Printf("[server] listening on %s://%s (static: %s, %s)", proto, addr, staticDir, authStatus)
 	srv := &http.Server{Addr: addr, Handler: handler, ReadTimeout: 0, WriteTimeout: 0}
+	if tlsCert != "" && tlsKey != "" {
+		return srv.ListenAndServeTLS(tlsCert, tlsKey)
+	}
 	return srv.ListenAndServe()
 }
 
@@ -175,12 +201,37 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+func authMiddleware(next http.Handler, password string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Allow static files without auth
+		if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/") || strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".css") || strings.HasSuffix(r.URL.Path, ".html") || strings.HasSuffix(r.URL.Path, ".ico") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Check Authorization: Bearer <password>
+		auth := r.Header.Get("Authorization")
+		if strings.HasPrefix(auth, "Bearer ") && strings.TrimPrefix(auth, "Bearer ") == password {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Check query param for WebSocket connections
+		if r.URL.Query().Get("token") == password {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})
 }
 
@@ -577,4 +628,32 @@ func atoiDefault(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+// snapshotHandler triggers an immediate TakeSnapshot. Useful for testing and
+// for users who want to force a snapshot before a risky operation.
+func snapshotHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	snap, err := TakeSnapshot()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(snap)
+}
+
+// recoveryHandler manually triggers RecoverFromSnapshot. Useful when tmux has
+// been killed outside the server lifecycle.
+func recoveryHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	n := RecoverFromSnapshot()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"recovered": n})
 }

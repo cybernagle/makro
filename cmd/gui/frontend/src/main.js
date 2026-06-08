@@ -1,6 +1,16 @@
 // Makro GUI — fetch/WebSocket version (no Wails bindings)
 const BACKEND = window.makro?.backendUrl || 'http://127.0.0.1:7070';
 const WS_URL = window.makro?.wsUrl || 'ws://127.0.0.1:7070';
+let PASSWORD = '';
+const passwordReady = (window.makro?.getConnectionInfo)
+    ? window.makro.getConnectionInfo().then(info => { PASSWORD = info.password; })
+    : Promise.resolve();
+
+function authHeaders(extra = {}) {
+    const h = {...extra};
+    if (PASSWORD) h["Authorization"] = "Bearer " + PASSWORD;
+    return h;
+}
 
 import {Terminal} from "@xterm/xterm";
 import {FitAddon} from "@xterm/addon-fit";
@@ -62,6 +72,46 @@ const btnNew       = document.getElementById("btn-new");
 const btnRefresh   = document.getElementById("btn-refresh");
 const btnStart     = document.getElementById("btn-start");
 
+// ── Connection info popup ──
+const btnConnect     = document.getElementById("btn-connect");
+const connectPopup   = document.getElementById("connect-popup");
+const popupUrl       = document.getElementById("popup-url");
+const popupPassword  = document.getElementById("popup-password");
+let connectionInfo = null;
+
+if (window.makro?.getConnectionInfo) {
+    window.makro.getConnectionInfo().then(info => {
+        connectionInfo = info;
+        if (popupUrl) popupUrl.textContent = `http://${info.ip}:${info.port}`;
+        if (popupPassword) popupPassword.textContent = info.password;
+    });
+}
+
+btnConnect?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    connectPopup?.classList.toggle("hidden");
+});
+
+document.addEventListener("click", (e) => {
+    if (!connectPopup?.contains(e.target) && e.target !== btnConnect) {
+        connectPopup?.classList.add("hidden");
+    }
+});
+
+document.querySelectorAll(".popup-copy").forEach(btn => {
+    btn.addEventListener("click", () => {
+        const field = btn.dataset.copy;
+        let text = "";
+        if (field === "url" && connectionInfo) text = `http://${connectionInfo.ip}:${connectionInfo.port}`;
+        if (field === "password" && connectionInfo) text = connectionInfo.password;
+        navigator.clipboard.writeText(text).then(() => {
+            btn.textContent = "Copied!";
+            btn.classList.add("copied");
+            setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 1500);
+        });
+    });
+});
+
 btnToggle.addEventListener("click", () => {
     chatPanel.classList.toggle("collapsed");
     btnToggle.classList.toggle("collapsed", chatPanel.classList.contains("collapsed"));
@@ -74,20 +124,23 @@ chatInput.addEventListener("keydown", (e) => {
 });
 btnSend.addEventListener("click", () => {
     if (chatInput.disabled) {
-        fetch(BACKEND + "/api/chat/cancel", {method: "POST"}).catch(() => {});
+        fetch(BACKEND + "/api/chat/cancel", {method: "POST", headers: authHeaders()}).catch(() => {});
         return;
     }
     if (chatInput.value.trim()) { sendChat(chatInput.value); chatInput.value = ""; }
 });
 
 // ── API helpers ──
-async function api(path, opts) { return fetch(BACKEND + path, opts).then(r => r.json()); }
+async function api(path, opts = {}) {
+    opts.headers = {...authHeaders(), ...(opts.headers || {})};
+    return fetch(BACKEND + path, opts).then(r => r.json());
+}
 
 // ── Chat ──
 function sendChat(text) {
     if (text.trim().startsWith("&")) {
         addChatMessage("user", text, new Date().toISOString());
-        fetch(BACKEND + "/api/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text})}).catch(err => addChatMessage("system", "Error: " + err));
+        fetch(BACKEND + "/api/chat", {method: "POST", headers: authHeaders({"Content-Type": "application/json"}), body: JSON.stringify({text})}).catch(err => addChatMessage("system", "Error: " + err));
         chatInput.disabled = false;
         chatInput.focus();
         return;
@@ -99,12 +152,12 @@ function sendChat(text) {
     btnSend.textContent = "Stop";
     activeAssistantEl = addChatMessage("assistant", "", new Date().toISOString());
     currentToolEl = null;
-    fetch(BACKEND + "/api/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({text})}).catch(err => { appendToEl(activeAssistantEl, "[error: " + err + "]"); chatInput.disabled = false; btnSend.textContent = "Send"; });
+    fetch(BACKEND + "/api/chat", {method: "POST", headers: authHeaders({"Content-Type": "application/json"}), body: JSON.stringify({text})}).catch(err => { appendToEl(activeAssistantEl, "[error: " + err + "]"); chatInput.disabled = false; btnSend.textContent = "Send"; });
 }
 
 function connectChatWs() {
     if (chatWs) return;
-    chatWs = new WebSocket(WS_URL + "/ws/chat");
+    chatWs = new WebSocket(WS_URL + "/ws/chat" + (PASSWORD ? "?token=" + PASSWORD : ""));
     chatWs.onmessage = (ev) => {
         try {
             const msg = JSON.parse(ev.data);
@@ -113,7 +166,7 @@ function connectChatWs() {
             if (msg.type === "thinking") {
                 if (!activeThinkingEl) {
                     activeThinkingEl = document.createElement("div");
-                    activeThinkingEl.className = "thinking-block";
+                    activeThinkingEl.className = "thinking-block streaming";
                     const header = document.createElement("div");
                     header.className = "thinking-header";
                     header.innerHTML = '<span class="arrow">▼</span><span class="thinking-badge">thinking</span>';
@@ -130,7 +183,7 @@ function connectChatWs() {
                 chatMessages.scrollTop = chatMessages.scrollHeight;
             } else if (msg.type === "assistant") {
                 // Collapse thinking block when assistant text starts
-                if (activeThinkingEl) { activeThinkingEl.classList.add("collapsed"); activeThinkingEl = null; }
+                if (activeThinkingEl) { activeThinkingEl.classList.remove("streaming"); activeThinkingEl.classList.add("collapsed"); activeThinkingEl = null; }
                 if (currentToolEl) {
                     const newEl = document.createElement("div");
                     newEl.className = "chat-msg assistant";
@@ -152,6 +205,11 @@ function connectChatWs() {
             } else if (msg.type === "tool_result") {
                 if (currentToolEl) setToolResult(currentToolEl, msg.data);
             } else if (msg.type === "done") {
+                if (_renderRAF) { cancelAnimationFrame(_renderRAF); _renderRAF = null; _renderQueue = null; }
+                if (activeAssistantEl) {
+                    const body = activeAssistantEl.querySelector(".chat-body");
+                    if (body) body.innerHTML = marked.parse(body.dataset.raw);
+                }
                 chatInput.disabled = false; btnSend.textContent = "Send"; chatInput.focus(); activeAssistantEl = null; currentToolEl = null; activeThinkingEl = null;
             } else if (msg.type === "error") {
                 appendToEl(activeAssistantEl, "[error: " + msg.data + "]"); chatInput.disabled = false; btnSend.textContent = "Send";
@@ -206,12 +264,31 @@ function formatTs(iso) {
     } catch (e) { return ""; }
 }
 
+let _renderRAF = null;
+let _renderQueue = null;
+
 function appendToEl(el, text) {
     if (!el) return;
     const body = el.querySelector(".chat-body") || el;
     body.dataset.raw = (body.dataset.raw || "") + text;
-    body.innerHTML = marked.parse(body.dataset.raw);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    if (!_renderRAF) {
+        _renderRAF = requestAnimationFrame(() => {
+            _renderRAF = null;
+            if (_renderQueue) {
+                const { b, e } = _renderQueue;
+                b.innerHTML = marked.parse(b.dataset.raw);
+                if (activeAssistantEl && e === activeAssistantEl) {
+                    const cursor = document.createElement("span");
+                    cursor.className = "streaming-cursor";
+                    cursor.textContent = "▊";
+                    b.appendChild(cursor);
+                }
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+            _renderQueue = null;
+        });
+    }
+    _renderQueue = { b: body, e: el };
 }
 
 function addToolCall(toolName) {
@@ -260,7 +337,8 @@ function addTab(name) {
     term.open(wrapper);
 
     // WebSocket for this terminal (sin-golang pattern: binary frames)
-    const ws = new WebSocket(WS_URL + "/ws/xterm/" + name + "?cols=" + term.cols + "&rows=" + term.rows);
+    const wsUrl = WS_URL + "/ws/xterm/" + name + "?cols=" + term.cols + "&rows=" + term.rows + (PASSWORD ? "&token=" + PASSWORD : "");
+    const ws = new WebSocket(wsUrl);
     ws.binaryType = "arraybuffer";
 
     ws.onmessage = (ev) => {
@@ -285,10 +363,11 @@ function addTab(name) {
         const mod = e.metaKey || e.ctrlKey;
         if (mod && e.key.toLowerCase() === "c") {
             const sel = term.getSelection();
-            if (sel) { e.preventDefault(); e.stopPropagation(); navigator.clipboard.writeText(sel).catch(() => {}); }
+            if (sel) { e.preventDefault(); e.stopPropagation(); (window.makro?.clipboardWrite ?? navigator.clipboard.writeText)(sel).catch(() => {}); }
         } else if (mod && e.key.toLowerCase() === "v") {
             e.preventDefault(); e.stopPropagation();
-            navigator.clipboard.readText().then(text => { if (text && ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(text)); }).catch(() => {});
+            const read = window.makro?.clipboardRead ? window.makro.clipboardRead() : navigator.clipboard.readText();
+            Promise.resolve(read).then(text => { if (text && ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(text)); }).catch(() => {});
         }
     }, true);
 
@@ -347,7 +426,7 @@ function closeTab(name) {
         entry.wrapper.remove();
         terminals.delete(name);
     }
-    fetch(BACKEND + "/api/sessions/" + name, {method: "DELETE"}).catch(() => {});
+    fetch(BACKEND + "/api/sessions/" + name, {method: "DELETE", headers: authHeaders()}).catch(() => {});
     const tab = document.querySelector(`.tab[data-session="${name}"]`); if (tab) tab.remove();
     if (activeTab === name) {
         const r = Array.from(terminals.keys());
@@ -405,26 +484,30 @@ function updateTabIndices() {
 
 btnNew.addEventListener("click", () => {
     const name = prompt("Session name:");
-    if (name) fetch(BACKEND + "/api/sessions", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name})}).then(() => refreshSessions()).catch(err => addChatMessage("system", "Error: " + err));
+    if (name) fetch(BACKEND + "/api/sessions", {method: "POST", headers: authHeaders({"Content-Type": "application/json"}), body: JSON.stringify({name})}).then(() => refreshSessions()).catch(err => addChatMessage("system", "Error: " + err));
 });
 btnRefresh.addEventListener("click", () => refreshSessions());
 btnStart.addEventListener("click", () => refreshSessions());
 
 // ── Init ──
-fetch(BACKEND + "/api/chat/history").then(r => r.json()).then(msgs => {
-    if (msgs && msgs.length > 0) {
-        // Separator for restored history
-        const sep = document.createElement("div");
-        sep.className = "chat-separator";
-        chatMessages.appendChild(sep);
-        for (const m of msgs) addChatMessage(m.role, m.content, m.timestamp);
-    }
-}).catch(() => {});
-
 addChatMessage("system", "Makro GUI ready.");
-refreshSessions();
-connectChatWs();
-setInterval(refreshSessions, 5000);
+passwordReady.then(() => {
+    // Load chat history AFTER password is available, otherwise auth header is empty and 401s.
+    fetch(BACKEND + "/api/chat/history", {headers: authHeaders()}).then(r => r.json()).then(msgs => {
+        if (msgs && msgs.length > 0) {
+            // Separator for restored history
+            const sep = document.createElement("div");
+            sep.className = "chat-separator";
+            chatMessages.appendChild(sep);
+            for (const m of msgs) addChatMessage(m.role, m.content, m.timestamp);
+            requestAnimationFrame(() => { chatMessages.scrollTop = chatMessages.scrollHeight; });
+        }
+    }).catch(() => {});
+
+    refreshSessions();
+    connectChatWs();
+    setInterval(refreshSessions, 5000);
+});
 
 // ── Autocomplete ──
 const hintEl = document.createElement("div");
@@ -471,7 +554,7 @@ chatInput.addEventListener("keydown", (e) => { if (e.key === "Escape") hintEl.cl
 document.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === ".") {
         e.preventDefault();
-        fetch(BACKEND + "/api/chat/cancel", {method: "POST"}).catch(() => {});
+        fetch(BACKEND + "/api/chat/cancel", {method: "POST", headers: authHeaders()}).catch(() => {});
         return;
     }
     if (!(e.metaKey || e.ctrlKey)) return;
@@ -682,22 +765,22 @@ function getDragAfterElement(container, y) {
 }
 
 async function createTask(title, content) {
-    await fetch(BACKEND + "/api/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, content }) });
+    await fetch(BACKEND + "/api/tasks", { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ title, content }) });
     renderDashboard();
 }
 
 async function updateTask(id, patch) {
-    await fetch(BACKEND + "/api/tasks/" + id, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+    await fetch(BACKEND + "/api/tasks/" + id, { method: "PUT", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(patch) });
     renderDashboard();
 }
 
 async function deleteTask(id) {
-    await fetch(BACKEND + "/api/tasks/" + id, { method: "DELETE" });
+    await fetch(BACKEND + "/api/tasks/" + id, { method: "DELETE", headers: authHeaders() });
     renderDashboard();
 }
 
 async function sendTaskToSession(taskId, sessionName) {
-    await fetch(BACKEND + "/api/tasks/" + taskId + "/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session: sessionName }) });
+    await fetch(BACKEND + "/api/tasks/" + taskId + "/send", { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ session: sessionName }) });
     addChatMessage("system", `Sent task to @${sessionName}`);
     renderDashboard();
 }
