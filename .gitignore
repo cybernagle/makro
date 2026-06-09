@@ -10,3 +10,16 @@ go.work
 go.work.sum
 .env
 .env.*
+
+# iOS build artifacts
+ios/**/xcuserdata/
+ios/**/DerivedData/
+ios/**/.build/
+ios/**/*.swiftpm/
+ios/**/build/
+
+# Local macOS state
+.DS_Store
+**/.DS_Store
+.omc/
+**/.omc/

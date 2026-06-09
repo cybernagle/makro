@@ -1,0 +1,27 @@
+name: Makro
+options:
+  bundleIdPrefix: com.cybernagle
+  deploymentTarget:
+    iOS: "26.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+
+targets:
+  Makro:
+    type: application
+    platform: iOS
+    sources:
+      - Makro
+    settings:
+      base:
+        INFOPLIST_FILE: Makro/Info.plist
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        PRODUCT_BUNDLE_IDENTIFIER: com.cybernagle.Makro
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        DEVELOPMENT_TEAM: "K3YMW44F9V"
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
