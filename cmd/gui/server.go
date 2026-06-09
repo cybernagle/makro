@@ -151,6 +151,7 @@ func serve(addr string, tlsCert, tlsKey, password string) error {
 	mux.HandleFunc("/api/chat", chatHandler(chatSvc, hub))
 	mux.HandleFunc("/api/chat/history", chatHistoryHandler(chatSvc))
 	mux.HandleFunc("/ws/xterm/", xtermWSHandler)
+	mux.HandleFunc("/ws/snapshot/", wsSnapshotHandler)
 	mux.HandleFunc("/ws/chat", chatWSHandler(hub))
 	mux.HandleFunc("/api/chat/cancel", chatCancelHandler(chatSvc))
 	mux.HandleFunc("/api/snapshot", snapshotHandler)
@@ -271,12 +272,32 @@ func sessionsHandler(w http.ResponseWriter, r *http.Request) {
 // ── Session kill ──
 
 func sessionHandler(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
-	name = strings.TrimSuffix(name, "/")
-	if name == "" {
+	path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	path = strings.TrimSuffix(path, "/")
+	if path == "" {
 		http.Error(w, "missing session name", http.StatusBadRequest)
 		return
 	}
+
+	// Sub-routes: /api/sessions/{name}/capture, /api/sessions/{name}/send
+	if idx := strings.IndexByte(path, '/'); idx >= 0 {
+		name := path[:idx]
+		sub := path[idx+1:]
+		switch sub {
+		case "capture":
+			sessionCaptureHandler(w, r, name)
+			return
+		case "send":
+			sessionSendHandler(w, r, name)
+			return
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+	}
+
+	// /api/sessions/{name}
+	name := path
 	switch r.Method {
 	case "DELETE":
 		svc := &TmuxService{}
@@ -288,6 +309,56 @@ func sessionHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// sessionCaptureHandler returns the current visible pane content of a tmux
+// session. Used by the iOS snapshot-mode terminal viewer.
+func sessionCaptureHandler(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	svc := &TmuxService{}
+	content, err := svc.CapturePane(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Optional: include scrollback history (?history=500 includes last 500 lines).
+	if h := r.URL.Query().Get("history"); h != "" && h != "0" {
+		out, err := exec.Command(getTmuxBin(), tmuxArgs("capture-pane", "-t", name, "-p", "-S", "-"+h)...).Output()
+		if err == nil {
+			content = string(out)
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"content": content})
+}
+
+// sessionSendHandler sends text to a tmux session via send-keys. Reuses the
+// existing sendToTmuxSession helper (short → send-keys -l + Enter; long →
+// bracketed paste).
+func sessionSendHandler(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if body.Text == "" {
+		http.Error(w, "empty text", http.StatusBadRequest)
+		return
+	}
+	if err := sendToTmuxSession(name, body.Text); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ── Chat send ──
@@ -417,6 +488,108 @@ func xtermWSHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// ── WebSocket: Terminal snapshot (iOS snapshot-mode viewer) ──
+
+// wsSnapshotHandler pushes periodic tmux capture-pane snapshots to the client.
+// Unlike xtermWSHandler (which streams raw PTY bytes), this sends JSON frames
+// {content, ts} containing the current visible pane. iOS renders them as
+// direct Text replacements — no client-side terminal state machine, which
+// kills the cursor-residue bug.
+//
+// Throttled to ~10fps with content-hash dedup to avoid redundant sends.
+func wsSnapshotHandler(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/ws/snapshot/")
+	name = strings.TrimSuffix(name, "/")
+	if name == "" {
+		http.Error(w, "missing session name", http.StatusBadRequest)
+		return
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	historyLines := atoiDefault(r.URL.Query().Get("history"), 0)
+	interval := 100 * time.Millisecond
+	if d := r.URL.Query().Get("interval"); d != "" {
+		if ms, err := time.ParseDuration(d + "ms"); err == nil && ms >= 30*time.Millisecond {
+			interval = ms
+		}
+	}
+
+	svc := &TmuxService{}
+	var lastHash uint64
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Initial snapshot immediately (don't wait one interval).
+	push := func() bool {
+		var content string
+		var err error
+		if historyLines > 0 {
+			out, e := exec.Command(getTmuxBin(), tmuxArgs("capture-pane", "-t", name, "-p", "-S", "-"+strconv.Itoa(historyLines))...).Output()
+			if e != nil {
+				err = e
+			} else {
+				content = string(out)
+			}
+		} else {
+			content, err = svc.CapturePane(name)
+		}
+		if err != nil {
+			// Session may have died — tell client and close.
+			conn.WriteMessage(websocket.TextMessage,
+				[]byte(fmt.Sprintf(`{"type":"error","message":%q}`, err.Error())))
+			return false
+		}
+		h := fnv64(content)
+		if h == lastHash {
+			return true // unchanged, skip
+		}
+		lastHash = h
+		payload, _ := json.Marshal(map[string]any{
+			"type":    "snapshot",
+			"content": content,
+			"ts":      time.Now().UnixMilli(),
+		})
+		if werr := conn.WriteMessage(websocket.TextMessage, payload); werr != nil {
+			return false
+		}
+		return true
+	}
+
+	if !push() {
+		return
+	}
+
+	for {
+		select {
+		case <-ticker.C:
+			if !push() {
+				return
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// fnv64 is a fast 64-bit hash for change detection.
+func fnv64(s string) uint64 {
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	h := uint64(offset64)
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= prime64
+	}
+	return h
 }
 
 // ── WebSocket: Chat events ──

@@ -1,11 +1,33 @@
 const { app, BrowserWindow, ipcMain, clipboard, Menu } = require('electron');
+
+// Enable remote debugging for inspection (localhost only, safe).
+app.commandLine.appendSwitch('remote-debugging-port', '9222');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
+const http = require('http');
+const https = require('https');
 
 const SERVE_ADDR = '0.0.0.0:7070';
+
+function getCertPaths() {
+  const candidates = [
+    path.join(process.resourcesPath, 'certs'),
+    path.join(__dirname, '..', 'certs'),
+  ];
+  for (const dir of candidates) {
+    const cert = path.join(dir, '127.0.0.1+2.pem');
+    const key = path.join(dir, '127.0.0.1+2-key.pem');
+    if (fs.existsSync(cert) && fs.existsSync(key)) return { cert, key };
+  }
+  return null;
+}
+
+const CERT_PATHS = getCertPaths();
+const USE_TLS = CERT_PATHS !== null;
+const PROTO = USE_TLS ? 'https' : 'http';
 let win = null;
 let makroProcess = null;
 
@@ -58,7 +80,11 @@ function getLocalIP() {
 function startBackend() {
   const bin = getBinPath();
   const args = ['serve', '--addr', SERVE_ADDR, '--password', PASSWORD];
+  if (USE_TLS) {
+    args.push('--tls-cert', CERT_PATHS.cert, '--tls-key', CERT_PATHS.key);
+  }
   console.log('[electron] starting backend:', bin, ...args);
+  console.log('[electron] TLS:', USE_TLS ? 'enabled' : 'disabled (no certs found)');
 
   makroProcess = spawn(bin, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -78,11 +104,15 @@ function startBackend() {
 }
 
 function waitForBackend(cb) {
-  const http = require('http');
   let attempts = 0;
   const check = () => {
-    const options = { hostname: '127.0.0.1', port: 7070, path: '/api/sessions', headers: { 'Authorization': 'Bearer ' + PASSWORD } };
-    http.get(options, (res) => {
+    const options = {
+      hostname: '127.0.0.1', port: 7070, path: '/api/sessions',
+      headers: { 'Authorization': 'Bearer ' + PASSWORD },
+      rejectUnauthorized: false,
+    };
+    const client = USE_TLS ? https : http;
+    client.get(options, (res) => {
       res.resume();
       if (res.statusCode < 500) { cb(); } else { retry(); }
     }).on('error', () => { retry(); });
@@ -98,7 +128,7 @@ function waitForBackend(cb) {
 function createWindow() {
   const localIP = getLocalIP();
   console.log(`\n[makro] ─────────────────────────────────────`);
-  console.log(`[makro] Server:   http://${localIP}:7070`);
+  console.log(`[makro] Server:   ${PROTO}://${localIP}:7070`);
   console.log(`[makro] Password: ${PASSWORD}`);
   console.log(`[makro] ─────────────────────────────────────\n`);
 
@@ -116,6 +146,16 @@ function createWindow() {
     },
   });
 
+  // Trust self-signed mkcert certificate for the renderer's fetch/WebSocket.
+  if (USE_TLS) {
+    win.webContents.session.setCertificateVerifyProc((req, cb) => {
+      if (req.hostname === '127.0.0.1' || req.hostname === 'localhost' || req.hostname === localIP) {
+        return cb(0);
+      }
+      cb(-2);
+    });
+  }
+
   // Only auto-open devtools in dev mode
   if (process.env.MAKRO_DEV === '1') {
     win.webContents.openDevTools({ mode: 'detach' });
@@ -125,12 +165,14 @@ function createWindow() {
   if (isDev) {
     win.loadURL('http://localhost:5173');
   } else {
-    win.loadURL('http://' + SERVE_ADDR + '/');
+    // SERVE_ADDR (0.0.0.0) is the bind address; renderer must load via 127.0.0.1
+    // so the cert SAN matches and setCertificateVerifyProc allows it.
+    win.loadURL(`${PROTO}://127.0.0.1:7070/`);
   }
 }
 
 ipcMain.handle('makro:connectionInfo', () => {
-  return { ip: getLocalIP(), port: 7070, password: PASSWORD };
+  return { ip: getLocalIP(), port: 7070, password: PASSWORD, useTLS: USE_TLS, proto: PROTO };
 });
 
 ipcMain.handle('makro:clipboard:read', () => clipboard.readText());

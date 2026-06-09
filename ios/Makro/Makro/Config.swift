@@ -52,6 +52,35 @@ class Config: ObservableObject {
         return url
     }
 
+    /// Snapshot-mode terminal WS. Server pushes periodic tmux capture-pane
+    /// output as JSON frames. Used by iOS for cursor-residue-free rendering.
+    func snapshotWSURL(for sessionName: String) -> URL {
+        let ws = serverURL
+            .replacingOccurrences(of: "https://", with: "wss://")
+            .replacingOccurrences(of: "http://", with: "ws://")
+        let encoded = sessionName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionName
+        var url = URL(string: "\(ws)/ws/snapshot/\(encoded)")!
+        if !password.isEmpty {
+            url = URL(string: "\(url.absoluteString)?token=\(password.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? password)")!
+        }
+        return url
+    }
+
+    /// HTTP endpoint for sending keystrokes/text to a tmux session.
+    func sessionSendURL(for sessionName: String) -> URL {
+        let encoded = sessionName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionName
+        return URL(string: "\(httpBaseURL.absoluteString)/api/sessions/\(encoded)/send")!
+    }
+
+    /// HTTP endpoint for one-shot pane capture (alternative to snapshot WS).
+    func sessionCaptureURL(for sessionName: String) -> URL {
+        let encoded = sessionName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionName
+        return URL(string: "\(httpBaseURL.absoluteString)/api/sessions/\(encoded)/capture")!
+    }
+
+    /// Value for the `Authorization: Bearer` header.
+    var bearerToken: String { "Bearer \(password)" }
+
     static func handleTLSChallenge(
         _ challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void

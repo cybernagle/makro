@@ -259,6 +259,24 @@ struct TerminalDetailView: View {
                         .lineLimit(1)
                 }
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    Task { await terminalVM.refresh() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(terminalVM.isRefreshing ? .degrees(360) : .zero)
+                        .animation(
+                            terminalVM.isRefreshing
+                                ? .linear(duration: 0.8).repeatForever(autoreverses: false)
+                                : .default,
+                            value: terminalVM.isRefreshing
+                        )
+                }
+                .disabled(terminalVM.isRefreshing)
+                .accessibilityLabel("Refresh")
+            }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("Done") { inputFocused = false }
@@ -304,6 +322,9 @@ struct TerminalDetailView: View {
         let text = inputText
         guard !text.isEmpty else { return }
         inputText = ""
-        terminalVM.send(text: text + "\n")
+        // Send goes via HTTP POST /api/sessions/<name>/send, which calls
+        // `tmux send-keys` on the server. send-keys handles raw-mode CR
+        // semantics internally, so we send the text as-is.
+        terminalVM.send(text: text)
     }
 }

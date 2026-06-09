@@ -1,9 +1,17 @@
 // Makro GUI — fetch/WebSocket version (no Wails bindings)
-const BACKEND = window.makro?.backendUrl || 'http://127.0.0.1:7070';
-const WS_URL = window.makro?.wsUrl || 'ws://127.0.0.1:7070';
+// Backends are configured dynamically via getConnectionInfo() IPC since preload
+// is sandboxed and can't probe the filesystem for certs.
+let BACKEND = 'http://127.0.0.1:7070';
+let WS_URL = 'ws://127.0.0.1:7070';
 let PASSWORD = '';
 const passwordReady = (window.makro?.getConnectionInfo)
-    ? window.makro.getConnectionInfo().then(info => { PASSWORD = info.password; })
+    ? window.makro.getConnectionInfo().then(info => {
+        PASSWORD = info.password;
+        const proto = info.useTLS ? 'https' : 'http';
+        const wsProto = info.useTLS ? 'wss' : 'ws';
+        BACKEND = `${proto}://127.0.0.1:${info.port}`;
+        WS_URL = `${wsProto}://127.0.0.1:${info.port}`;
+    })
     : Promise.resolve();
 
 function authHeaders(extra = {}) {
@@ -82,7 +90,8 @@ let connectionInfo = null;
 if (window.makro?.getConnectionInfo) {
     window.makro.getConnectionInfo().then(info => {
         connectionInfo = info;
-        if (popupUrl) popupUrl.textContent = `http://${info.ip}:${info.port}`;
+        const proto = info.useTLS ? 'https' : 'http';
+        if (popupUrl) popupUrl.textContent = `${proto}://${info.ip}:${info.port}`;
         if (popupPassword) popupPassword.textContent = info.password;
     });
 }
@@ -102,7 +111,10 @@ document.querySelectorAll(".popup-copy").forEach(btn => {
     btn.addEventListener("click", () => {
         const field = btn.dataset.copy;
         let text = "";
-        if (field === "url" && connectionInfo) text = `http://${connectionInfo.ip}:${connectionInfo.port}`;
+        if (field === "url" && connectionInfo) {
+            const proto = connectionInfo.useTLS ? 'https' : 'http';
+            text = `${proto}://${connectionInfo.ip}:${connectionInfo.port}`;
+        }
         if (field === "password" && connectionInfo) text = connectionInfo.password;
         navigator.clipboard.writeText(text).then(() => {
             btn.textContent = "Copied!";
@@ -133,7 +145,10 @@ btnSend.addEventListener("click", () => {
 // ── API helpers ──
 async function api(path, opts = {}) {
     opts.headers = {...authHeaders(), ...(opts.headers || {})};
-    return fetch(BACKEND + path, opts).then(r => r.json());
+    const r = await fetch(BACKEND + path, opts);
+    const ct = r.headers.get("content-type") || "";
+    if (!r.ok || !ct.includes("application/json")) return null;
+    return r.json();
 }
 
 // ── Chat ──
