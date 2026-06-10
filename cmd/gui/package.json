@@ -28,6 +28,11 @@
       {
         "from": "frontend/public",
         "to": "frontend/public"
+      },
+      {
+        "from": "certs",
+        "to": "certs",
+        "filter": ["*.pem"]
       }
     ],
     "afterPack": "./electron/afterPack.js",

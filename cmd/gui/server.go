@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -105,6 +107,9 @@ func (h *chatHub) Emit(typ, data string) {
 	evt := chatEvent{Type: typ, Data: data}
 	h.mu.Lock()
 	h.history = append(h.history, evt)
+	if len(h.history) > 200 {
+		h.history = h.history[len(h.history)-200:]
+	}
 	subs := make([]chan chatEvent, len(h.subs))
 	copy(subs, h.subs)
 	h.mu.Unlock()
@@ -119,18 +124,37 @@ func (h *chatHub) Emit(typ, data string) {
 // ── Server ──
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // non-browser clients (iOS app, curl)
+		}
+		return isLocalOrigin(origin)
+	},
 }
 
-func serve(addr string) error {
+func serve(addr string, tlsCert, tlsKey, password string) error {
 	hub := newChatHub()
 	chatSvc := NewChatService(nil)
 	chatSvc.hub = hub
 
+	// Recover tmux sessions from snapshot (if tmux crashed) before serving.
+	if n := RecoverFromSnapshot(); n > 0 {
+		hub.Emit("system", fmt.Sprintf("Recovered %d tmux sessions from snapshot", n))
+	}
+
+	// Start periodic snapshot loop (every 5 minutes).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	StartSnapshotLoop(ctx, 5*time.Minute)
+
 	mux := http.NewServeMux()
 
-	// CORS middleware for dev.
-	handler := corsMiddleware(mux)
+	var handler http.Handler = mux
+	if password != "" {
+		handler = authMiddleware(handler, password)
+	}
+	handler = corsMiddleware(handler)
 
 	// ── API routes ──
 	mux.HandleFunc("/api/sessions", sessionsHandler)
@@ -138,8 +162,11 @@ func serve(addr string) error {
 	mux.HandleFunc("/api/chat", chatHandler(chatSvc, hub))
 	mux.HandleFunc("/api/chat/history", chatHistoryHandler(chatSvc))
 	mux.HandleFunc("/ws/xterm/", xtermWSHandler)
+	mux.HandleFunc("/ws/snapshot/", wsSnapshotHandler)
 	mux.HandleFunc("/ws/chat", chatWSHandler(hub))
 	mux.HandleFunc("/api/chat/cancel", chatCancelHandler(chatSvc))
+	mux.HandleFunc("/api/snapshot", snapshotHandler)
+	mux.HandleFunc("/api/recover", recoveryHandler)
 
 	// Task API
 	taskStore, err := NewTaskStore()
@@ -166,21 +193,78 @@ func serve(addr string) error {
 		})
 	}
 
-	log.Printf("[server] listening on %s (static: %s)", addr, staticDir)
+	proto := "http"
+	if tlsCert != "" && tlsKey != "" {
+		proto = "https"
+	}
+	authStatus := "no auth"
+	if password != "" {
+		authStatus = "password protected"
+	}
+	log.Printf("[server] listening on %s://%s (static: %s, %s)", proto, addr, staticDir, authStatus)
 	srv := &http.Server{Addr: addr, Handler: handler, ReadTimeout: 0, WriteTimeout: 0}
+	if tlsCert != "" && tlsKey != "" {
+		return srv.ListenAndServeTLS(tlsCert, tlsKey)
+	}
 	return srv.ListenAndServe()
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if origin := r.Header.Get("Origin"); origin != "" {
+			if isLocalOrigin(origin) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			}
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+func isLocalOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	if h == "localhost" || h == "127.0.0.1" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	if ip == nil {
+		return false
+	}
+	return ip.IsPrivate() || ip.IsLoopback()
+}
+
+func authMiddleware(next http.Handler, password string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Allow static files without auth
+		if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/") || strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".css") || strings.HasSuffix(r.URL.Path, ".html") || strings.HasSuffix(r.URL.Path, ".ico") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Check Authorization: Bearer <password>
+		auth := r.Header.Get("Authorization")
+		if strings.HasPrefix(auth, "Bearer ") && strings.TrimPrefix(auth, "Bearer ") == password {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// WebSocket connections cannot set headers during handshake;
+		// accept token via query param on /ws/ paths only.
+		if strings.HasPrefix(r.URL.Path, "/ws/") && r.URL.Query().Get("token") == password {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})
 }
 
@@ -220,12 +304,32 @@ func sessionsHandler(w http.ResponseWriter, r *http.Request) {
 // ── Session kill ──
 
 func sessionHandler(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
-	name = strings.TrimSuffix(name, "/")
-	if name == "" {
+	path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	path = strings.TrimSuffix(path, "/")
+	if path == "" {
 		http.Error(w, "missing session name", http.StatusBadRequest)
 		return
 	}
+
+	// Sub-routes: /api/sessions/{name}/capture, /api/sessions/{name}/send
+	if idx := strings.IndexByte(path, '/'); idx >= 0 {
+		name := path[:idx]
+		sub := path[idx+1:]
+		switch sub {
+		case "capture":
+			sessionCaptureHandler(w, r, name)
+			return
+		case "send":
+			sessionSendHandler(w, r, name)
+			return
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+	}
+
+	// /api/sessions/{name}
+	name := path
 	switch r.Method {
 	case "DELETE":
 		svc := &TmuxService{}
@@ -237,6 +341,56 @@ func sessionHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// sessionCaptureHandler returns the current visible pane content of a tmux
+// session. Used by the iOS snapshot-mode terminal viewer.
+func sessionCaptureHandler(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	svc := &TmuxService{}
+	content, err := svc.CapturePane(name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Optional: include scrollback history (?history=500 includes last 500 lines).
+	if h := r.URL.Query().Get("history"); h != "" && h != "0" {
+		out, err := exec.Command(getTmuxBin(), tmuxArgs("capture-pane", "-t", name, "-p", "-S", "-"+h)...).Output()
+		if err == nil {
+			content = string(out)
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"content": content})
+}
+
+// sessionSendHandler sends text to a tmux session via send-keys. Reuses the
+// existing sendToTmuxSession helper (short → send-keys -l + Enter; long →
+// bracketed paste).
+func sessionSendHandler(w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if body.Text == "" {
+		http.Error(w, "empty text", http.StatusBadRequest)
+		return
+	}
+	if err := sendToTmuxSession(name, body.Text); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ── Chat send ──
@@ -366,6 +520,108 @@ func xtermWSHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// ── WebSocket: Terminal snapshot (iOS snapshot-mode viewer) ──
+
+// wsSnapshotHandler pushes periodic tmux capture-pane snapshots to the client.
+// Unlike xtermWSHandler (which streams raw PTY bytes), this sends JSON frames
+// {content, ts} containing the current visible pane. iOS renders them as
+// direct Text replacements — no client-side terminal state machine, which
+// kills the cursor-residue bug.
+//
+// Throttled to ~10fps with content-hash dedup to avoid redundant sends.
+func wsSnapshotHandler(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/ws/snapshot/")
+	name = strings.TrimSuffix(name, "/")
+	if name == "" {
+		http.Error(w, "missing session name", http.StatusBadRequest)
+		return
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	historyLines := atoiDefault(r.URL.Query().Get("history"), 0)
+	interval := 100 * time.Millisecond
+	if d := r.URL.Query().Get("interval"); d != "" {
+		if ms, err := time.ParseDuration(d + "ms"); err == nil && ms >= 30*time.Millisecond {
+			interval = ms
+		}
+	}
+
+	svc := &TmuxService{}
+	var lastHash uint64
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Initial snapshot immediately (don't wait one interval).
+	push := func() bool {
+		var content string
+		var err error
+		if historyLines > 0 {
+			out, e := exec.Command(getTmuxBin(), tmuxArgs("capture-pane", "-t", name, "-p", "-S", "-"+strconv.Itoa(historyLines))...).Output()
+			if e != nil {
+				err = e
+			} else {
+				content = string(out)
+			}
+		} else {
+			content, err = svc.CapturePane(name)
+		}
+		if err != nil {
+			// Session may have died — tell client and close.
+			conn.WriteMessage(websocket.TextMessage,
+				[]byte(fmt.Sprintf(`{"type":"error","message":%q}`, err.Error())))
+			return false
+		}
+		h := fnv64(content)
+		if h == lastHash {
+			return true // unchanged, skip
+		}
+		lastHash = h
+		payload, _ := json.Marshal(map[string]any{
+			"type":    "snapshot",
+			"content": content,
+			"ts":      time.Now().UnixMilli(),
+		})
+		if werr := conn.WriteMessage(websocket.TextMessage, payload); werr != nil {
+			return false
+		}
+		return true
+	}
+
+	if !push() {
+		return
+	}
+
+	for {
+		select {
+		case <-ticker.C:
+			if !push() {
+				return
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// fnv64 is a fast 64-bit hash for change detection.
+func fnv64(s string) uint64 {
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	h := uint64(offset64)
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= prime64
+	}
+	return h
 }
 
 // ── WebSocket: Chat events ──
@@ -577,4 +833,32 @@ func atoiDefault(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+// snapshotHandler triggers an immediate TakeSnapshot. Useful for testing and
+// for users who want to force a snapshot before a risky operation.
+func snapshotHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	snap, err := TakeSnapshot()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(snap)
+}
+
+// recoveryHandler manually triggers RecoverFromSnapshot. Useful when tmux has
+// been killed outside the server lifecycle.
+func recoveryHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	n := RecoverFromSnapshot()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"recovered": n})
 }

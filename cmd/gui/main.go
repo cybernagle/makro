@@ -14,10 +14,32 @@ var assets embed.FS
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
 		addr := "127.0.0.1:7070"
-		if len(os.Args) > 3 && os.Args[2] == "--addr" {
-			addr = os.Args[3]
+		var tlsCert, tlsKey, password string
+		for i := 2; i < len(os.Args); i++ {
+			switch os.Args[i] {
+			case "--addr":
+				i++
+				if i < len(os.Args) {
+					addr = os.Args[i]
+				}
+			case "--tls-cert":
+				i++
+				if i < len(os.Args) {
+					tlsCert = os.Args[i]
+				}
+			case "--tls-key":
+				i++
+				if i < len(os.Args) {
+					tlsKey = os.Args[i]
+				}
+			case "--password":
+				i++
+				if i < len(os.Args) {
+					password = os.Args[i]
+				}
+			}
 		}
-		if err := serve(addr); err != nil {
+		if err := serve(addr, tlsCert, tlsKey, password); err != nil {
 			log.Fatal(err)
 		}
 		return

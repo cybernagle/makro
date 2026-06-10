@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -37,21 +36,27 @@ type Session struct {
 }
 
 func tmuxArgs(extra ...string) []string {
-	home, _ := os.UserHomeDir()
-	sock := filepath.Join(home, ".makro", "tmux.sock")
-	if _, err := os.Stat(sock); err == nil {
-		return append([]string{"-S", sock}, extra...)
-	}
+	// Use the user's default tmux socket (no -S flag) so makro integrates with
+	// their daily tmux server rather than running an isolated one. The user
+	// expects to see and manage their daily sessions through makro.
 	return extra
+}
+
+// tmuxSocketPath is kept for snapshot/recovery to detect if tmux has crashed.
+// Returns the default socket path that tmux would use for the current user.
+func tmuxSocketPath() string {
+	uid := os.Getuid()
+	return fmt.Sprintf("/tmp/tmux-%d/default", uid)
 }
 
 func (s *TmuxService) ListSessions() ([]Session, error) {
 	out, err := exec.Command(getTmuxBin(), tmuxArgs("list-sessions", "-F", "#{session_name} #{session_attached}")...).CombinedOutput()
 	if err != nil {
-		if strings.Contains(string(out), "no server running") || strings.Contains(string(out), "no sessions") {
+		s := string(out)
+		if strings.Contains(s, "no server running") || strings.Contains(s, "no sessions") || strings.Contains(s, "No such file") || strings.Contains(s, "connect failed") {
 			return []Session{}, nil
 		}
-		return nil, fmt.Errorf("tmux list-sessions: %s: %w", strings.TrimSpace(string(out)), err)
+		return nil, fmt.Errorf("tmux list-sessions: %s: %w", strings.TrimSpace(s), err)
 	}
 
 	var sessions []Session
