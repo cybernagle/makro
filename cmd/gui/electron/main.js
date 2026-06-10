@@ -83,7 +83,8 @@ function startBackend() {
   if (USE_TLS) {
     args.push('--tls-cert', CERT_PATHS.cert, '--tls-key', CERT_PATHS.key);
   }
-  console.log('[electron] starting backend:', bin, ...args);
+  const safeArgs = args.filter((v, i) => args[i - 1] !== '--password' && v !== '--password');
+  console.log('[electron] starting backend:', bin, ...safeArgs);
   console.log('[electron] TLS:', USE_TLS ? 'enabled' : 'disabled (no certs found)');
 
   makroProcess = spawn(bin, args, {

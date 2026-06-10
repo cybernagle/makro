@@ -124,7 +124,13 @@ func (h *chatHub) Emit(typ, data string) {
 // ── Server ──
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // non-browser clients (iOS app, curl)
+		}
+		return isLocalOrigin(origin)
+	},
 }
 
 func serve(addr string, tlsCert, tlsKey, password string) error {
