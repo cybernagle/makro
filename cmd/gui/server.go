@@ -781,11 +781,16 @@ func handleTaskSend(store *TaskStore, w http.ResponseWriter, r *http.Request, id
 }
 
 func sendToTmuxSession(session, text string) error {
-	if len(text) <= 10 {
-		if err := tmuxSendKeys(session, text); err != nil {
-			return err
-		}
+	text = strings.TrimRight(text, "\r\n")
+	if text == "" {
 		return tmuxSendEnter(session)
+	}
+	if len(text) <= 10 {
+		// Send text and Enter atomically in a single tmux invocation
+		// to avoid timing issues between two separate exec.Command calls.
+		args := tmuxArgs("send-keys", "-t", session, "-l", text)
+		args = append(args, ";", "send-keys", "-t", session, "Enter")
+		return exec.Command(getTmuxBin(), args...).Run()
 	}
 	payload := fmt.Sprintf("\033[200~%s\033[201~\r", text)
 	return tmuxSendKeys(session, payload)
