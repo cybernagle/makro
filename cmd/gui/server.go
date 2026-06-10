@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -105,6 +107,9 @@ func (h *chatHub) Emit(typ, data string) {
 	evt := chatEvent{Type: typ, Data: data}
 	h.mu.Lock()
 	h.history = append(h.history, evt)
+	if len(h.history) > 200 {
+		h.history = h.history[len(h.history)-200:]
+	}
 	subs := make([]chan chatEvent, len(h.subs))
 	copy(subs, h.subs)
 	h.mu.Unlock()
@@ -200,7 +205,11 @@ func serve(addr string, tlsCert, tlsKey, password string) error {
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if origin := r.Header.Get("Origin"); origin != "" {
+			if isLocalOrigin(origin) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			}
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == "OPTIONS" {
@@ -209,6 +218,22 @@ func corsMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isLocalOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	if h == "localhost" || h == "127.0.0.1" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	if ip == nil {
+		return false
+	}
+	return ip.IsPrivate() || ip.IsLoopback()
 }
 
 func authMiddleware(next http.Handler, password string) http.Handler {
@@ -226,8 +251,9 @@ func authMiddleware(next http.Handler, password string) http.Handler {
 			return
 		}
 
-		// Check query param for WebSocket connections
-		if r.URL.Query().Get("token") == password {
+		// WebSocket connections cannot set headers during handshake;
+		// accept token via query param on /ws/ paths only.
+		if strings.HasPrefix(r.URL.Path, "/ws/") && r.URL.Query().Get("token") == password {
 			next.ServeHTTP(w, r)
 			return
 		}

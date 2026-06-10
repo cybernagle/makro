@@ -36,7 +36,7 @@ function passwordFilePath() {
 }
 
 function generatePassword() {
-  return crypto.randomBytes(4).toString('hex');
+  return crypto.randomBytes(16).toString('hex');
 }
 
 function loadOrCreatePassword() {
@@ -129,7 +129,7 @@ function createWindow() {
   const localIP = getLocalIP();
   console.log(`\n[makro] ─────────────────────────────────────`);
   console.log(`[makro] Server:   ${PROTO}://${localIP}:7070`);
-  console.log(`[makro] Password: ${PASSWORD}`);
+  console.log(`[makro] Password: ${'*'.repeat(8)}`);
   console.log(`[makro] ─────────────────────────────────────\n`);
 
   win = new BrowserWindow({

@@ -11,12 +11,31 @@ go.work.sum
 .env
 .env.*
 
+# Compiled binaries / build output
+/bin/
+/gui
+/makro
+makro-serve
+cmd/gui/node_modules/
+cmd/gui/build/
+cmd/gui/release/
+
+# TLS certs (secrets — never commit)
+cmd/gui/certs/
+
 # iOS build artifacts
 ios/**/xcuserdata/
 ios/**/DerivedData/
 ios/**/.build/
 ios/**/*.swiftpm/
 ios/**/build/
+ios/**/project.xcworkspace/
+
+# Stray root-level iOS project (real source is at ios/Makro/)
+/makro/
+
+# Local Claude Code state
+.claude/
 
 # Local macOS state
 .DS_Store

@@ -87,7 +87,13 @@ class Config: ObservableObject {
     ) {
         if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
            let serverTrust = challenge.protectionSpace.serverTrust {
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+            let host = challenge.protectionSpace.host
+            let expected = URL(string: shared.serverURL)?.host ?? ""
+            if host == expected || host == "127.0.0.1" || host == "localhost" {
+                completionHandler(.useCredential, URLCredential(trust: serverTrust))
+            } else {
+                completionHandler(.cancelAuthenticationChallenge, nil)
+            }
         } else {
             completionHandler(.performDefaultHandling, nil)
         }

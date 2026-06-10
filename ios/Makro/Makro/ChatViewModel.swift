@@ -48,6 +48,7 @@ final class ChatViewModel: NSObject, ObservableObject {
     }
 
     func loadHistory() async {
+        let beforeCount = messages.count
         do {
             let history = try await api.fetchChatHistory()
             var loaded: [ChatMessage] = []
@@ -55,7 +56,8 @@ final class ChatViewModel: NSObject, ObservableObject {
                 guard let role = ChatMessage.Role(rawValue: m.role) else { continue }
                 loaded.append(ChatMessage(role: role, text: m.content))
             }
-            messages = loaded
+            let recent = beforeCount < messages.count ? Array(messages[beforeCount...]) : []
+            messages = loaded + recent
         } catch {}
     }
 
