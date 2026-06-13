@@ -35,7 +35,7 @@ var (
 	phoneLayout = flag.Bool("phone", false, "Use phone layout (vertical split)")
 )
 
-const version = "0.4.19"
+const version = "0.6.0"
 
 func main() {
 	// Handle subcommands that communicate with a running Makro instance.
