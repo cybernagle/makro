@@ -135,8 +135,11 @@ var upgrader = websocket.Upgrader{
 
 func serve(addr string, tlsCert, tlsKey, password string) error {
 	hub := newChatHub()
-	chatSvc := NewChatService(nil)
+	chatSvc := NewChatService()
 	chatSvc.hub = hub
+	// Eager init so the notifier socket + Claude hooks are live before serving,
+	// letting agent-stop notifications fire even if no chat message is sent.
+	chatSvc.init()
 
 	// Recover tmux sessions from snapshot (if tmux crashed) before serving.
 	if n := RecoverFromSnapshot(); n > 0 {

@@ -22,6 +22,7 @@ import (
 	"github.com/naglezhang/makro/internal/agent/tools"
 	"github.com/naglezhang/makro/internal/config"
 	"github.com/naglezhang/makro/internal/llm"
+	"github.com/naglezhang/makro/internal/notify"
 	"github.com/naglezhang/makro/internal/tmux"
 	"github.com/naglezhang/makro/internal/tui"
 )
@@ -201,10 +202,18 @@ func main() {
 				s = "stopped"
 			}
 			msg := fmt.Sprintf("Session %s %s", session, s)
+			var lastAssistant string
 			if out, err := tools.ReadStructuredOutput(tc, session); err == nil && out.LastAssistantMessage != "" {
-				msg += "\n" + out.LastAssistantMessage
+				lastAssistant = out.LastAssistantMessage
+				msg += "\n" + lastAssistant
 			}
 			app.SendChatMessage("system", msg)
+
+			// TUI runs inside a host terminal, so frontmost detection is
+			// unreliable — always notify. Body is the agent's last message.
+			notifyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			notify.Notify(notifyCtx, "Makro", session, lastAssistant, "")
+			cancel()
 		})
 
 		notifier.OnPermission(func(session string) {

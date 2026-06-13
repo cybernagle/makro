@@ -9,17 +9,17 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/naglezhang/makro/internal/agent"
 	"github.com/naglezhang/makro/internal/agent/tools"
 	"github.com/naglezhang/makro/internal/config"
 	"github.com/naglezhang/makro/internal/llm"
+	"github.com/naglezhang/makro/internal/notify"
 	"github.com/naglezhang/makro/internal/tmux"
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 type ChatService struct {
-	app      *application.App
 	hub      *chatHub
 	orch     *agent.Orchestrator
 	tc       *tmux.Client
@@ -31,15 +31,11 @@ type ChatService struct {
 	initErr  string
 }
 
-func NewChatService(app *application.App) *ChatService {
-	s := &ChatService{app: app, monitors: make(map[string]context.CancelFunc)}
+func NewChatService() *ChatService {
+	s := &ChatService{monitors: make(map[string]context.CancelFunc)}
 	// Initialize chat history immediately (doesn't need orchestrator).
 	s.initHistory()
 	return s
-}
-
-func (s *ChatService) SetApp(app *application.App) {
-	s.app = app
 }
 
 func (s *ChatService) initHistory() {
@@ -65,10 +61,6 @@ func (s *ChatService) initHistory() {
 	}
 	s.history = history
 	log.Printf("[chat_service] history loaded from %s", jsonlPath)
-}
-
-func (s *ChatService) Startup(ctx application.Context) {
-	s.init()
 }
 
 func (s *ChatService) init() {
@@ -128,10 +120,21 @@ func (s *ChatService) init() {
 			st = "stopped"
 		}
 		msg := fmt.Sprintf("Session %s %s", session, st)
+		var lastAssistant string
 		if out, err := tools.ReadStructuredOutput(tc, session); err == nil && out.LastAssistantMessage != "" {
-			msg += "\n" + out.LastAssistantMessage
+			lastAssistant = out.LastAssistantMessage
+			msg += "\n" + lastAssistant
 		}
 		s.emit("chat:system", msg)
+
+		// Desktop notification only when Makro is not frontmost. Clicking the
+		// banner activates the running Makro.app.
+		const makroBundleID = "com.cybernagle.makro"
+		notifyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if !notify.IsFrontmost(notifyCtx, makroBundleID) {
+			notify.Notify(notifyCtx, "Makro", session, lastAssistant, makroBundleID)
+		}
+		cancel()
 	})
 
 	notifier.OnPermission(func(session string) {
@@ -146,6 +149,19 @@ func (s *ChatService) init() {
 	s.notifier = notifier
 	s.assessor = assessor
 	log.Printf("[chat_service] initialized provider=%s model=%s", cfg.LLMProvider, cfg.LLMModel)
+
+	// Inject Claude Code Stop/Permission hooks so agent events reach this
+	// instance over the socket. Idempotent. The hook command points at this
+	// executable (makro-serve), which forwards via the "notify"/"permission"
+	// subcommands handled in main.go.
+	if exePath, err := os.Executable(); err == nil {
+		if err := agent.EnsureStopHook(cfg.ClaudeDir, exePath); err != nil {
+			log.Printf("[chat_service] claude stop hook: %v", err)
+		}
+		if err := agent.EnsurePermissionHook(cfg.ClaudeDir, exePath); err != nil {
+			log.Printf("[chat_service] claude permission hook: %v", err)
+		}
+	}
 }
 
 func (s *ChatService) SendMessage(input string) error {
@@ -373,9 +389,6 @@ func (s *ChatService) emit(event string, data string) {
 			s.hub.Emit("switch_tab", data)
 		}
 		return
-	}
-	if s.app != nil {
-		s.app.Event.Emit(event, data)
 	}
 }
 

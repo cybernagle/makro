@@ -1,90 +1,65 @@
 package main
 
 import (
-	"embed"
 	"log"
 	"os"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/naglezhang/makro/internal/notify"
 )
 
-//go:embed all:frontend/dist
-var assets embed.FS
-
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "serve" {
-		addr := "127.0.0.1:7070"
-		var tlsCert, tlsKey, password string
-		for i := 2; i < len(os.Args); i++ {
-			switch os.Args[i] {
-			case "--addr":
-				i++
-				if i < len(os.Args) {
-					addr = os.Args[i]
-				}
-			case "--tls-cert":
-				i++
-				if i < len(os.Args) {
-					tlsCert = os.Args[i]
-				}
-			case "--tls-key":
-				i++
-				if i < len(os.Args) {
-					tlsKey = os.Args[i]
-				}
-			case "--password":
-				i++
-				if i < len(os.Args) {
-					password = os.Args[i]
-				}
-			}
-		}
-		if err := serve(addr, tlsCert, tlsKey, password); err != nil {
-			log.Fatal(err)
-		}
-		return
+	if len(os.Args) < 2 {
+		log.Fatal("makro-serve must be run with the 'serve' subcommand (launched by Electron)")
 	}
 
-	// Default: Wails GUI mode
-	tmuxSvc := &TmuxService{}
-	termSvc := NewTerminalService()
-	chatSvc := NewChatService(nil)
+	switch os.Args[1] {
+	// Hook forwarders — invoked by Claude Code's Stop/Permission hooks to push
+	// an event to the running Makro instance over the socket.
+	case "notify":
+		if len(os.Args) < 4 {
+			log.Fatal("Usage: makro-serve notify <session> <status>")
+		}
+		_ = notify.SendHook(map[string]string{"type": "agent_stop", "session": os.Args[2], "status": os.Args[3]})
+		return
+	case "permission":
+		if len(os.Args) < 3 {
+			log.Fatal("Usage: makro-serve permission <session>")
+		}
+		_ = notify.SendHook(map[string]string{"type": "permission", "session": os.Args[2]})
+		return
+	case "serve":
+		// continue below
+	default:
+		log.Fatal("makro-serve must be run with the 'serve' subcommand (launched by Electron)")
+	}
 
-	app := application.New(application.Options{
-		Name:        "Makro",
-		Description: "Multi-agent coding orchestrator",
-		Services: []application.Service{
-			application.NewService(tmuxSvc),
-			application.NewService(termSvc),
-			application.NewService(chatSvc),
-		},
-		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(assets),
-		},
-		Mac: application.MacOptions{
-			ApplicationShouldTerminateAfterLastWindowClosed: true,
-		},
-	})
-
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:            "Makro",
-		Width:            1200,
-		Height:           800,
-		MinWidth:         800,
-		MinHeight:        500,
-		BackgroundColour: application.NewRGB(30, 30, 30),
-		Mac: application.MacWindow{
-			InvisibleTitleBarHeight: 50,
-			Backdrop:                application.MacBackdropTranslucent,
-			TitleBar:                application.MacTitleBarHiddenInset,
-		},
-		URL: "/",
-	})
-
-	termSvc.SetApp(app)
-	chatSvc.SetApp(app)
-
-	if err := app.Run(); err != nil {
+	addr := "127.0.0.1:7070"
+	var tlsCert, tlsKey, password string
+	for i := 2; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--addr":
+			i++
+			if i < len(os.Args) {
+				addr = os.Args[i]
+			}
+		case "--tls-cert":
+			i++
+			if i < len(os.Args) {
+				tlsCert = os.Args[i]
+			}
+		case "--tls-key":
+			i++
+			if i < len(os.Args) {
+				tlsKey = os.Args[i]
+			}
+		case "--password":
+			i++
+			if i < len(os.Args) {
+				password = os.Args[i]
+			}
+		}
+	}
+	if err := serve(addr, tlsCert, tlsKey, password); err != nil {
 		log.Fatal(err)
 	}
 }
