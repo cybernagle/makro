@@ -5,7 +5,6 @@ func AllTools(tc TmuxClient, assessor Assessor, cwd string, notifier Notifier) [
 		NewListSessionsTool(tc),
 		NewCreateSessionTool(tc),
 		NewSwitchSessionTool(tc),
-		NewKillSessionTool(tc),
 		NewSendToSessionTool(tc),
 		NewReadSessionOutputTool(tc),
 		NewReadStructuredOutputTool(tc),

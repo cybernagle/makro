@@ -59,17 +59,6 @@ func (cr *CommandRegistry) registerDefaults() {
 		},
 	})
 	cr.Register(&SlashCommand{
-		Name: "kill", Usage: "/kill <name>",
-		Description: "Kill a tmux session",
-		Execute: func(ctx context.Context, args []string) (string, error) {
-			if len(args) < 1 {
-				return "", fmt.Errorf("usage: /kill <name>")
-			}
-			tool := tools.NewKillSessionTool(cr.tc)
-			return tool.Execute(ctx, map[string]any{"name": args[0]})
-		},
-	})
-	cr.Register(&SlashCommand{
 		Name: "list", Usage: "/list",
 		Description: "List all sessions",
 		Execute: func(ctx context.Context, args []string) (string, error) {

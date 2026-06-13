@@ -120,18 +120,6 @@ func TestSwitchSessionNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
-func TestKillSessionTool(t *testing.T) {
-	mc := newMockTmuxClient()
-
-	tool := NewKillSessionTool(mc)
-	result, err := tool.Execute(context.Background(), map[string]any{
-		"name": "doomed",
-	})
-	require.NoError(t, err)
-	assert.Contains(t, result, "killed")
-	assert.Contains(t, mc.lastCmd(), "kill-session")
-}
-
 func TestSendToSessionTool(t *testing.T) {
 	mc := newMockTmuxClient()
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "target")] = "claude"
@@ -218,7 +206,7 @@ func TestReadSessionOutputEmpty(t *testing.T) {
 func TestAllToolsCount(t *testing.T) {
 	mc := newMockTmuxClient()
 	ts := AllTools(mc, nil, "/tmp", nil)
-	assert.Len(t, ts, 18)
+	assert.Len(t, ts, 17)
 }
 
 func TestReadStructuredOutputTool(t *testing.T) {

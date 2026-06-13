@@ -575,7 +575,6 @@ Available tools:
 - list_sessions: List all tmux sessions
 - create_session: Create a new session (args: name, working_dir)
 - switch_session: Switch viewer to a session (args: name)
-- kill_session: Kill a session (args: name)
 - send_to_session: Send text to a session (args: name, message)
 - read_session_output: Read a session's current output (args: name)
 - read_structured_output: Parse session output into structured JSON with status, messages, errors, files (args: name)
