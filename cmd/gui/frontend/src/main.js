@@ -124,9 +124,18 @@ document.querySelectorAll(".popup-copy").forEach(btn => {
     });
 });
 
+const appEl = document.getElementById("app");
+// Toggle the chat panel: collapses #chat-panel AND the matching toolbar-left
+// half (so the terminal tabs slide flush left), keeping them in sync.
+function toggleChat() {
+    const collapsed = chatPanel.classList.toggle("collapsed");
+    btnToggle.classList.toggle("collapsed", collapsed);
+    appEl.classList.toggle("chat-collapsed", collapsed);
+    return collapsed;
+}
+
 btnToggle.addEventListener("click", () => {
-    chatPanel.classList.toggle("collapsed");
-    btnToggle.classList.toggle("collapsed", chatPanel.classList.contains("collapsed"));
+    toggleChat();
     setTimeout(refitAll, 250);
 });
 
@@ -616,11 +625,10 @@ document.addEventListener("keydown", (e) => {
     }
     if (e.key === "b") {
         e.preventDefault();
-        chatPanel.classList.toggle("collapsed");
-        btnToggle.classList.toggle("collapsed", chatPanel.classList.contains("collapsed"));
+        const collapsed = toggleChat();
         setTimeout(refitAll, 50);
         setTimeout(refitAll, 300);
-        if (chatPanel.classList.contains("collapsed")) {
+        if (collapsed) {
             const entry = activeTab && terminals.get(activeTab);
             if (entry) setTimeout(() => entry.term.focus(), 300);
         }
@@ -649,6 +657,15 @@ document.addEventListener("keydown", (e) => {
         } else {
             chatInput.focus();
         }
+    }
+});
+
+// Alt+Enter toggles native fullscreen (macOS's native ⌃⌘F aside, Alt+Enter is
+// the convention the user expects). Delegated to the main process via IPC.
+document.addEventListener("keydown", (e) => {
+    if (e.altKey && e.key === "Enter") {
+        e.preventDefault();
+        window.makro?.toggleFullscreen?.();
     }
 });
 

@@ -178,6 +178,10 @@ ipcMain.handle('makro:connectionInfo', () => {
 
 ipcMain.handle('makro:clipboard:read', () => clipboard.readText());
 ipcMain.handle('makro:clipboard:write', (_e, text) => clipboard.writeText(String(text || '')));
+ipcMain.handle('makro:toggleFullscreen', () => {
+  if (!win) return;
+  win.setFullScreen(!win.isFullScreen());
+});
 
 app.whenReady().then(() => {
   startBackend();

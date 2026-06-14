@@ -43,11 +43,41 @@ html, body { height: 100%; overflow: hidden; }
   height: var(--toolbar-h);
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-default);
-  padding: 0 8px 0 78px;
-  gap: 2px;
   flex-shrink: 0;
   user-select: none;
   -webkit-app-region: drag;
+}
+/* Left half of the toolbar: sits over the chat column, reserves space for the
+   macOS traffic lights. Mirrors #chat-panel width so the tabs (in toolbar-right)
+   align over the terminal column. Collapses together with chat (see #app.chat-collapsed). */
+#toolbar-left {
+  width: 35%;
+  max-width: 480px;
+  min-width: 0;
+  padding-left: 78px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+  transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1), min-width 0.25s cubic-bezier(0.16, 1, 0.3, 1), max-width 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* Right half: sits over the terminal column. Holds the tabs + session actions. */
+#toolbar-right {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+  -webkit-app-region: drag;
+}
+#tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
 }
 
 #btn-toggle.collapsed svg :first-child { opacity: 0.35; }
@@ -55,10 +85,11 @@ html, body { height: 100%; overflow: hidden; }
 
 #tabs {
   display: flex;
+  align-items: center;
+  gap: 4px;
   flex: 1;
   min-width: 0;
   overflow-x: auto;
-  gap: 2px;
   -webkit-app-region: no-drag;
   scrollbar-width: thin;
   scrollbar-color: var(--bg-active) transparent;
@@ -71,16 +102,16 @@ html, body { height: 100%; overflow: hidden; }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 14px;
-  border-radius: 6px;
+  padding: 5px 16px;
+  border-radius: 7px;
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
   border: none;
-  height: 28px;
+  height: 32px;
   font-family: var(--font-mono);
   transition: all 0.15s ease;
 }
@@ -138,7 +169,7 @@ html, body { height: 100%; overflow: hidden; }
 }
 .tab .tab-badge.visible { display: flex; }
 
-#toolbar-spacer { flex: 0 0 auto; width: 8px; }
+#toolbar-spacer { flex: 1; min-width: 8px; }
 
 #btn-new, #btn-refresh, #btn-toggle, #btn-connect {
   width: 28px; height: 28px;
@@ -211,6 +242,18 @@ html, body { height: 100%; overflow: hidden; }
   max-width: 0;
   overflow: hidden;
   border-right: none;
+}
+/* When chat is collapsed, the left toolbar half collapses too and the tabs
+   reserve the traffic-light space so they don't slide under the lights. */
+#app.chat-collapsed #toolbar-left {
+  width: 0;
+  min-width: 0;
+  max-width: 0;
+  padding-left: 0;
+  overflow: hidden;
+}
+#app.chat-collapsed #toolbar-right {
+  padding-left: 78px;
 }
 
 /* ── Messages ── */

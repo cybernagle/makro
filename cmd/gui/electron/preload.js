@@ -7,4 +7,5 @@ contextBridge.exposeInMainWorld('makro', {
   getConnectionInfo: () => ipcRenderer.invoke('makro:connectionInfo'),
   clipboardRead: () => ipcRenderer.invoke('makro:clipboard:read'),
   clipboardWrite: (text) => ipcRenderer.invoke('makro:clipboard:write', text),
+  toggleFullscreen: () => ipcRenderer.invoke('makro:toggleFullscreen'),
 });
