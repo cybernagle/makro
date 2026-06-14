@@ -194,10 +194,12 @@ func parseAssistantLine(line []byte) (rec Record, cwd string, ok bool) {
 }
 
 // sessionLabel derives a dashboard session name from a transcript's cwd: the
-// working-directory basename (e.g. ".../makro" → "makro"), or "claude" if empty.
+// working-directory basename (e.g. ".../makro" → "makro"), or "claude" if the
+// cwd is empty/root (avoids a literal "/" or "." label).
 func sessionLabel(cwd string) string {
-	if cwd == "" {
+	base := filepath.Base(cwd)
+	if base == "" || base == "/" || base == "." {
 		return "claude"
 	}
-	return filepath.Base(cwd)
+	return base
 }
