@@ -50,6 +50,27 @@ func (s *ChatService) RegisterDeviceToken(deviceID, token string) {
 	}
 }
 
+// ApplySessionState fills Working + Unread on each session from the notifier
+// so /api/sessions carries tab state. Safe to call before init completes
+// (notifier nil → no-op, sessions still return with active only).
+func (s *ChatService) ApplySessionState(sessions []Session) {
+	if s.notifier == nil {
+		return
+	}
+	for i := range sessions {
+		sessions[i].Working = s.notifier.Working(sessions[i].Name)
+		sessions[i].Unread = s.notifier.Unread(sessions[i].Name)
+	}
+}
+
+// MarkSessionViewed clears the unread badge for a session (called when the
+// user switches to / opens it).
+func (s *ChatService) MarkSessionViewed(session string) {
+	if s.notifier != nil {
+		s.notifier.ClearUnread(session)
+	}
+}
+
 func (s *ChatService) initHistory() {
 	cfg, err := config.Load()
 	if err != nil {

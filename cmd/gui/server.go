@@ -160,8 +160,8 @@ func serve(addr string, tlsCert, tlsKey, password string) error {
 	handler = corsMiddleware(handler)
 
 	// ── API routes ──
-	mux.HandleFunc("/api/sessions", sessionsHandler)
-	mux.HandleFunc("/api/sessions/", sessionHandler)
+	mux.HandleFunc("/api/sessions", sessionsHandler(chatSvc))
+	mux.HandleFunc("/api/sessions/", sessionHandler(chatSvc))
 	mux.HandleFunc("/api/chat", chatHandler(chatSvc, hub))
 	mux.HandleFunc("/api/chat/history", chatHistoryHandler(chatSvc))
 	mux.HandleFunc("/api/device-token", deviceTokenHandler(chatSvc))
@@ -274,76 +274,84 @@ func authMiddleware(next http.Handler, password string) http.Handler {
 
 // ── Session list/create ──
 
-func sessionsHandler(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case "GET":
-		svc := &TmuxService{}
-		sessions, err := svc.ListSessions()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+func sessionsHandler(chatSvc *ChatService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			svc := &TmuxService{}
+			sessions, err := svc.ListSessions()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			chatSvc.ApplySessionState(sessions)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(sessions)
+		case "POST":
+			var body struct {
+				Name       string `json:"name"`
+				WorkingDir string `json:"workingDir"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid json", http.StatusBadRequest)
+				return
+			}
+			svc := &TmuxService{}
+			if err := svc.CreateSession(body.Name, body.WorkingDir); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sessions)
-	case "POST":
-		var body struct {
-			Name       string `json:"name"`
-			WorkingDir string `json:"workingDir"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
-			return
-		}
-		svc := &TmuxService{}
-		if err := svc.CreateSession(body.Name, body.WorkingDir); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusCreated)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 // ── Session kill ──
 
-func sessionHandler(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
-	path = strings.TrimSuffix(path, "/")
-	if path == "" {
-		http.Error(w, "missing session name", http.StatusBadRequest)
-		return
-	}
+func sessionHandler(chatSvc *ChatService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+		path = strings.TrimSuffix(path, "/")
+		if path == "" {
+			http.Error(w, "missing session name", http.StatusBadRequest)
+			return
+		}
 
-	// Sub-routes: /api/sessions/{name}/capture, /api/sessions/{name}/send
-	if idx := strings.IndexByte(path, '/'); idx >= 0 {
-		name := path[:idx]
-		sub := path[idx+1:]
-		switch sub {
-		case "capture":
-			sessionCaptureHandler(w, r, name)
-			return
-		case "send":
-			sessionSendHandler(w, r, name)
-			return
+		// Sub-routes: /api/sessions/{name}/capture, /api/sessions/{name}/send
+		if idx := strings.IndexByte(path, '/'); idx >= 0 {
+			name := path[:idx]
+			sub := path[idx+1:]
+			switch sub {
+			case "capture":
+				sessionCaptureHandler(w, r, name)
+				return
+			case "send":
+				sessionSendHandler(w, r, name)
+				return
+			case "viewed":
+				sessionViewedHandler(chatSvc, w, r, name)
+				return
+			default:
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+		}
+
+		// /api/sessions/{name}
+		name := path
+		switch r.Method {
+		case "DELETE":
+			svc := &TmuxService{}
+			if err := svc.KillSession(name); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 		default:
-			http.Error(w, "not found", http.StatusNotFound)
-			return
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-	}
-
-	// /api/sessions/{name}
-	name := path
-	switch r.Method {
-	case "DELETE":
-		svc := &TmuxService{}
-		if err := svc.KillSession(name); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
@@ -394,6 +402,16 @@ func sessionSendHandler(w http.ResponseWriter, r *http.Request, name string) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// sessionViewedHandler clears the unread badge for a session (POST, no body).
+func sessionViewedHandler(chatSvc *ChatService, w http.ResponseWriter, r *http.Request, name string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	chatSvc.MarkSessionViewed(name)
 	w.WriteHeader(http.StatusNoContent)
 }
 

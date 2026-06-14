@@ -29,6 +29,7 @@ type AgentNotifier struct {
 	seq          map[string]uint64                   // session → latest notification sequence
 	lastStatus   map[string]string                   // session → last notification type ("permission", "done", etc.)
 	working      map[string]bool                     // session → agent is mid-turn (UserPromptSubmit → Stop)
+	unread       map[string]int                      // session → finished-task notifications not yet viewed
 	nextID       uint64
 	sockPath     string
 	listener     net.Listener
@@ -51,6 +52,7 @@ func NewAgentNotifier() *AgentNotifier {
 		seq:        make(map[string]uint64),
 		lastStatus: make(map[string]string),
 		working:    make(map[string]bool),
+		unread:     make(map[string]int),
 		sockPath:   filepath.Join(home, ".makro", "hooks.sock"),
 		done:       make(chan struct{}),
 	}
@@ -112,6 +114,22 @@ func (n *AgentNotifier) Working(session string) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.working[session]
+}
+
+// Unread returns the count of finished-task notifications for a session that
+// the user has not yet viewed. Incremented on each agent_stop.
+func (n *AgentNotifier) Unread(session string) int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.unread[session]
+}
+
+// ClearUnread resets the unread count for a session (called when the user
+// views it).
+func (n *AgentNotifier) ClearUnread(session string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	delete(n.unread, session)
 }
 
 // Notify marks a session as stopped and wakes all waiters.
@@ -286,6 +304,7 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 		n.Notify(msg.Session, msg.Status)
 		n.mu.Lock()
 		n.working[msg.Session] = false
+		n.unread[msg.Session]++
 		n.mu.Unlock()
 		if onAgentStop != nil {
 			onAgentStop(msg.Session, msg.Status)

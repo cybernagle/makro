@@ -354,3 +354,30 @@ func TestNotifierOnAgentStartCallback(t *testing.T) {
 
 	assert.True(t, n.Working("worker"), "callback and working flag set together")
 }
+
+func TestNotifierUnreadIncrementsOnStopAndClears(t *testing.T) {
+	n := newNotifierWithShortPath(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, n.Start(ctx))
+	defer n.Stop()
+
+	assert.Equal(t, 0, n.Unread("auth"), "no stops yet → 0 unread")
+
+	dialAndSend(t, n.sockPath, hookPayload{Type: "agent_stop", Session: "auth", Status: "done"})
+	require.Eventually(t, func() bool { return n.Unread("auth") == 1 }, time.Second, 10*time.Millisecond,
+		"agent_stop should bump unread")
+
+	// agent_start must not bump unread.
+	dialAndSend(t, n.sockPath, hookPayload{Type: "agent_start", Session: "auth"})
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 1, n.Unread("auth"), "start must not change unread")
+
+	dialAndSend(t, n.sockPath, hookPayload{Type: "agent_stop", Session: "auth", Status: "done"})
+	require.Eventually(t, func() bool { return n.Unread("auth") == 2 }, time.Second, 10*time.Millisecond,
+		"second stop → unread 2")
+
+	n.ClearUnread("auth")
+	assert.Equal(t, 0, n.Unread("auth"), "ClearUnread resets to 0")
+}

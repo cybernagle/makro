@@ -31,8 +31,10 @@ func getTmuxBin() string {
 type TmuxService struct{}
 
 type Session struct {
-	Name   string `json:"name"`
-	Active bool   `json:"active"`
+	Name    string `json:"name"`
+	Active  bool   `json:"active"`
+	Working bool   `json:"working,omitempty"`
+	Unread  int    `json:"unread,omitempty"`
 }
 
 func tmuxArgs(extra ...string) []string {
