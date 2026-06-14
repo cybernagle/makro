@@ -710,6 +710,83 @@ async function renderDashboard() {
     await loadTasks();
     renderSessionCards(sessions || []);
     renderKanbanBoard();
+    renderUsagePanel();
+}
+
+// ── Usage (prompt consumption) panel ──
+async function renderUsagePanel() {
+    const panel = document.getElementById("usage-panel");
+    if (!panel) return;
+    panel.innerHTML = '<div class="usage-title">Prompt Usage</div><div class="usage-empty">Loading…</div>';
+    try {
+        const [stats, diag, timeline] = await Promise.all([
+            api("/api/usage/stats?hours=24"),
+            api("/api/usage/diagnostics"),
+            api("/api/usage/timeline?hours=24"),
+        ]);
+        panel.innerHTML = usagePanelHTML(stats, diag, timeline);
+    } catch (e) {
+        panel.innerHTML = '<div class="usage-title">Prompt Usage</div><div class="usage-empty">Unavailable</div>';
+    }
+}
+
+function usagePanelHTML(stats, diag, timeline) {
+    if (!stats) {
+        return '<div class="usage-title">Prompt Usage</div><div class="usage-empty">No data yet</div>';
+    }
+    const stat = (label, val, warn) =>
+        `<div class="usage-stat ${warn ? "warn" : ""}"><div class="usage-stat-val">${fmtNum(val)}</div><div class="usage-stat-label">${label}</div></div>`;
+
+    let html = `<div class="usage-head"><span class="usage-title">Prompt Usage</span><span class="usage-window">last ${stats.window_hours || 5}h</span>`;
+    if (stats.quota_total > 0) {
+        const pct = Math.min(100, stats.quota_percent || 0);
+        html += `<span class="usage-quota"><span class="usage-quota-bar"><span class="usage-quota-fill" style="width:${pct}%"></span></span><span class="usage-quota-text">${stats.quota_used}/${stats.quota_total} · ${pct.toFixed(0)}%</span></span>`;
+    }
+    html += `</div><div class="usage-stats">`;
+    html += stat("Prompts", stats.total_prompts, false);
+    html += stat("Tokens", stats.total_tokens, false);
+    html += stat("High-cost", stats.high_cost_calls, stats.high_cost_calls > 0);
+    html += stat("Duplicates", stats.duplicate_calls, stats.duplicate_calls > 0);
+    html += stat("Frequent", stats.frequent_calls, stats.frequent_calls > 0);
+    html += stat("Ineffective", stats.ineffective_calls, stats.ineffective_calls > 0);
+    html += `</div>`;
+
+    if (stats.by_model && Object.keys(stats.by_model).length) {
+        html += `<div class="usage-models">`;
+        for (const [m, ms] of Object.entries(stats.by_model)) {
+            html += `<div class="usage-model"><span class="usage-model-name">${esc(m)}</span><span class="usage-model-meta">${ms.calls} calls · ${fmtNum(ms.total_tokens)} tok</span></div>`;
+        }
+        html += `</div>`;
+    }
+
+    if (diag && diag.recommendations && diag.recommendations.length) {
+        html += `<div class="usage-alerts">`;
+        for (const r of diag.recommendations) html += `<div class="usage-alert">⚠ ${esc(r)}</div>`;
+        html += `</div>`;
+    }
+
+    if (timeline && timeline.length) {
+        const max = Math.max(...timeline.map(p => p.total_tokens), 1);
+        html += `<div class="usage-tl">`;
+        for (const p of timeline) {
+            const h = Math.max(2, (p.total_tokens / max) * 100);
+            const hr = (p.hour || "").slice(11, 13);
+            html += `<div class="usage-tl-col"><div class="usage-tl-bar" style="height:${h}%"></div><div class="usage-tl-label">${hr}</div></div>`;
+        }
+        html += `</div>`;
+    }
+    return html;
+}
+
+function fmtNum(n) {
+    n = Number(n) || 0;
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+    return String(n);
+}
+
+function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"}[c]));
 }
 
 function renderSessionCards(sessions) {

@@ -838,6 +838,52 @@ html, body { height: 100%; overflow: hidden; }
 }
 .session-card.pulse { animation: cardPulse 0.4s ease-out; }
 
+/* ── Usage panel (prompt consumption) ── */
+
+.usage-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.usage-head { display: flex; align-items: center; gap: 10px; }
+.usage-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+.usage-window { font-size: 11px; color: var(--text-tertiary); }
+.usage-quota { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.usage-quota-bar { width: 80px; height: 6px; border-radius: 3px; background: var(--bg-active); overflow: hidden; }
+.usage-quota-fill { display: block; height: 100%; background: var(--accent); }
+.usage-quota-text { font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); }
+.usage-stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.usage-stat {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.usage-stat-val { font-size: 18px; font-weight: 600; color: var(--text-primary); font-family: var(--font-mono); }
+.usage-stat-label { font-size: 10px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+.usage-stat.warn .usage-stat-val { color: var(--red); }
+.usage-models { display: flex; flex-wrap: wrap; gap: 8px; }
+.usage-model {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  border-radius: 6px; padding: 4px 8px; font-size: 11px;
+}
+.usage-model-name { color: var(--text-secondary); font-family: var(--font-mono); }
+.usage-model-meta { color: var(--text-tertiary); }
+.usage-alerts { display: flex; flex-direction: column; gap: 4px; }
+.usage-alert {
+  font-size: 11px; color: #fbbf24;
+  background: rgba(251,191,36,0.08);
+  border: 1px solid rgba(251,191,36,0.2);
+  border-radius: 6px; padding: 6px 10px;
+}
+.usage-tl { display: flex; align-items: flex-end; gap: 3px; height: 48px; margin-top: 4px; }
+.usage-tl-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; height: 100%; justify-content: flex-end; }
+.usage-tl-bar { width: 100%; max-width: 14px; background: var(--accent); border-radius: 2px 2px 0 0; opacity: 0.7; min-height: 2px; }
+.usage-tl-label { font-size: 9px; color: var(--text-tertiary); }
+.usage-empty { font-size: 12px; color: var(--text-tertiary); padding: 8px 0; }
+
 /* ── Kanban Board ── */
 
 #kanban-header {
