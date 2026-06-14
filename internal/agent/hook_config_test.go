@@ -189,3 +189,102 @@ func TestEnsurePermissionHookIdempotent(t *testing.T) {
 	}
 	assert.Equal(t, 1, count, "should not add duplicate permission hooks")
 }
+
+func TestEnsureStartHookAddsHook(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	execPath := filepath.Join(dir, "bin", "makro")
+
+	initial := map[string]any{"env": map[string]string{}}
+	data, _ := json.MarshalIndent(initial, "", "  ")
+	require.NoError(t, os.WriteFile(settingsPath, data, 0o644))
+
+	err := EnsureStartHook(dir, execPath)
+	require.NoError(t, err)
+
+	result, err := os.ReadFile(settingsPath)
+	require.NoError(t, err)
+
+	var settings claudeSettings
+	require.NoError(t, json.Unmarshal(result, &settings))
+
+	found := false
+	for _, group := range settings.Hooks["UserPromptSubmit"] {
+		for _, h := range group.Hooks {
+			if h.Command == buildStartHookCommand(execPath) {
+				found = true
+			}
+		}
+	}
+	assert.True(t, found, "should contain makro start hook under UserPromptSubmit")
+}
+
+func TestEnsureStartHookIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	execPath := filepath.Join(dir, "bin", "makro")
+
+	initial := map[string]any{"env": map[string]string{}}
+	data, _ := json.MarshalIndent(initial, "", "  ")
+	require.NoError(t, os.WriteFile(settingsPath, data, 0o644))
+
+	require.NoError(t, EnsureStartHook(dir, execPath))
+	require.NoError(t, EnsureStartHook(dir, execPath))
+
+	result, err := os.ReadFile(settingsPath)
+	require.NoError(t, err)
+
+	var settings claudeSettings
+	require.NoError(t, json.Unmarshal(result, &settings))
+
+	count := 0
+	for _, group := range settings.Hooks["UserPromptSubmit"] {
+		for _, h := range group.Hooks {
+			if h.Command == buildStartHookCommand(execPath) {
+				count++
+			}
+		}
+	}
+	assert.Equal(t, 1, count, "should not add duplicate start hooks")
+}
+
+// TestEnsureStartHookDistinctFromStop guards against the start/stop suffixes
+// colliding: installing a start hook must not be detected as (or duplicate)
+// the stop hook, since both share the "makro notify" command prefix.
+func TestEnsureStartHookDistinctFromStop(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	execPath := filepath.Join(dir, "bin", "makro")
+
+	initial := map[string]any{"env": map[string]string{}}
+	data, _ := json.MarshalIndent(initial, "", "  ")
+	require.NoError(t, os.WriteFile(settingsPath, data, 0o644))
+
+	require.NoError(t, EnsureStopHook(dir, execPath))
+	require.NoError(t, EnsureStartHook(dir, execPath))
+	// Re-running stop must still see its hook as present (start didn't satisfy it).
+	require.NoError(t, EnsureStopHook(dir, execPath))
+
+	result, err := os.ReadFile(settingsPath)
+	require.NoError(t, err)
+	var settings claudeSettings
+	require.NoError(t, json.Unmarshal(result, &settings))
+
+	stopCount, startCount := 0, 0
+	for _, group := range settings.Hooks["Stop"] {
+		for _, h := range group.Hooks {
+			if h.Command == buildStopHookCommand(execPath) {
+				stopCount++
+			}
+		}
+	}
+	for _, group := range settings.Hooks["UserPromptSubmit"] {
+		for _, h := range group.Hooks {
+			if h.Command == buildStartHookCommand(execPath) {
+				startCount++
+			}
+		}
+	}
+	assert.Equal(t, 1, stopCount, "exactly one stop hook")
+	assert.Equal(t, 1, startCount, "exactly one start hook")
+}

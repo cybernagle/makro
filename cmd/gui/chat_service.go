@@ -179,6 +179,13 @@ func (s *ChatService) init() {
 		s.StartMonitor(session)
 	})
 
+	// OnAgentStart fires on Claude Code's UserPromptSubmit hook — the session's
+	// agent has begun a turn. The working flag itself is set in the notifier;
+	// Stage 3 promotes this to a session_state WS event for the frontend.
+	notifier.OnAgentStart(func(session string) {
+		log.Printf("[chat_service] session %s started working", session)
+	})
+
 	go notifier.Start(context.Background())
 
 	s.orch = orch
@@ -194,6 +201,9 @@ func (s *ChatService) init() {
 	if exePath, err := os.Executable(); err == nil {
 		if err := agent.EnsureStopHook(cfg.ClaudeDir, exePath); err != nil {
 			log.Printf("[chat_service] claude stop hook: %v", err)
+		}
+		if err := agent.EnsureStartHook(cfg.ClaudeDir, exePath); err != nil {
+			log.Printf("[chat_service] claude start hook: %v", err)
 		}
 		if err := agent.EnsurePermissionHook(cfg.ClaudeDir, exePath); err != nil {
 			log.Printf("[chat_service] claude permission hook: %v", err)

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -294,4 +295,62 @@ func TestNotifierUnixSocketMalformedJSON(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		// Expected.
 	}
+}
+
+// dialAndSend connects to the Unix socket and sends a fully-typed payload.
+func dialAndSend(t *testing.T, sockPath string, payload hookPayload) {
+	t.Helper()
+	conn, err := net.Dial("unix", sockPath)
+	require.NoError(t, err)
+	msg, _ := json.Marshal(payload)
+	conn.Write(msg)
+	if uc, ok := conn.(*net.UnixConn); ok {
+		uc.CloseWrite()
+	}
+	conn.Close()
+}
+
+func TestNotifierWorkingStartAndStop(t *testing.T) {
+	n := newNotifierWithShortPath(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, n.Start(ctx))
+	defer n.Stop()
+
+	assert.False(t, n.Working("auth"), "no event yet → not working")
+
+	dialAndSend(t, n.sockPath, hookPayload{Type: "agent_start", Session: "auth"})
+	require.Eventually(t, func() bool { return n.Working("auth") }, time.Second, 10*time.Millisecond,
+		"agent_start should mark session working")
+
+	// A permission event mid-turn must NOT clear working.
+	dialAndSend(t, n.sockPath, hookPayload{Type: "permission", Session: "auth"})
+	time.Sleep(50 * time.Millisecond)
+	assert.True(t, n.Working("auth"), "permission must not clear working")
+
+	dialAndSend(t, n.sockPath, hookPayload{Type: "agent_stop", Session: "auth", Status: "done"})
+	require.Eventually(t, func() bool { return !n.Working("auth") }, time.Second, 10*time.Millisecond,
+		"agent_stop should clear working")
+}
+
+func TestNotifierOnAgentStartCallback(t *testing.T) {
+	n := newNotifierWithShortPath(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, n.Start(ctx))
+	defer n.Stop()
+
+	var got atomic.Value
+	n.OnAgentStart(func(session string) { got.Store(session) })
+
+	dialAndSend(t, n.sockPath, hookPayload{Type: "agent_start", Session: "worker"})
+
+	require.Eventually(t, func() bool {
+		v := got.Load()
+		return v != nil && v.(string) == "worker"
+	}, time.Second, 10*time.Millisecond, "OnAgentStart should fire with the session name")
+
+	assert.True(t, n.Working("worker"), "callback and working flag set together")
 }

@@ -10,6 +10,7 @@ import (
 
 const (
 	fsNotifyHookSuffix     = ` notify "$(tmux display-message -p '#{session_name}')" done`
+	fsStartHookSuffix      = ` notify "$(tmux display-message -p '#{session_name}')" start`
 	fsPermissionHookSuffix = ` permission "$(tmux display-message -p '#{session_name}')"`
 )
 
@@ -80,6 +81,66 @@ func EnsureStopHook(claudeDir, executablePath string) error {
 		}},
 	})
 	hooks["Stop"] = stopHooks
+
+	updated, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal settings: %w", err)
+	}
+	updated = append(updated, '\n')
+	return os.WriteFile(settingsPath, updated, info.Mode().Perm())
+}
+
+// EnsureStartHook adds a makro notify UserPromptSubmit hook to Claude Code
+// settings if one does not already exist. The function is idempotent.
+func EnsureStartHook(claudeDir, executablePath string) error {
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	info, err := os.Stat(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat settings: %w", err)
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return fmt.Errorf("read settings: %w", err)
+	}
+
+	var settings any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+	root, ok := settings.(map[string]any)
+	if !ok {
+		return fmt.Errorf("parse settings: root must be an object")
+	}
+
+	hooks, err := ensureJSONObject(root, "hooks")
+	if err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+	startHooks, err := ensureJSONArray(hooks, "UserPromptSubmit")
+	if err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+
+	exists, err := startHookExists(startHooks)
+	if err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+	if exists {
+		return nil
+	}
+
+	startHooks = append(startHooks, map[string]any{
+		"hooks": []any{map[string]any{
+			"type":    "command",
+			"command": buildStartHookCommand(executablePath),
+			"timeout": 10,
+		}},
+	})
+	hooks["UserPromptSubmit"] = startHooks
 
 	updated, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
@@ -197,6 +258,34 @@ func stopHookExists(stopGroups []any) (bool, error) {
 	return false, nil
 }
 
+func startHookExists(startGroups []any) (bool, error) {
+	for _, groupValue := range startGroups {
+		group, ok := groupValue.(map[string]any)
+		if !ok {
+			return false, fmt.Errorf("hooks.UserPromptSubmit entries must be objects")
+		}
+		hookValues, ok := group["hooks"]
+		if !ok {
+			continue
+		}
+		hooks, ok := hookValues.([]any)
+		if !ok {
+			return false, fmt.Errorf("hooks.UserPromptSubmit[].hooks must be an array")
+		}
+		for _, hookValue := range hooks {
+			hook, ok := hookValue.(map[string]any)
+			if !ok {
+				return false, fmt.Errorf("hooks.UserPromptSubmit[].hooks[] must be objects")
+			}
+			command, _ := hook["command"].(string)
+			if isMakroStartHook(command) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 func permissionHookExists(permGroups []any) bool {
 	for _, groupValue := range permGroups {
 		group, ok := groupValue.(map[string]any)
@@ -233,8 +322,16 @@ func isMakroPermissionHook(command string) bool {
 	return strings.Contains(command, "makro") && strings.Contains(command, fsPermissionHookSuffix)
 }
 
+func isMakroStartHook(command string) bool {
+	return strings.Contains(command, "makro") && strings.Contains(command, fsStartHookSuffix)
+}
+
 func buildStopHookCommand(executablePath string) string {
 	return shellQuote(executablePath) + fsNotifyHookSuffix
+}
+
+func buildStartHookCommand(executablePath string) string {
+	return shellQuote(executablePath) + fsStartHookSuffix
 }
 
 func buildPermissionHookCommand(executablePath string) string {

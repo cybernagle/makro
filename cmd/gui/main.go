@@ -19,7 +19,14 @@ func main() {
 		if len(os.Args) < 4 {
 			log.Fatal("Usage: makro-serve notify <session> <status>")
 		}
-		_ = notify.SendHook(map[string]string{"type": "agent_stop", "session": os.Args[2], "status": os.Args[3]})
+		session := os.Args[2]
+		status := os.Args[3]
+		// A "start" status marks the turn as in-progress; everything else is a stop.
+		msgType := "agent_stop"
+		if status == "start" {
+			msgType = "agent_start"
+		}
+		_ = notify.SendHook(map[string]string{"type": msgType, "session": session, "status": status})
 		return
 	case "permission":
 		if len(os.Args) < 3 {

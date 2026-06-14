@@ -28,6 +28,7 @@ type AgentNotifier struct {
 	waiters      map[string]map[uint64]chan struct{} // session → waiter ID → wait channel
 	seq          map[string]uint64                   // session → latest notification sequence
 	lastStatus   map[string]string                   // session → last notification type ("permission", "done", etc.)
+	working      map[string]bool                     // session → agent is mid-turn (UserPromptSubmit → Stop)
 	nextID       uint64
 	sockPath     string
 	listener     net.Listener
@@ -36,6 +37,7 @@ type AgentNotifier struct {
 	onChat       func(role, content string)
 	onSession    func(session, content string) error
 	onAgentStop  func(session, status string)
+	onAgentStart func(session string)
 	onPermission func(session string)
 }
 
@@ -48,6 +50,7 @@ func NewAgentNotifier() *AgentNotifier {
 		waiters:    make(map[string]map[uint64]chan struct{}),
 		seq:        make(map[string]uint64),
 		lastStatus: make(map[string]string),
+		working:    make(map[string]bool),
 		sockPath:   filepath.Join(home, ".makro", "hooks.sock"),
 		done:       make(chan struct{}),
 	}
@@ -101,6 +104,14 @@ func (n *AgentNotifier) LastStatus(session string) string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.lastStatus[session]
+}
+
+// Working reports whether the session's agent is currently mid-turn — set true
+// on an agent_start notification and false on the next agent_stop.
+func (n *AgentNotifier) Working(session string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.working[session]
 }
 
 // Notify marks a session as stopped and wakes all waiters.
@@ -169,6 +180,13 @@ func (n *AgentNotifier) OnAgentStop(fn func(session, status string)) {
 	n.mu.Unlock()
 }
 
+// OnAgentStart sets the callback for agent start notifications (UserPromptSubmit).
+func (n *AgentNotifier) OnAgentStart(fn func(session string)) {
+	n.mu.Lock()
+	n.onAgentStart = fn
+	n.mu.Unlock()
+}
+
 // OnPermission sets the callback for permission request notifications.
 func (n *AgentNotifier) OnPermission(fn func(session string)) {
 	n.mu.Lock()
@@ -221,6 +239,7 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 	onChat := n.onChat
 	onSession := n.onSession
 	onAgentStop := n.onAgentStop
+	onAgentStart := n.onAgentStart
 	onPermission := n.onPermission
 	n.mu.Unlock()
 
@@ -241,6 +260,16 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 				return
 			}
 		}
+	case "agent_start":
+		if msg.Session == "" {
+			return
+		}
+		n.mu.Lock()
+		n.working[msg.Session] = true
+		n.mu.Unlock()
+		if onAgentStart != nil {
+			onAgentStart(msg.Session)
+		}
 	case "permission":
 		if msg.Session == "" {
 			return
@@ -255,6 +284,9 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 			return
 		}
 		n.Notify(msg.Session, msg.Status)
+		n.mu.Lock()
+		n.working[msg.Session] = false
+		n.mu.Unlock()
 		if onAgentStop != nil {
 			onAgentStop(msg.Session, msg.Status)
 		}
