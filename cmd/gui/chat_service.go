@@ -13,6 +13,7 @@ import (
 
 	"github.com/naglezhang/makro/internal/agent"
 	"github.com/naglezhang/makro/internal/agent/tools"
+	"github.com/naglezhang/makro/internal/apns"
 	"github.com/naglezhang/makro/internal/config"
 	"github.com/naglezhang/makro/internal/llm"
 	"github.com/naglezhang/makro/internal/notify"
@@ -20,15 +21,19 @@ import (
 )
 
 type ChatService struct {
-	hub      *chatHub
-	orch     *agent.Orchestrator
-	tc       *tmux.Client
-	notifier *agent.AgentNotifier
-	assessor tools.Assessor
-	history  *ChatHistory
-	monitors map[string]context.CancelFunc
-	mu       sync.Mutex
-	initErr  string
+	hub         *chatHub
+	orch        *agent.Orchestrator
+	tc          *tmux.Client
+	notifier    *agent.AgentNotifier
+	assessor    tools.Assessor
+	history     *ChatHistory
+	devicestore *DeviceStore
+	apns        *apns.Client
+	barkKey     string
+	barkURL     string
+	monitors    map[string]context.CancelFunc
+	mu          sync.Mutex
+	initErr     string
 }
 
 func NewChatService() *ChatService {
@@ -36,6 +41,13 @@ func NewChatService() *ChatService {
 	// Initialize chat history immediately (doesn't need orchestrator).
 	s.initHistory()
 	return s
+}
+
+// RegisterDeviceToken upserts an iOS push token (called from /api/device-token).
+func (s *ChatService) RegisterDeviceToken(deviceID, token string) {
+	if s.devicestore != nil {
+		s.devicestore.Upsert(deviceID, token)
+	}
 }
 
 func (s *ChatService) initHistory() {
@@ -127,14 +139,39 @@ func (s *ChatService) init() {
 		}
 		s.emit("chat:system", msg)
 
-		// Desktop notification only when Makro is not frontmost. Clicking the
-		// banner activates the running Makro.app.
+		// Desktop notification only when Makro is not frontmost AND Bark is not
+		// configured (Bark covers both Mac + iPhone, avoids duplicate on Mac).
 		const makroBundleID = "com.cybernagle.makro"
-		notifyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if !notify.IsFrontmost(notifyCtx, makroBundleID) {
-			notify.Notify(notifyCtx, "Makro", session, lastAssistant, makroBundleID)
+		if s.barkKey == "" {
+			notifyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if !notify.IsFrontmost(notifyCtx, makroBundleID) {
+				notify.Notify(notifyCtx, "Makro", session, lastAssistant, makroBundleID)
+			}
+			cancel()
 		}
-		cancel()
+
+		// iOS push to all registered devices (best-effort, in parallel).
+		if s.apns != nil && s.devicestore != nil {
+			for _, tok := range s.devicestore.All() {
+				go func(token string) {
+					pctx, pcancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer pcancel()
+					if err := s.apns.Push(pctx, token, "Makro", session, lastAssistant, session); err != nil {
+						log.Printf("[chat_service] apns push %s: %v", session, err)
+					}
+				}(tok)
+			}
+		}
+		// Bark push (bypasses APNs signing, uses Bark app APNs cert).
+		if s.barkKey != "" {
+			go func() {
+				bctx, bcancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer bcancel()
+				if err := notify.BarkPush(bctx, s.barkURL, s.barkKey, "Makro", session, lastAssistant); err != nil {
+					log.Printf("[chat_service] bark push: %v", err)
+				}
+			}()
+		}
 	})
 
 	notifier.OnPermission(func(session string) {
@@ -161,6 +198,27 @@ func (s *ChatService) init() {
 		if err := agent.EnsurePermissionHook(cfg.ClaudeDir, exePath); err != nil {
 			log.Printf("[chat_service] claude permission hook: %v", err)
 		}
+	}
+
+	// APNs (iOS push). Device-token store always on; APNs client only when key
+	// material is configured (disabled otherwise, no-op).
+	s.devicestore = NewDeviceStore(filepath.Join(cfg.DataDir, "device_tokens.json"))
+	if cfg.APNsKeyPath != "" {
+		client, err := apns.NewClient(cfg.APNsKeyPath, cfg.APNsKeyID, cfg.APNsTeamID, cfg.APNsBundleID, cfg.APNsSandbox)
+		if err != nil {
+			log.Printf("[chat_service] APNs disabled: %v", err)
+		} else {
+			s.apns = client
+			log.Printf("[chat_service] APNs enabled (bundle=%s sandbox=%v)", cfg.APNsBundleID, cfg.APNsSandbox)
+		}
+	}
+	s.barkKey = cfg.BarkKey
+	s.barkURL = cfg.BarkURL
+	if s.barkURL == "" {
+		s.barkURL = "https://api.day.app"
+	}
+	if s.barkKey != "" {
+		log.Printf("[chat_service] Bark push enabled")
 	}
 }
 

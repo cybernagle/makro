@@ -17,6 +17,7 @@
 		745ADAA73FAD5DA0053D141F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2F4D53CAEC92B38B12F3EA9E /* Assets.xcassets */; };
 		795F31AB0261DA93684F542A /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B845DA418647EA128499AB3A /* ChatView.swift */; };
 		7FDD68202EF81E94CE31A6D6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D33487D9063356B4947134C2 /* SettingsView.swift */; };
+		82D0067DFF4CF9B075296805 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 791D50F6D3288C4934C2006A /* AppDelegate.swift */; };
 		9680A9D36267A514B9281C89 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5771BD2F137609458953553 /* APIClient.swift */; };
 		99BB950716C1F19A97E632A6 /* KanbanViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62DA63C8C7F48649AC028A2E /* KanbanViewModel.swift */; };
 		AB8246F1BEF0BA659B3D046C /* ANSI.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA9859C06BC6CD8E48858057 /* ANSI.swift */; };
@@ -25,13 +26,15 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		073F7A972B71A581504EC2F4 /* Makro.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Makro.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		07256E45F5130600B29B76D3 /* Makro.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Makro.entitlements; sourceTree = "<group>"; };
+		073F7A972B71A581504EC2F4 /* Makro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Makro.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2AFE09E16F77FB3DF26DD049 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		2F32FE4F7A4421F150EB56D6 /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
 		2F4D53CAEC92B38B12F3EA9E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		457FDB72D58643BBFC1E7A9E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		62DA63C8C7F48649AC028A2E /* KanbanViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KanbanViewModel.swift; sourceTree = "<group>"; };
 		7606DB674BC71275A25D1B50 /* TerminalViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalViewModel.swift; sourceTree = "<group>"; };
+		791D50F6D3288C4934C2006A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		84743919C8053EAACF231B37 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
 		8D8533CA7E26A870B431E644 /* SessionsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsViewModel.swift; sourceTree = "<group>"; };
 		93807192D2A1EEB3BDB83074 /* KanbanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KanbanView.swift; sourceTree = "<group>"; };
@@ -50,6 +53,7 @@
 			children = (
 				DA9859C06BC6CD8E48858057 /* ANSI.swift */,
 				E5771BD2F137609458953553 /* APIClient.swift */,
+				791D50F6D3288C4934C2006A /* AppDelegate.swift */,
 				2F4D53CAEC92B38B12F3EA9E /* Assets.xcassets */,
 				B845DA418647EA128499AB3A /* ChatView.swift */,
 				2AFE09E16F77FB3DF26DD049 /* ChatViewModel.swift */,
@@ -57,6 +61,7 @@
 				457FDB72D58643BBFC1E7A9E /* Info.plist */,
 				93807192D2A1EEB3BDB83074 /* KanbanView.swift */,
 				62DA63C8C7F48649AC028A2E /* KanbanViewModel.swift */,
+				07256E45F5130600B29B76D3 /* Makro.entitlements */,
 				E7115624D08EB3EC3D45859F /* MakroApp.swift */,
 				FBE95557715F0222A9A2D898 /* Models.swift */,
 				2F32FE4F7A4421F150EB56D6 /* SessionsView.swift */,
@@ -117,6 +122,11 @@
 					3FF398F9834B5FD99FA0767F = {
 						DevelopmentTeam = K3YMW44F9V;
 						ProvisioningStyle = Automatic;
+						SystemCapabilities = {
+							com.apple.Push = {
+								enabled = YES;
+							};
+						};
 					};
 				};
 			};
@@ -157,6 +167,7 @@
 			files = (
 				AB8246F1BEF0BA659B3D046C /* ANSI.swift in Sources */,
 				9680A9D36267A514B9281C89 /* APIClient.swift in Sources */,
+				82D0067DFF4CF9B075296805 /* AppDelegate.swift in Sources */,
 				795F31AB0261DA93684F542A /* ChatView.swift in Sources */,
 				3542036E248FEB97136E3E85 /* ChatViewModel.swift in Sources */,
 				DB07A8E1A37C8EBD9ED78419 /* Config.swift in Sources */,
@@ -298,11 +309,14 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Makro/Makro.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = K3YMW44F9V;
 				INFOPLIST_FILE = Makro/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Makro;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -320,11 +334,14 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Makro/Makro.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = K3YMW44F9V;
 				INFOPLIST_FILE = Makro/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Makro;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

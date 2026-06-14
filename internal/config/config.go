@@ -28,6 +28,17 @@ type Config struct {
 	ClaudeDir          string `json:"claude_dir"`
 	GuardianPrompt     string `json:"guardian_prompt,omitempty"`
 	MaxContextMessages int    `json:"max_context_messages"`
+
+	// APNs (iOS push) — all optional; when key_path is unset, push is disabled.
+	APNsKeyPath  string `json:"apns_key_path,omitempty"`
+	APNsKeyID    string `json:"apns_key_id,omitempty"`
+	APNsTeamID   string `json:"apns_team_id,omitempty"`
+	APNsBundleID string `json:"apns_bundle_id,omitempty"`
+	APNsSandbox  bool   `json:"apns_sandbox,omitempty"`
+
+	// Bark (iOS push via Bark app — bypasses APNs signing). bark_key from Bark app.
+	BarkKey string `json:"bark_key,omitempty"`
+	BarkURL string `json:"bark_url,omitempty"`
 }
 
 func homeDir() string {
@@ -148,6 +159,29 @@ func (c *Config) applyEnvOverrides() {
 		} else if err != nil {
 			log.Printf("[config] warning: invalid MAKRO_MAX_CONTEXT_MESSAGES: %q, ignored", v)
 		}
+	}
+
+	// APNs (iOS push) overrides.
+	if v := os.Getenv("MAKRO_APNS_KEY_PATH"); v != "" {
+		c.APNsKeyPath = v
+	}
+	if v := os.Getenv("MAKRO_APNS_KEY_ID"); v != "" {
+		c.APNsKeyID = v
+	}
+	if v := os.Getenv("MAKRO_APNS_TEAM_ID"); v != "" {
+		c.APNsTeamID = v
+	}
+	if v := os.Getenv("MAKRO_APNS_BUNDLE_ID"); v != "" {
+		c.APNsBundleID = v
+	}
+	if v := os.Getenv("MAKRO_APNS_SANDBOX"); v != "" {
+		c.APNsSandbox = v == "true" || v == "1"
+	}
+	if v := os.Getenv("MAKRO_BARK_KEY"); v != "" {
+		c.BarkKey = v
+	}
+	if v := os.Getenv("MAKRO_BARK_URL"); v != "" {
+		c.BarkURL = v
 	}
 }
 

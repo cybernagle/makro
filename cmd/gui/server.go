@@ -164,6 +164,7 @@ func serve(addr string, tlsCert, tlsKey, password string) error {
 	mux.HandleFunc("/api/sessions/", sessionHandler)
 	mux.HandleFunc("/api/chat", chatHandler(chatSvc, hub))
 	mux.HandleFunc("/api/chat/history", chatHistoryHandler(chatSvc))
+	mux.HandleFunc("/api/device-token", deviceTokenHandler(chatSvc))
 	mux.HandleFunc("/ws/xterm/", xtermWSHandler)
 	mux.HandleFunc("/ws/snapshot/", wsSnapshotHandler)
 	mux.HandleFunc("/ws/chat", chatWSHandler(hub))
@@ -420,6 +421,29 @@ func chatHandler(chatSvc *ChatService, hub *chatHub) http.HandlerFunc {
 	}
 }
 
+func deviceTokenHandler(chatSvc *ChatService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			DeviceID string `json:"device_id"`
+			Token    string `json:"token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		if body.DeviceID == "" || body.Token == "" {
+			http.Error(w, "device_id and token required", http.StatusBadRequest)
+			return
+		}
+		chatSvc.RegisterDeviceToken(body.DeviceID, body.Token)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func chatCancelHandler(chatSvc *ChatService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
@@ -640,15 +664,9 @@ func chatWSHandler(hub *chatHub) http.HandlerFunc {
 		ch := hub.Subscribe()
 		defer hub.Unsubscribe(ch)
 
-		// Send history first.
-		hub.mu.Lock()
-		for _, evt := range hub.history {
-			data, _ := json.Marshal(evt)
-			conn.WriteMessage(websocket.TextMessage, data)
-		}
-		hub.mu.Unlock()
-
-		// Stream new events.
+		// Stream new events only. Clients load history via
+		// GET /api/chat/history — replaying it here duplicated messages
+		// on every (re)connect.
 		for {
 			select {
 			case evt, ok := <-ch:

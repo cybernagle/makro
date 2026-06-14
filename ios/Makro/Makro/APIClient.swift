@@ -126,6 +126,21 @@ final class APIClient: NSObject {
         _ = try await urlSession.data(for: request)
     }
 
+    /// Registers this device's APNs push token with the makro backend so the
+    /// Mac can send it push notifications when an agent finishes.
+    func registerDeviceToken(deviceID: String, token: String) async throws {
+        let url = config.httpBaseURL.appendingPathComponent("api/device-token")
+        var request = authedRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "device_id": deviceID,
+            "token": token,
+        ])
+        let (_, response) = try await urlSession.data(for: request)
+        try checkAuth(response)
+    }
+
     private func checkAuth(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else { return }
         if http.statusCode == 401 {
