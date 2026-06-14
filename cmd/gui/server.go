@@ -165,6 +165,9 @@ func serve(addr string, tlsCert, tlsKey, password string) error {
 	mux.HandleFunc("/api/chat", chatHandler(chatSvc, hub))
 	mux.HandleFunc("/api/chat/history", chatHistoryHandler(chatSvc))
 	mux.HandleFunc("/api/device-token", deviceTokenHandler(chatSvc))
+	mux.HandleFunc("/api/usage/stats", usageStatsHandler(chatSvc))
+	mux.HandleFunc("/api/usage/diagnostics", usageDiagnosticsHandler(chatSvc))
+	mux.HandleFunc("/api/usage/timeline", usageTimelineHandler(chatSvc))
 	mux.HandleFunc("/ws/xterm/", xtermWSHandler)
 	mux.HandleFunc("/ws/snapshot/", wsSnapshotHandler)
 	mux.HandleFunc("/ws/chat", chatWSHandler(hub))
@@ -460,6 +463,66 @@ func deviceTokenHandler(chatSvc *ChatService) http.HandlerFunc {
 		chatSvc.RegisterDeviceToken(body.DeviceID, body.Token)
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// ── Usage tracking (prompt consumption) ──
+
+func usageStatsHandler(chatSvc *ChatService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		st, err := chatSvc.UsageStats(r.URL.Query().Get("session"), queryHours(r, 5))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(st)
+	}
+}
+
+func usageDiagnosticsHandler(chatSvc *ChatService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		d, err := chatSvc.UsageDiagnostics(r.URL.Query().Get("session"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(d)
+	}
+}
+
+func usageTimelineHandler(chatSvc *ChatService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		tl, err := chatSvc.UsageTimeline(r.URL.Query().Get("session"), queryHours(r, 24))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(tl)
+	}
+}
+
+// queryHours parses an "hours" query param with a default fallback.
+func queryHours(r *http.Request, def int) int {
+	if h := r.URL.Query().Get("hours"); h != "" {
+		if n, err := strconv.Atoi(h); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
 }
 
 func chatCancelHandler(chatSvc *ChatService) http.HandlerFunc {

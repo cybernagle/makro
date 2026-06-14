@@ -74,6 +74,10 @@ func Open(path string) (*Store, error) {
 
 // Record inserts one usage record. It is best-effort: a DB error is logged but
 // never returned to the caller, so tracking can't break the orchestrator.
+// Timestamps are stored as local "2006-01-02 15:04:05" so SQLite datetime()
+// windowing (datetime('now','localtime',...)) and lexicographic comparison line
+// up. Duplicate detection marks is_duplicate when the same
+// session+function+context was recorded within the last 5 minutes.
 func (s *Store) Record(r Record) {
 	if s == nil || s.db == nil {
 		return
@@ -81,12 +85,26 @@ func (s *Store) Record(r Record) {
 	if r.Timestamp.IsZero() {
 		r.Timestamp = time.Now()
 	}
-	_, err := s.db.ExecContext(context.Background(),
+	ts := r.Timestamp.Local().Format("2006-01-02 15:04:05")
+	ctx := context.Background()
+
+	if !r.IsDuplicate {
+		var dup int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM prompt_usage
+			 WHERE session_name=? AND call_function=? AND call_context=?
+			   AND timestamp >= datetime('now','localtime','-5 minutes')`,
+			r.SessionName, r.CallFunction, r.CallContext).Scan(&dup); err == nil && dup > 0 {
+			r.IsDuplicate = true
+		}
+	}
+
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO prompt_usage
 		   (timestamp, session_name, model_type, prompt_tokens, completion_tokens,
 		    total_tokens, call_function, call_context, is_duplicate, call_duration, error)
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		r.Timestamp.UTC().Format(time.RFC3339), r.SessionName, r.ModelType,
+		ts, r.SessionName, r.ModelType,
 		r.PromptTokens, r.CompletionTokens, r.TotalTokens,
 		r.CallFunction, r.CallContext, r.IsDuplicate, r.CallDurationMS, r.Error,
 	)

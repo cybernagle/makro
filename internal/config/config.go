@@ -39,6 +39,11 @@ type Config struct {
 	// Bark (iOS push via Bark app — bypasses APNs signing). bark_key from Bark app.
 	BarkKey string `json:"bark_key,omitempty"`
 	BarkURL string `json:"bark_url,omitempty"`
+
+	// Usage tracking. HighCostModels = model prefixes counted as high-tier
+	// (prefix match); UsageQuota5h = window prompt quota (0 = unknown/hidden).
+	HighCostModels []string `json:"high_cost_models,omitempty"`
+	UsageQuota5h   int64    `json:"usage_quota_5h,omitempty"`
 }
 
 func homeDir() string {
@@ -182,6 +187,16 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("MAKRO_BARK_URL"); v != "" {
 		c.BarkURL = v
+	}
+
+	// Usage tracking overrides.
+	if v := os.Getenv("MAKRO_HIGH_COST_MODELS"); v != "" {
+		c.HighCostModels = strings.Split(v, ",")
+	}
+	if v := os.Getenv("MAKRO_QUOTA_5H"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			c.UsageQuota5h = n
+		}
 	}
 }
 

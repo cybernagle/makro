@@ -22,20 +22,22 @@ import (
 )
 
 type ChatService struct {
-	hub         *chatHub
-	orch        *agent.Orchestrator
-	tc          *tmux.Client
-	notifier    *agent.AgentNotifier
-	assessor    tools.Assessor
-	history     *ChatHistory
-	devicestore *DeviceStore
-	usageStore  *usage.Store
-	apns        *apns.Client
-	barkKey     string
-	barkURL     string
-	monitors    map[string]context.CancelFunc
-	mu          sync.Mutex
-	initErr     string
+	hub            *chatHub
+	orch           *agent.Orchestrator
+	tc             *tmux.Client
+	notifier       *agent.AgentNotifier
+	assessor       tools.Assessor
+	history        *ChatHistory
+	devicestore    *DeviceStore
+	usageStore     *usage.Store
+	highCostModels []string
+	usageQuota5h   int64
+	apns           *apns.Client
+	barkKey        string
+	barkURL        string
+	monitors       map[string]context.CancelFunc
+	mu             sync.Mutex
+	initErr        string
 }
 
 func NewChatService() *ChatService {
@@ -73,6 +75,30 @@ func (s *ChatService) MarkSessionViewed(session string) {
 	}
 	s.notifier.ClearUnread(session)
 	s.emitSessionState(session)
+}
+
+// UsageStats returns windowed usage stats (nil-safe when tracking is disabled).
+func (s *ChatService) UsageStats(session string, hours int) (*usage.Stats, error) {
+	if s.usageStore == nil {
+		return &usage.Stats{ByModel: map[string]usage.ModelStats{}}, nil
+	}
+	return s.usageStore.Stats(session, hours, s.highCostModels, s.usageQuota5h)
+}
+
+// UsageDiagnostics returns duplicate/frequent/ineffective patterns.
+func (s *ChatService) UsageDiagnostics(session string) (*usage.Diagnostics, error) {
+	if s.usageStore == nil {
+		return &usage.Diagnostics{}, nil
+	}
+	return s.usageStore.Diagnostics(session)
+}
+
+// UsageTimeline returns hourly usage buckets.
+func (s *ChatService) UsageTimeline(session string, hours int) ([]usage.TimelinePoint, error) {
+	if s.usageStore == nil {
+		return nil, nil
+	}
+	return s.usageStore.Timeline(session, hours)
 }
 
 func (s *ChatService) initHistory() {
@@ -265,6 +291,8 @@ func (s *ChatService) init() {
 	if s.barkURL == "" {
 		s.barkURL = "https://api.day.app"
 	}
+	s.highCostModels = cfg.HighCostModels
+	s.usageQuota5h = cfg.UsageQuota5h
 	if s.barkKey != "" {
 		log.Printf("[chat_service] Bark push enabled")
 	}
