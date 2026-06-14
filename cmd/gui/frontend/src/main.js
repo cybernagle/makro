@@ -751,13 +751,10 @@ function usagePanelHTML(stats, diag, timeline) {
     html += stat("Ineffective", stats.ineffective_calls, stats.ineffective_calls > 0);
     html += `</div>`;
 
-    if (stats.by_model && Object.keys(stats.by_model).length) {
-        html += `<div class="usage-models">`;
-        for (const [m, ms] of Object.entries(stats.by_model)) {
-            html += `<div class="usage-model"><span class="usage-model-name">${esc(m)}</span><span class="usage-model-meta">${ms.calls} calls · ${fmtNum(ms.total_tokens)} tok</span></div>`;
-        }
-        html += `</div>`;
-    }
+    // Breakdowns: source (Claude Code vs Makro), session/project, model.
+    html += renderBreakdown("Source", stats.by_source);
+    html += renderBreakdown("Session", stats.by_session);
+    html += renderBreakdown("Model", stats.by_model);
 
     if (diag && diag.recommendations && diag.recommendations.length) {
         html += `<div class="usage-alerts">`;
@@ -787,6 +784,17 @@ function fmtNum(n) {
 
 function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"}[c]));
+}
+
+// renderBreakdown emits a labeled chip-row for a {key: {calls, total_tokens}} map.
+function renderBreakdown(label, map) {
+    if (!map || !Object.keys(map).length) return "";
+    const entries = Object.entries(map).sort((a, b) => (b[1].total_tokens || 0) - (a[1].total_tokens || 0));
+    let html = `<div class="usage-bd"><span class="usage-bd-label">${esc(label)}</span><div class="usage-models">`;
+    for (const [k, ms] of entries) {
+        html += `<div class="usage-model"><span class="usage-model-name">${esc(k)}</span><span class="usage-model-meta">${ms.calls} · ${fmtNum(ms.total_tokens)} tok</span></div>`;
+    }
+    return html + `</div></div>`;
 }
 
 function renderSessionCards(sessions) {

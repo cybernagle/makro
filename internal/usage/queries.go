@@ -22,6 +22,8 @@ type Stats struct {
 	QuotaTotal       int64                 `json:"quota_total"`
 	QuotaPercent     float64               `json:"quota_percent"`
 	ByModel          map[string]ModelStats `json:"by_model"`
+	BySource         map[string]ModelStats `json:"by_source"`  // Claude Code vs Makro
+	BySession        map[string]ModelStats `json:"by_session"` // per project/tmux session
 }
 
 // ModelStats is a per-model breakdown.
@@ -74,7 +76,8 @@ func (s *Store) Stats(session string, hours int, highCostModels []string, quotaT
 		hours = 5
 	}
 	ctx := context.Background()
-	st := &Stats{Session: session, WindowHours: hours, QuotaTotal: quotaTotal, ByModel: map[string]ModelStats{}}
+	st := &Stats{Session: session, WindowHours: hours, QuotaTotal: quotaTotal,
+		ByModel: map[string]ModelStats{}, BySource: map[string]ModelStats{}, BySession: map[string]ModelStats{}}
 	win := fmt.Sprintf("-%d hours", hours)
 	sess, sessArg := sessionCond(session)
 
@@ -100,28 +103,19 @@ func (s *Store) Stats(session string, hours int, highCostModels []string, quotaT
 		_ = s.db.QueryRowContext(ctx, q2, append(args, sessArg...)...).Scan(&st.HighCostCalls)
 	}
 
-	// Ineffective: response < 10 tokens, no error.
+	// Ineffective: response < 10 tokens, no error. Excludes claude_code — Claude
+	// Code's short glm-5.x routing turns are an efficient pattern, not waste.
 	q3 := `SELECT COUNT(*) FROM prompt_usage WHERE timestamp >= datetime('now','localtime',?)
-	        AND completion_tokens < 10 AND (error IS NULL OR error='')` + sess
+	        AND completion_tokens < 10 AND call_function!='claude_code' AND (error IS NULL OR error='')` + sess
 	_ = s.db.QueryRowContext(ctx, q3, append([]any{win}, sessArg...)...).Scan(&st.IneffectiveCalls)
 
 	// Frequent: total calls in 5 min from functions exceeding 30 calls/5min.
 	st.FrequentCalls = s.countFrequent(ctx, session, 5, 30)
 
-	// Per-model breakdown.
-	qm := `SELECT model_type, COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0)
-	       FROM prompt_usage WHERE timestamp >= datetime('now','localtime',?)` + sess + ` GROUP BY model_type`
-	rows, err := s.db.QueryContext(ctx, qm, append([]any{win}, sessArg...)...)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var m string
-			var ms ModelStats
-			if rows.Scan(&m, &ms.Calls, &ms.PromptTokens, &ms.CompletionTokens, &ms.TotalTokens) == nil {
-				st.ByModel[m] = ms
-			}
-		}
-	}
+	// Breakdowns: by model, by source (Claude Code vs Makro), by session/project.
+	s.scanBreakdown(ctx, `SELECT model_type, COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0) FROM prompt_usage WHERE timestamp >= datetime('now','localtime',?)`+sess+` GROUP BY model_type`, win, sessArg, st.ByModel)
+	s.scanBreakdown(ctx, `SELECT CASE WHEN call_function='claude_code' THEN 'Claude Code' ELSE 'Makro' END, COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0) FROM prompt_usage WHERE timestamp >= datetime('now','localtime',?)`+sess+` GROUP BY 1`, win, sessArg, st.BySource)
+	s.scanBreakdown(ctx, `SELECT session_name, COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0) FROM prompt_usage WHERE timestamp >= datetime('now','localtime',?)`+sess+` GROUP BY session_name ORDER BY COALESCE(SUM(total_tokens),0) DESC LIMIT 30`, win, sessArg, st.BySession)
 
 	// Quota (window quota counts prompts).
 	st.QuotaUsed = st.TotalPrompts
@@ -137,7 +131,7 @@ func (s *Store) countFrequent(ctx context.Context, session string, minutes, thre
 	sess, sessArg := sessionCond(session)
 	q := fmt.Sprintf(`SELECT COALESCE(SUM(cnt),0) FROM (
 		  SELECT COUNT(*) as cnt FROM prompt_usage
-		  WHERE timestamp >= datetime('now','localtime','-%d minutes')%s
+		  WHERE timestamp >= datetime('now','localtime','-%d minutes')%s AND call_function!='claude_code'
 		  GROUP BY call_function HAVING cnt > %d)`, minutes, sess, threshold)
 	var n int64
 	_ = s.db.QueryRowContext(ctx, q, sessArg...).Scan(&n)
@@ -172,7 +166,7 @@ func (s *Store) Diagnostics(session string) (*Diagnostics, error) {
 	seen := map[string]bool{}
 	for _, w := range []struct{ min, thr int }{{1, 10}, {5, 30}} {
 		fq := fmt.Sprintf(`SELECT call_function, COUNT(*) FROM prompt_usage
-		                   WHERE timestamp >= datetime('now','localtime','-%d minutes')%s
+		                   WHERE timestamp >= datetime('now','localtime','-%d minutes')%s AND call_function!='claude_code'
 		                   GROUP BY call_function HAVING COUNT(*) > %d ORDER BY COUNT(*) DESC`, w.min, sess, w.min)
 		fr, err := s.db.QueryContext(ctx, fq, sessArg...)
 		if err != nil {
@@ -189,8 +183,8 @@ func (s *Store) Diagnostics(session string) (*Diagnostics, error) {
 		fr.Close()
 	}
 
-	// Ineffective.
-	qi := `SELECT COUNT(*) FROM prompt_usage WHERE completion_tokens < 10 AND (error IS NULL OR error='')` + sess
+	// Ineffective (excludes claude_code — see Stats ineffective note).
+	qi := `SELECT COUNT(*) FROM prompt_usage WHERE completion_tokens < 10 AND call_function!='claude_code' AND (error IS NULL OR error='')` + sess
 	_ = s.db.QueryRowContext(ctx, qi, sessArg...).Scan(&d.IneffectiveCalls)
 
 	d.Recommendations = buildRecommendations(d)
@@ -251,4 +245,21 @@ func sessionCond(session string) (string, []any) {
 		return "", nil
 	}
 	return " AND session_name=?", []any{session}
+}
+
+// scanBreakdown runs a `SELECT key, calls, prompt, completion, total ... GROUP
+// BY key` query (window-bound) and fills dest. Errors are ignored (best-effort).
+func (s *Store) scanBreakdown(ctx context.Context, q, win string, sessArg []any, dest map[string]ModelStats) {
+	rows, err := s.db.QueryContext(ctx, q, append([]any{win}, sessArg...)...)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		var ms ModelStats
+		if rows.Scan(&k, &ms.Calls, &ms.PromptTokens, &ms.CompletionTokens, &ms.TotalTokens) == nil {
+			dest[k] = ms
+		}
+	}
 }

@@ -863,6 +863,8 @@ html, body { height: 100%; overflow: hidden; }
 .usage-stat-val { font-size: 18px; font-weight: 600; color: var(--text-primary); font-family: var(--font-mono); }
 .usage-stat-label { font-size: 10px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
 .usage-stat.warn .usage-stat-val { color: var(--red); }
+.usage-bd { display: flex; align-items: center; gap: 8px; }
+.usage-bd-label { font-size: 10px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px; width: 52px; flex-shrink: 0; }
 .usage-models { display: flex; flex-wrap: wrap; gap: 8px; }
 .usage-model {
   display: flex; align-items: center; gap: 6px;
