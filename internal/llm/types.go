@@ -68,6 +68,17 @@ type StreamEvent struct {
 	ArgumentsDelta string
 	StopReason     string
 	Err            error
+	Usage          Usage // populated on EventDone when the provider reports it
+}
+
+// Usage holds token accounting for an LLM call, as reported by the provider.
+// TotalTokens is 0 when the provider omits it (derive from Input+Output).
+type Usage struct {
+	InputTokens         int64
+	OutputTokens        int64
+	TotalTokens         int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
 }
 
 // CompleteResult holds the non-streaming LLM response.
@@ -76,6 +87,7 @@ type CompleteResult struct {
 	Thinking   string
 	ToolCalls  []ToolCall
 	StopReason string
+	Usage      Usage
 }
 
 type GenerateOptions struct {

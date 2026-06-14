@@ -43,10 +43,15 @@ func (p *AnthropicProvider) Stream(ctx context.Context, messages []Message, opts
 		var activeToolID string
 		textCount := 0
 		toolCount := 0
+		var usage Usage // accumulated across message_start (input) + message_delta (output)
 
 		for stream.Next() {
 			event := stream.Current()
 			switch e := event.AsAny().(type) {
+			case anthropic.MessageStartEvent:
+				usage.InputTokens = e.Message.Usage.InputTokens
+				usage.CacheReadTokens = e.Message.Usage.CacheReadInputTokens
+				usage.CacheCreationTokens = e.Message.Usage.CacheCreationInputTokens
 			case anthropic.ContentBlockStartEvent:
 				if block, ok := e.ContentBlock.AsAny().(anthropic.ThinkingBlock); ok {
 					_ = block
@@ -89,10 +94,12 @@ func (p *AnthropicProvider) Stream(ctx context.Context, messages []Message, opts
 					}
 				}
 			case anthropic.MessageDeltaEvent:
-				log.Printf("[llm/anthropic] stream done stop_reason=%s text_deltas=%d tool_calls=%d elapsed=%s",
-					e.Delta.StopReason, textCount, toolCount, time.Since(start).Round(time.Millisecond))
+				usage.OutputTokens = e.Usage.OutputTokens
+				usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+				log.Printf("[llm/anthropic] stream done stop_reason=%s text_deltas=%d tool_calls=%d in=%d out=%d elapsed=%s",
+					e.Delta.StopReason, textCount, toolCount, usage.InputTokens, usage.OutputTokens, time.Since(start).Round(time.Millisecond))
 				select {
-				case ch <- StreamEvent{Type: EventDone, StopReason: string(e.Delta.StopReason)}:
+				case ch <- StreamEvent{Type: EventDone, StopReason: string(e.Delta.StopReason), Usage: usage}:
 				case <-ctx.Done():
 					return
 				}
@@ -128,6 +135,13 @@ func (p *AnthropicProvider) Complete(ctx context.Context, messages []Message, op
 	log.Printf("[llm/anthropic] complete done elapsed=%s stop_reason=%s", time.Since(start).Round(time.Millisecond), msg.StopReason)
 
 	result := &CompleteResult{StopReason: string(msg.StopReason)}
+	result.Usage = Usage{
+		InputTokens:         msg.Usage.InputTokens,
+		OutputTokens:        msg.Usage.OutputTokens,
+		CacheReadTokens:     msg.Usage.CacheReadInputTokens,
+		CacheCreationTokens: msg.Usage.CacheCreationInputTokens,
+	}
+	result.Usage.TotalTokens = result.Usage.InputTokens + result.Usage.OutputTokens
 	for _, block := range msg.Content {
 		switch b := block.AsAny().(type) {
 		case anthropic.TextBlock:

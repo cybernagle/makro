@@ -39,11 +39,21 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message, opts Ge
 		start := time.Now()
 		log.Printf("[llm/openai] stream start model=%s", opts.Model)
 
+		// Request a trailing usage-only chunk so token accounting is available.
+		params.StreamOptions = openai.ChatCompletionStreamOptionsParam{IncludeUsage: openai.Bool(true)}
+
 		stream := p.client.Chat.Completions.NewStreaming(ctx, params)
 		textCount := 0
+		var usage Usage
+		var stopReason string
 
 		for stream.Next() {
 			evt := stream.Current()
+			// The trailing usage-only chunk (include_usage) carries no choices;
+			// capture its accounting before skipping.
+			if u := evt.Usage; u.TotalTokens > 0 {
+				usage = Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens, TotalTokens: u.TotalTokens}
+			}
 			if len(evt.Choices) == 0 {
 				continue
 			}
@@ -109,11 +119,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message, opts Ge
 			}
 
 			if evt.Choices[0].FinishReason != "" {
-				select {
-				case ch <- StreamEvent{Type: EventDone, StopReason: string(evt.Choices[0].FinishReason)}:
-				case <-ctx.Done():
-					return
-				}
+				stopReason = string(evt.Choices[0].FinishReason)
 			}
 		}
 
@@ -124,7 +130,11 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message, opts Ge
 			case <-ctx.Done():
 			}
 		} else {
-			log.Printf("[llm/openai] stream done text_deltas=%d elapsed=%s", textCount, time.Since(start).Round(time.Millisecond))
+			log.Printf("[llm/openai] stream done text_deltas=%d in=%d out=%d elapsed=%s", textCount, usage.InputTokens, usage.OutputTokens, time.Since(start).Round(time.Millisecond))
+			select {
+			case ch <- StreamEvent{Type: EventDone, StopReason: stopReason, Usage: usage}:
+			case <-ctx.Done():
+			}
 		}
 	}()
 
@@ -155,6 +165,11 @@ func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, opts 
 	result := &CompleteResult{
 		Content:    choice.Message.Content,
 		StopReason: string(choice.FinishReason),
+	}
+	result.Usage = Usage{
+		InputTokens:  resp.Usage.PromptTokens,
+		OutputTokens: resp.Usage.CompletionTokens,
+		TotalTokens:  resp.Usage.TotalTokens,
 	}
 
 	// Extract thinking/reasoning from raw JSON (BigModel, DeepSeek, etc.)

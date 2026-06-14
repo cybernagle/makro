@@ -18,6 +18,7 @@ import (
 	"github.com/naglezhang/makro/internal/llm"
 	"github.com/naglezhang/makro/internal/notify"
 	"github.com/naglezhang/makro/internal/tmux"
+	"github.com/naglezhang/makro/internal/usage"
 )
 
 type ChatService struct {
@@ -28,6 +29,7 @@ type ChatService struct {
 	assessor    tools.Assessor
 	history     *ChatHistory
 	devicestore *DeviceStore
+	usageStore  *usage.Store
 	apns        *apns.Client
 	barkKey     string
 	barkURL     string
@@ -143,6 +145,15 @@ func (s *ChatService) init() {
 	orch.SetModel(cfg.LLMModel)
 	orch.SetMaxContextMessages(cfg.MaxContextMessages)
 	orch.SetSystemPrompt(agent.DefaultSystemPrompt())
+
+	// Prompt-usage tracking (SQLite). Best-effort: a failure logs and disables
+	// tracking rather than blocking the orchestrator.
+	if usageStore, uerr := usage.Open(filepath.Join(cfg.DataDir, "prompt_usage.db")); uerr != nil {
+		log.Printf("[chat_service] usage store: %v", uerr)
+	} else {
+		orch.SetUsageStore(usageStore)
+		s.usageStore = usageStore
+	}
 
 	notifier.OnSession(func(session, content string) error {
 		return tools.DirectSend(tc, session, content)

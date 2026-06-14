@@ -13,6 +13,7 @@ import (
 	"github.com/naglezhang/makro/internal/agent/skills"
 	"github.com/naglezhang/makro/internal/agent/tools"
 	"github.com/naglezhang/makro/internal/llm"
+	"github.com/naglezhang/makro/internal/usage"
 	"github.com/naglezhang/makro/internal/util"
 )
 
@@ -65,6 +66,7 @@ type Orchestrator struct {
 	cancelFn           context.CancelFunc
 	skillMu            sync.Mutex
 	activeSkill        *skills.Skill
+	usage              *usage.Store
 }
 
 func NewOrchestrator(provider llm.Provider, tc tools.TmuxClient, hooks *HookManager, toolList []tools.Tool) *Orchestrator {
@@ -85,6 +87,37 @@ func NewOrchestrator(provider llm.Provider, tc tools.TmuxClient, hooks *HookMana
 		hooks:       hooks,
 		callTimeout: 60 * time.Second,
 	}
+}
+
+// SetUsageStore attaches a usage store for per-call token tracking. Nil is
+// safe (tracking is disabled).
+func (o *Orchestrator) SetUsageStore(s *usage.Store) {
+	o.usage = s
+}
+
+// recordUsage logs one LLM call to the usage store (best-effort, never blocks).
+func (o *Orchestrator) recordUsage(callFunction, session, ctxInfo, model string, u llm.Usage, durMS int64, callErr error) {
+	if o.usage == nil {
+		return
+	}
+	if session == "" {
+		session = "orchestrator"
+	}
+	rec := usage.Record{
+		Timestamp:        time.Now(),
+		SessionName:      session,
+		ModelType:        model,
+		PromptTokens:     u.InputTokens,
+		CompletionTokens: u.OutputTokens,
+		TotalTokens:      u.TotalTokens,
+		CallFunction:     callFunction,
+		CallContext:      ctxInfo,
+		CallDurationMS:   durMS,
+	}
+	if callErr != nil {
+		rec.Error = callErr.Error()
+	}
+	o.usage.Record(rec)
 }
 
 func (o *Orchestrator) SetSystemPrompt(prompt string) {
@@ -220,8 +253,12 @@ func (o *Orchestrator) CrossAgentRelay(ctx context.Context, sourceSession, targe
 	opts := o.buildOptions()
 	opts.Tools = nil
 
+	streamStart := time.Now()
 	stream, err := o.provider.Stream(ctx, o.snapshotMessages(), opts)
 	if err != nil {
+		o.recordUsage("cross_agent_relay", sourceSession,
+			fmt.Sprintf("relay:%s→%s", sourceSession, targetSession),
+			opts.Model, llm.Usage{}, time.Since(streamStart).Milliseconds(), err)
 		return fmt.Errorf("LLM relay: %w", err)
 	}
 	defer func() {
@@ -230,13 +267,24 @@ func (o *Orchestrator) CrossAgentRelay(ctx context.Context, sourceSession, targe
 	}()
 
 	var summary strings.Builder
+	var streamUsage llm.Usage
+	var streamErr error
 	for event := range stream {
 		if event.Type == llm.EventTextDelta {
 			summary.WriteString(event.Text)
 		}
-		if event.Type == llm.EventError {
-			return fmt.Errorf("LLM stream error: %v", event.Err)
+		if event.Type == llm.EventDone {
+			streamUsage = event.Usage
 		}
+		if event.Type == llm.EventError {
+			streamErr = event.Err
+		}
+	}
+	o.recordUsage("cross_agent_relay", sourceSession,
+		fmt.Sprintf("relay:%s→%s", sourceSession, targetSession),
+		opts.Model, streamUsage, time.Since(streamStart).Milliseconds(), streamErr)
+	if streamErr != nil {
+		return fmt.Errorf("LLM stream error: %v", streamErr)
 	}
 
 	sendTool, ok := o.toolMap["send_to_session"]
@@ -336,6 +384,7 @@ func (o *Orchestrator) handleLLM(ctx context.Context, ch chan<- OrchestratorEven
 	opts := o.buildOptions()
 	log.Printf("[orchestrator] handleLLM start inputLen=%d model=%s", len(input), opts.Model)
 
+	turn := 0
 	for {
 		if ctx.Err() != nil {
 			log.Printf("[orchestrator] handleLLM cancelled")
@@ -343,14 +392,25 @@ func (o *Orchestrator) handleLLM(ctx context.Context, ch chan<- OrchestratorEven
 			ch <- OrchestratorEvent{Type: EventDone}
 			return
 		}
+		turn++
 
 		msgs := o.snapshotMessages()
 		log.Printf("[orchestrator] LLM call messages=%d", len(msgs))
 
 		callCtx, callCancel := context.WithTimeout(ctx, o.callTimeout)
 		log.Printf("[orchestrator] starting LLM complete timeout=%s ctx_err=%v", o.callTimeout, ctx.Err())
+		callStart := time.Now()
 		result, err := o.provider.Complete(callCtx, msgs, opts)
 		callCancel()
+		var callUsage llm.Usage
+		var toolCount int
+		if err == nil && result != nil {
+			callUsage = result.Usage
+			toolCount = len(result.ToolCalls)
+		}
+		o.recordUsage("orchestrator.complete", "orchestrator",
+			fmt.Sprintf("turn=%d tools=%d msgs=%d", turn, toolCount, len(msgs)),
+			opts.Model, callUsage, time.Since(callStart).Milliseconds(), err)
 		if err != nil {
 			errMsg := err.Error()
 			if isRetryableError(errMsg) {
