@@ -64,11 +64,13 @@ func (s *ChatService) ApplySessionState(sessions []Session) {
 }
 
 // MarkSessionViewed clears the unread badge for a session (called when the
-// user switches to / opens it).
+// user switches to / opens it) and broadcasts the cleared state.
 func (s *ChatService) MarkSessionViewed(session string) {
-	if s.notifier != nil {
-		s.notifier.ClearUnread(session)
+	if s.notifier == nil {
+		return
 	}
+	s.notifier.ClearUnread(session)
+	s.emitSessionState(session)
 }
 
 func (s *ChatService) initHistory() {
@@ -148,6 +150,9 @@ func (s *ChatService) init() {
 
 	// Hook callbacks — same pattern as main.go for TUI.
 	notifier.OnAgentStop(func(session, status string) {
+		// working=false and unread++ already applied in the notifier; broadcast.
+		s.emitSessionState(session)
+
 		st := status
 		if st == "" {
 			st = "stopped"
@@ -201,10 +206,11 @@ func (s *ChatService) init() {
 	})
 
 	// OnAgentStart fires on Claude Code's UserPromptSubmit hook — the session's
-	// agent has begun a turn. The working flag itself is set in the notifier;
-	// Stage 3 promotes this to a session_state WS event for the frontend.
+	// agent has begun a turn. The working flag is set in the notifier before
+	// this callback fires; broadcast the new state to connected clients.
 	notifier.OnAgentStart(func(session string) {
 		log.Printf("[chat_service] session %s started working", session)
+		s.emitSessionState(session)
 	})
 
 	go notifier.Start(context.Background())
@@ -476,9 +482,26 @@ func (s *ChatService) emit(event string, data string) {
 			s.hub.Emit("system", data)
 		case "chat:switch_tab":
 			s.hub.Emit("switch_tab", data)
+		case "chat:session_state":
+			s.hub.Emit("session_state", data)
 		}
 		return
 	}
+}
+
+// emitSessionState pushes a {session, working, unread} snapshot over the chat
+// WS so every connected client (Electron + iOS) updates its tab/card state in
+// real time. Called on agent_start, agent_stop, and when a session is viewed.
+func (s *ChatService) emitSessionState(session string) {
+	if s.notifier == nil {
+		return
+	}
+	data, _ := json.Marshal(map[string]any{
+		"session": session,
+		"working": s.notifier.Working(session),
+		"unread":  s.notifier.Unread(session),
+	})
+	s.emit("chat:session_state", string(data))
 }
 
 func (s *ChatService) reportError(format string, args ...any) {
