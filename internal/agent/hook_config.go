@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	fsNotifyHookSuffix     = ` notify "$(tmux display-message -p '#{session_name}')" done`
-	fsStartHookSuffix      = ` notify "$(tmux display-message -p '#{session_name}')" start`
-	fsPermissionHookSuffix = ` permission "$(tmux display-message -p '#{session_name}')"`
+	fsNotifyHookSuffix      = ` notify "$(tmux display-message -p '#{session_name}')" done`
+	fsStartHookSuffix       = ` notify "$(tmux display-message -p '#{session_name}')" start`
+	fsPermissionHookSuffix  = ` permission "$(tmux display-message -p '#{session_name}')"`
+	fsClaudeStartHookSuffix = ` claude-start "$(tmux display-message -p '#{session_name}')"`
 )
 
 // claudeSettings represents the relevant parts of ~/.claude/settings.json.
@@ -141,6 +142,68 @@ func EnsureStartHook(claudeDir, executablePath string) error {
 		}},
 	})
 	hooks["UserPromptSubmit"] = startHooks
+
+	updated, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal settings: %w", err)
+	}
+	updated = append(updated, '\n')
+	return os.WriteFile(settingsPath, updated, info.Mode().Perm())
+}
+
+// EnsureClaudeStartHook adds a makro claude-start SessionStart hook to Claude
+// Code settings if one does not already exist. The hook forwards the Claude
+// Code session_id + transcript_path (read from stdin) and the tmux session name
+// to the running Makro so its transcript ingester can attribute usage. Idempotent.
+func EnsureClaudeStartHook(claudeDir, executablePath string) error {
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	info, err := os.Stat(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat settings: %w", err)
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return fmt.Errorf("read settings: %w", err)
+	}
+
+	var settings any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+	root, ok := settings.(map[string]any)
+	if !ok {
+		return fmt.Errorf("parse settings: root must be an object")
+	}
+
+	hooks, err := ensureJSONObject(root, "hooks")
+	if err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+	ccHooks, err := ensureJSONArray(hooks, "SessionStart")
+	if err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+
+	exists, err := claudeStartHookExists(ccHooks)
+	if err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+	if exists {
+		return nil
+	}
+
+	ccHooks = append(ccHooks, map[string]any{
+		"hooks": []any{map[string]any{
+			"type":    "command",
+			"command": buildClaudeStartHookCommand(executablePath),
+			"timeout": 10,
+		}},
+	})
+	hooks["SessionStart"] = ccHooks
 
 	updated, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
@@ -326,12 +389,48 @@ func isMakroStartHook(command string) bool {
 	return strings.Contains(command, "makro") && strings.Contains(command, fsStartHookSuffix)
 }
 
+func claudeStartHookExists(groups []any) (bool, error) {
+	for _, groupValue := range groups {
+		group, ok := groupValue.(map[string]any)
+		if !ok {
+			return false, fmt.Errorf("hooks.SessionStart entries must be objects")
+		}
+		hookValues, ok := group["hooks"]
+		if !ok {
+			continue
+		}
+		hooks, ok := hookValues.([]any)
+		if !ok {
+			return false, fmt.Errorf("hooks.SessionStart[].hooks must be an array")
+		}
+		for _, hookValue := range hooks {
+			hook, ok := hookValue.(map[string]any)
+			if !ok {
+				return false, fmt.Errorf("hooks.SessionStart[].hooks[] must be objects")
+			}
+			command, _ := hook["command"].(string)
+			if isMakroClaudeStartHook(command) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func isMakroClaudeStartHook(command string) bool {
+	return strings.Contains(command, "makro") && strings.Contains(command, fsClaudeStartHookSuffix)
+}
+
 func buildStopHookCommand(executablePath string) string {
 	return shellQuote(executablePath) + fsNotifyHookSuffix
 }
 
 func buildStartHookCommand(executablePath string) string {
 	return shellQuote(executablePath) + fsStartHookSuffix
+}
+
+func buildClaudeStartHookCommand(executablePath string) string {
+	return shellQuote(executablePath) + fsClaudeStartHookSuffix
 }
 
 func buildPermissionHookCommand(executablePath string) string {

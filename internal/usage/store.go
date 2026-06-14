@@ -51,6 +51,19 @@ CREATE TABLE IF NOT EXISTS prompt_usage (
 );
 CREATE INDEX IF NOT EXISTS idx_session_time ON prompt_usage(session_name, timestamp);
 CREATE INDEX IF NOT EXISTS idx_model_time ON prompt_usage(model_type, timestamp);
+
+CREATE TABLE IF NOT EXISTS claude_sessions (
+    claude_session_id TEXT PRIMARY KEY,
+    tmux_session      TEXT NOT NULL,
+    transcript_path   TEXT NOT NULL,
+    cwd               TEXT,
+    first_seen        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS claude_ingest_offset (
+    claude_session_id TEXT PRIMARY KEY,
+    byte_offset       INTEGER NOT NULL DEFAULT 0,
+    last_ingested_at  DATETIME
+);
 `
 
 // Open creates or opens the usage database at path, creating the schema.

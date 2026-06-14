@@ -101,6 +101,17 @@ func (s *ChatService) UsageTimeline(session string, hours int) ([]usage.Timeline
 	return s.usageStore.Timeline(session, hours)
 }
 
+// usageIngestLoop ingests Claude Code transcript usage immediately, then every
+// minute. Goroutine lives for the process lifetime.
+func (s *ChatService) usageIngestLoop() {
+	s.usageStore.IngestTranscripts()
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for range t.C {
+		s.usageStore.IngestTranscripts()
+	}
+}
+
 func (s *ChatService) initHistory() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -250,7 +261,21 @@ func (s *ChatService) init() {
 		s.emitSessionState(session)
 	})
 
+	// Map Claude Code sessions → tmux sessions so transcript usage can be
+	// attributed. Fired by the SessionStart hook (makro claude-start).
+	notifier.OnClaudeSession(func(claudeID, tmuxSession, transcriptPath, cwd string) {
+		if s.usageStore != nil {
+			s.usageStore.RecordClaudeSession(claudeID, tmuxSession, transcriptPath, cwd)
+		}
+	})
+
 	go notifier.Start(context.Background())
+
+	// Periodic Claude Code transcript ingestion (token usage) — immediate
+	// backfill, then every minute. Zero API cost: reads local transcript files.
+	if s.usageStore != nil {
+		go s.usageIngestLoop()
+	}
 
 	s.orch = orch
 	s.tc = tc
@@ -268,6 +293,9 @@ func (s *ChatService) init() {
 		}
 		if err := agent.EnsureStartHook(cfg.ClaudeDir, exePath); err != nil {
 			log.Printf("[chat_service] claude start hook: %v", err)
+		}
+		if err := agent.EnsureClaudeStartHook(cfg.ClaudeDir, exePath); err != nil {
+			log.Printf("[chat_service] claude session-start hook: %v", err)
 		}
 		if err := agent.EnsurePermissionHook(cfg.ClaudeDir, exePath); err != nil {
 			log.Printf("[chat_service] claude permission hook: %v", err)

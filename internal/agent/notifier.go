@@ -14,32 +14,36 @@ import (
 
 // hookPayload is the JSON message sent to the socket.
 type hookPayload struct {
-	Type    string `json:"type"` // "agent_stop", "chat", "session"
-	Session string `json:"session,omitempty"`
-	Status  string `json:"status,omitempty"`
-	Role    string `json:"role,omitempty"`    // for chat: "assistant", "system"
-	Content string `json:"content,omitempty"` // for chat/session: message text
+	Type            string `json:"type"` // "agent_stop", "chat", "session", "claude_session_start"
+	Session         string `json:"session,omitempty"`
+	Status          string `json:"status,omitempty"`
+	Role            string `json:"role,omitempty"`              // for chat: "assistant", "system"
+	Content         string `json:"content,omitempty"`           // for chat/session: message text
+	ClaudeSessionID string `json:"claude_session_id,omitempty"` // for claude_session_start
+	TranscriptPath  string `json:"transcript_path,omitempty"`   // for claude_session_start
+	Cwd             string `json:"cwd,omitempty"`               // for claude_session_start
 }
 
 // AgentNotifier tracks stop notifications from coding agents and dispatches
 // external messages (chat, session) via callbacks.
 type AgentNotifier struct {
-	mu           sync.Mutex
-	waiters      map[string]map[uint64]chan struct{} // session → waiter ID → wait channel
-	seq          map[string]uint64                   // session → latest notification sequence
-	lastStatus   map[string]string                   // session → last notification type ("permission", "done", etc.)
-	working      map[string]bool                     // session → agent is mid-turn (UserPromptSubmit → Stop)
-	unread       map[string]int                      // session → finished-task notifications not yet viewed
-	nextID       uint64
-	sockPath     string
-	listener     net.Listener
-	done         chan struct{}
-	stopOnce     sync.Once
-	onChat       func(role, content string)
-	onSession    func(session, content string) error
-	onAgentStop  func(session, status string)
-	onAgentStart func(session string)
-	onPermission func(session string)
+	mu              sync.Mutex
+	waiters         map[string]map[uint64]chan struct{} // session → waiter ID → wait channel
+	seq             map[string]uint64                   // session → latest notification sequence
+	lastStatus      map[string]string                   // session → last notification type ("permission", "done", etc.)
+	working         map[string]bool                     // session → agent is mid-turn (UserPromptSubmit → Stop)
+	unread          map[string]int                      // session → finished-task notifications not yet viewed
+	nextID          uint64
+	sockPath        string
+	listener        net.Listener
+	done            chan struct{}
+	stopOnce        sync.Once
+	onChat          func(role, content string)
+	onSession       func(session, content string) error
+	onAgentStop     func(session, status string)
+	onAgentStart    func(session string)
+	onPermission    func(session string)
+	onClaudeSession func(claudeSessionID, tmuxSession, transcriptPath, cwd string)
 }
 
 func NewAgentNotifier() *AgentNotifier {
@@ -205,6 +209,14 @@ func (n *AgentNotifier) OnAgentStart(fn func(session string)) {
 	n.mu.Unlock()
 }
 
+// OnClaudeSession sets the callback for Claude Code session-start mapping, so
+// usage ingested from transcripts can be attributed to a tmux session.
+func (n *AgentNotifier) OnClaudeSession(fn func(claudeSessionID, tmuxSession, transcriptPath, cwd string)) {
+	n.mu.Lock()
+	n.onClaudeSession = fn
+	n.mu.Unlock()
+}
+
 // OnPermission sets the callback for permission request notifications.
 func (n *AgentNotifier) OnPermission(fn func(session string)) {
 	n.mu.Lock()
@@ -259,6 +271,7 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 	onAgentStop := n.onAgentStop
 	onAgentStart := n.onAgentStart
 	onPermission := n.onPermission
+	onClaudeSession := n.onClaudeSession
 	n.mu.Unlock()
 
 	switch msg.Type {
@@ -287,6 +300,12 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 		n.mu.Unlock()
 		if onAgentStart != nil {
 			onAgentStart(msg.Session)
+		}
+	case "claude_session_start":
+		// Claude Code session started in a tmux pane — record the
+		// session_id ↔ tmux_session ↔ transcript_path mapping.
+		if onClaudeSession != nil && msg.ClaudeSessionID != "" && msg.TranscriptPath != "" {
+			onClaudeSession(msg.ClaudeSessionID, msg.Session, msg.TranscriptPath, msg.Cwd)
 		}
 	case "permission":
 		if msg.Session == "" {

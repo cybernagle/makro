@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
 	"log"
 	"os"
 
@@ -33,6 +35,31 @@ func main() {
 			log.Fatal("Usage: makro-serve permission <session>")
 		}
 		_ = notify.SendHook(map[string]string{"type": "permission", "session": os.Args[2]})
+		return
+	case "claude-start":
+		// Called by Claude Code's SessionStart hook. argv[2] = tmux session name
+		// (from the hook command's $(tmux display-message)); stdin = the hook
+		// JSON with session_id + transcript_path + cwd. Forward to Makro so the
+		// transcript ingester can attribute usage to the tmux session.
+		tmuxSession := ""
+		if len(os.Args) > 2 {
+			tmuxSession = os.Args[2]
+		}
+		var input struct {
+			SessionID      string `json:"session_id"`
+			TranscriptPath string `json:"transcript_path"`
+			Cwd            string `json:"cwd"`
+		}
+		if body, rerr := io.ReadAll(os.Stdin); rerr == nil {
+			_ = json.Unmarshal(body, &input)
+		}
+		_ = notify.SendHook(map[string]string{
+			"type":              "claude_session_start",
+			"session":           tmuxSession,
+			"claude_session_id": input.SessionID,
+			"transcript_path":   input.TranscriptPath,
+			"cwd":               input.Cwd,
+		})
 		return
 	case "serve":
 		// continue below
