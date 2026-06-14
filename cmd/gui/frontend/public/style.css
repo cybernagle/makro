@@ -109,6 +109,35 @@ html, body { height: 100%; overflow: hidden; }
 .tab .close:hover { background: rgba(248,113,113,0.15); color: var(--red); }
 .tab .close:active { transform: scale(0.88); }
 
+/* Working pulse dot — lit only while the session's agent is mid-turn. */
+.tab .tab-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: transparent;
+  flex: 0 0 auto;
+}
+.tab.working .tab-dot {
+  background: var(--accent);
+  animation: tabPulse 1.4s ease-in-out infinite;
+}
+@keyframes tabPulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1.15); }
+}
+
+/* Unread badge — count of finished-task notifications not yet viewed. */
+.tab .tab-badge {
+  min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px;
+  background: var(--red);
+  color: #fff;
+  font-size: 10px; font-weight: 600;
+  line-height: 1;
+  display: none;
+  align-items: center; justify-content: center;
+  margin-left: 2px;
+}
+.tab .tab-badge.visible { display: flex; }
+
 #toolbar-spacer { flex: 0 0 auto; width: 8px; }
 
 #btn-new, #btn-refresh, #btn-toggle, #btn-connect {

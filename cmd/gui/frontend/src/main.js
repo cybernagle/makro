@@ -232,6 +232,11 @@ function connectChatWs() {
                 addChatMessage("system", msg.data);
             } else if (msg.type === "switch_tab") {
                 if (msg.data) switchToTab(msg.data);
+            } else if (msg.type === "session_state") {
+                try {
+                    const st = JSON.parse(msg.data);
+                    if (st && st.session) setTabState(st.session, st.working, st.unread);
+                } catch (e) {}
             }
         } catch (e) {}
     };
@@ -403,7 +408,7 @@ function addTab(name) {
     // Tab UI
     const tab = document.createElement("div");
     tab.className = "tab"; tab.dataset.session = name;
-    tab.innerHTML = '<span class="tab-idx"></span><span class="name"></span><button class="close">×</button>';
+    tab.innerHTML = '<span class="tab-dot"></span><span class="tab-idx"></span><span class="name"></span><span class="tab-badge"></span><button class="close">×</button>';
     tab.querySelector(".name").textContent = name;
     updateTabIndices();
     tab.addEventListener("click", (e) => { if (!e.target.classList.contains("close")) switchToTab(name); });
@@ -427,9 +432,34 @@ function switchToTab(name) {
             requestAnimationFrame(() => {
                 try { entry.fitAddon.fit(); } catch (e) {}
             });
+            // Viewing the tab clears its unread badge locally and server-side
+            // (the server then broadcasts the cleared state to other clients).
+            clearTabUnread(name);
+            fetch(BACKEND + "/api/sessions/" + name + "/viewed", {method: "POST", headers: authHeaders()}).catch(() => {});
         }
         entry.term.focus();
     }
+}
+
+// setTabState renders the working pulse + unread badge for a session tab.
+// working=true → pulsing dot; unread>0 → red count badge; otherwise idle.
+function setTabState(name, working, unread) {
+    const tab = document.querySelector(`.tab[data-session="${name}"]`);
+    if (!tab) return;
+    tab.classList.toggle("working", !!working);
+    const badge = tab.querySelector(".tab-badge");
+    if (badge) {
+        const n = unread || 0;
+        badge.textContent = n > 9 ? "9+" : String(n);
+        badge.classList.toggle("visible", n > 0);
+    }
+}
+
+// clearTabUnread drops just the badge locally (working state untouched); used
+// on tab switch so the badge vanishes instantly before the WS round-trip.
+function clearTabUnread(name) {
+    const badge = document.querySelector(`.tab[data-session="${name}"] .tab-badge`);
+    if (badge) { badge.textContent = ""; badge.classList.remove("visible"); }
 }
 
 function closeTab(name) {
@@ -466,6 +496,7 @@ async function refreshSessions() {
         }
         for (const s of (sessions || [])) {
             if (!terminals.has(s.name)) addTab(s.name);
+            setTabState(s.name, s.working, s.unread);
         }
     } catch (err) { addChatMessage("system", "Refresh error: " + err); }
 }
