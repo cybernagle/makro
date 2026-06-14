@@ -22,22 +22,23 @@ import (
 )
 
 type ChatService struct {
-	hub            *chatHub
-	orch           *agent.Orchestrator
-	tc             *tmux.Client
-	notifier       *agent.AgentNotifier
-	assessor       tools.Assessor
-	history        *ChatHistory
-	devicestore    *DeviceStore
-	usageStore     *usage.Store
-	highCostModels []string
-	usageQuota5h   int64
-	apns           *apns.Client
-	barkKey        string
-	barkURL        string
-	monitors       map[string]context.CancelFunc
-	mu             sync.Mutex
-	initErr        string
+	hub               *chatHub
+	orch              *agent.Orchestrator
+	tc                *tmux.Client
+	notifier          *agent.AgentNotifier
+	assessor          tools.Assessor
+	history           *ChatHistory
+	devicestore       *DeviceStore
+	usageStore        *usage.Store
+	highCostModels    []string
+	usageQuota5h      int64
+	claudeProjectsDir string
+	apns              *apns.Client
+	barkKey           string
+	barkURL           string
+	monitors          map[string]context.CancelFunc
+	mu                sync.Mutex
+	initErr           string
 }
 
 func NewChatService() *ChatService {
@@ -102,13 +103,21 @@ func (s *ChatService) UsageTimeline(session string, hours int) ([]usage.Timeline
 }
 
 // usageIngestLoop ingests Claude Code transcript usage immediately, then every
-// minute. Goroutine lives for the process lifetime.
+// minute. Mapped sessions (SessionStart hook) are attributed to their tmux name;
+// the fallback project scan attributes already-running sessions by cwd basename.
+// Goroutine lives for the process lifetime.
 func (s *ChatService) usageIngestLoop() {
-	s.usageStore.IngestTranscripts()
+	ingest := func() {
+		s.usageStore.IngestTranscripts()
+		if s.claudeProjectsDir != "" {
+			s.usageStore.IngestProjectTranscripts(s.claudeProjectsDir)
+		}
+	}
+	ingest()
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for range t.C {
-		s.usageStore.IngestTranscripts()
+		ingest()
 	}
 }
 
@@ -191,6 +200,9 @@ func (s *ChatService) init() {
 		orch.SetUsageStore(usageStore)
 		s.usageStore = usageStore
 	}
+	// Claude Code transcript projects dir — fallback ingestion attributes
+	// already-running sessions by their cwd basename.
+	s.claudeProjectsDir = filepath.Join(cfg.ClaudeDir, "projects")
 
 	notifier.OnSession(func(session, content string) error {
 		return tools.DirectSend(tc, session, content)

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -29,8 +30,10 @@ func (s *Store) RecordClaudeSession(claudeSessionID, tmuxSession, transcriptPath
 	}
 }
 
-// IngestTranscripts scans every known Claude Code transcript for new assistant
-// turns and logs their token usage. Intended to run on a periodic ticker.
+// IngestTranscripts scans every mapped Claude Code transcript (those registered
+// via the SessionStart hook) for new assistant turns. Intended for a periodic
+// ticker. New sessions only — for already-running sessions see
+// IngestProjectTranscripts.
 func (s *Store) IngestTranscripts() {
 	if s == nil || s.db == nil {
 		return
@@ -52,14 +55,52 @@ func (s *Store) IngestTranscripts() {
 	}
 	rows.Close()
 	for _, ss := range sessions {
-		s.ingestOne(ctx, ss.id, ss.tmux, ss.path)
+		name := func(string) string { return ss.tmux }
+		s.ingestFile(ctx, ss.id, ss.path, name)
 	}
 }
 
-// ingestOne reads transcriptPath from the last offset, parses complete lines,
-// logs assistant-turn usage, and advances the offset past the last full line.
-// Partial trailing lines (Claude Code mid-write) are left for the next poll.
-func (s *Store) ingestOne(ctx context.Context, claudeID, tmuxSession, transcriptPath string) {
+// IngestProjectTranscripts scans <claudeProjectsDir>/*/*.jsonl for transcripts
+// NOT already mapped to a tmux session, and ingests them attributed by their
+// working-directory basename. This is the fallback so already-running Claude
+// Code sessions appear in the dashboard without a restart.
+func (s *Store) IngestProjectTranscripts(claudeProjectsDir string) {
+	if s == nil || s.db == nil || claudeProjectsDir == "" {
+		return
+	}
+	ctx := context.Background()
+	matches, err := filepath.Glob(filepath.Join(claudeProjectsDir, "*", "*.jsonl"))
+	if err != nil || len(matches) == 0 {
+		return
+	}
+	// Skip transcripts already mapped (handled by IngestTranscripts with a tmux
+	// name); they share the offset row keyed by the same session id.
+	mapped := map[string]bool{}
+	rows, err := s.db.QueryContext(ctx, `SELECT claude_session_id FROM claude_sessions`)
+	if err == nil {
+		for rows.Next() {
+			var id string
+			if rows.Scan(&id) == nil {
+				mapped[id] = true
+			}
+		}
+		rows.Close()
+	}
+	for _, path := range matches {
+		stem := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+		if mapped[stem] {
+			continue
+		}
+		s.ingestFile(ctx, stem, path, sessionLabel)
+	}
+}
+
+// ingestFile reads transcriptPath from its last offset, parses complete lines
+// only (a partial trailing line is left for the next poll), logs each assistant
+// turn as a prompt_usage record with call_function="claude_code", and advances
+// the offset. nameFor resolves each turn's session_name (tmux name for mapped,
+// cwd basename for the fallback scan).
+func (s *Store) ingestFile(ctx context.Context, claudeID, transcriptPath string, nameFor func(cwd string) string) {
 	f, err := os.Open(transcriptPath)
 	if err != nil {
 		return // not created yet, or rotated away
@@ -82,21 +123,19 @@ func (s *Store) ingestOne(ctx context.Context, claudeID, tmuxSession, transcript
 	// Only process up to the last newline — anything after is an in-progress line.
 	lastNL := strings.LastIndexByte(string(chunk), '\n')
 	if lastNL < 0 {
-		return // no complete line yet
+		return
 	}
-	complete := string(chunk[:lastNL+1]) // includes trailing newline
-	lines := strings.Split(complete, "\n")
-	// strings.Split("a\nb\n","\n") → ["a","b",""] → drop the empty trailing element.
+	lines := strings.Split(string(chunk[:lastNL+1]), "\n")
 	if n := len(lines); n > 0 && lines[n-1] == "" {
 		lines = lines[:n-1]
 	}
 
 	for _, line := range lines {
-		rec, ok := parseAssistantUsage([]byte(line))
+		rec, cwd, ok := parseAssistantLine([]byte(line))
 		if !ok {
 			continue
 		}
-		rec.SessionName = tmuxSession
+		rec.SessionName = nameFor(cwd)
 		rec.CallFunction = "claude_code"
 		s.Record(rec)
 	}
@@ -112,12 +151,13 @@ func (s *Store) ingestOne(ctx context.Context, claudeID, tmuxSession, transcript
 	}
 }
 
-// parseAssistantUsage extracts a usage Record from one transcript JSONL line.
-// Returns ok=false for non-assistant lines or lines without usage.
-func parseAssistantUsage(line []byte) (Record, bool) {
+// parseAssistantLine extracts a usage Record + cwd from one transcript JSONL
+// line. Returns ok=false for non-assistant lines or lines without usage.
+func parseAssistantLine(line []byte) (rec Record, cwd string, ok bool) {
 	var entry struct {
 		Type      string `json:"type"`
 		UUID      string `json:"uuid"`
+		Cwd       string `json:"cwd"`
 		Timestamp string `json:"timestamp"`
 		Message   struct {
 			Model string `json:"model"`
@@ -130,14 +170,14 @@ func parseAssistantUsage(line []byte) (Record, bool) {
 		} `json:"message"`
 	}
 	if json.Unmarshal(line, &entry) != nil {
-		return Record{}, false
+		return Record{}, "", false
 	}
 	if entry.Type != "assistant" {
-		return Record{}, false
+		return Record{}, "", false
 	}
 	u := entry.Message.Usage
 	if u.InputTokens == 0 && u.OutputTokens == 0 {
-		return Record{}, false
+		return Record{}, "", false
 	}
 	ts, _ := time.Parse(time.RFC3339, entry.Timestamp)
 	// Cache tokens (cache_read/creation) aren't stored — the prompt_usage schema
@@ -150,5 +190,14 @@ func parseAssistantUsage(line []byte) (Record, bool) {
 		CompletionTokens: u.OutputTokens,
 		TotalTokens:      u.InputTokens + u.OutputTokens,
 		CallContext:      entry.UUID, // unique per turn → avoids false duplicate flags
-	}, true
+	}, entry.Cwd, true
+}
+
+// sessionLabel derives a dashboard session name from a transcript's cwd: the
+// working-directory basename (e.g. ".../makro" → "makro"), or "claude" if empty.
+func sessionLabel(cwd string) string {
+	if cwd == "" {
+		return "claude"
+	}
+	return filepath.Base(cwd)
 }

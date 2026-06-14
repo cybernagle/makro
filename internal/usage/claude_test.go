@@ -10,26 +10,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseAssistantUsage(t *testing.T) {
-	line := []byte(`{"type":"assistant","uuid":"u1","timestamp":"2026-06-14T10:00:00Z","message":{"model":"glm-5.2","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":10,"cache_creation_input_tokens":5}}}`)
-	rec, ok := parseAssistantUsage(line)
+func TestParseAssistantLine(t *testing.T) {
+	line := []byte(`{"type":"assistant","uuid":"u1","cwd":"/Users/x/Desktop/Code/makro","timestamp":"2026-06-14T10:00:00Z","message":{"model":"glm-5.2","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":10,"cache_creation_input_tokens":5}}}`)
+	rec, cwd, ok := parseAssistantLine(line)
 	require.True(t, ok)
 	require.Equal(t, "glm-5.2", rec.ModelType)
 	require.Equal(t, int64(100), rec.PromptTokens)
 	require.Equal(t, int64(50), rec.CompletionTokens)
 	require.Equal(t, int64(150), rec.TotalTokens)
 	require.Equal(t, "u1", rec.CallContext)
+	require.Equal(t, "/Users/x/Desktop/Code/makro", cwd)
 
 	// Non-assistant line skipped.
-	_, ok = parseAssistantUsage([]byte(`{"type":"user","message":{"usage":{"input_tokens":1}}}`))
+	_, _, ok = parseAssistantLine([]byte(`{"type":"user","message":{"usage":{"input_tokens":1}}}`))
 	require.False(t, ok)
 	// Assistant without usage skipped.
-	_, ok = parseAssistantUsage([]byte(`{"type":"assistant","message":{"model":"x"}}`))
+	_, _, ok = parseAssistantLine([]byte(`{"type":"assistant","message":{"model":"x"}}`))
 	require.False(t, ok)
 }
 
 func assistantLine(uuid string, in, out int64) string {
-	return `{"type":"assistant","uuid":"` + uuid + `","timestamp":"2026-06-14T10:00:00Z","message":{"model":"glm-5.2","usage":{"input_tokens":` +
+	return `{"type":"assistant","uuid":"` + uuid + `","cwd":"/Users/x/Desktop/Code/makro","timestamp":"2026-06-14T10:00:00Z","message":{"model":"glm-5.2","usage":{"input_tokens":` +
 		strconv.FormatInt(in, 10) + `,"output_tokens":` + strconv.FormatInt(out, 10) + `}}}` + "\n"
 }
 
@@ -76,4 +77,42 @@ func TestIngestTranscriptsOffsetAndDedup(t *testing.T) {
 	require.NoError(t, s.db.QueryRowContext(context.Background(),
 		`SELECT COUNT(*) FROM prompt_usage WHERE call_function='claude_code' AND session_name='dev'`).Scan(&n))
 	require.Equal(t, 3, n, "completed trailing turn ingested on next poll")
+}
+
+func TestIngestProjectTranscriptsByCwd(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "u.db"))
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Project layout: <projectsDir>/<dashed-project>/<session-id>.jsonl
+	projectsDir := filepath.Join(dir, "projects")
+	transcriptDir := filepath.Join(projectsDir, "-Users-x-makro")
+	require.NoError(t, os.MkdirAll(transcriptDir, 0o755))
+
+	// Unmapped transcript → attributed by cwd basename.
+	t1 := filepath.Join(transcriptDir, "sess-aaa.jsonl")
+	require.NoError(t, os.WriteFile(t1, []byte(assistantLine("a1", 100, 50)+assistantLine("a2", 200, 60)), 0o644))
+	// Mapped transcript → must be skipped by the fallback (handled by IngestTranscripts).
+	t2 := filepath.Join(transcriptDir, "sess-mapped.jsonl")
+	require.NoError(t, os.WriteFile(t2, []byte(assistantLine("m1", 999, 999)), 0o644))
+	s.RecordClaudeSession("sess-mapped", "dev-tmux", t2, "/x")
+
+	s.IngestProjectTranscripts(projectsDir)
+
+	var nMakro int
+	require.NoError(t, s.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM prompt_usage WHERE call_function='claude_code' AND session_name='makro'`).Scan(&nMakro))
+	require.Equal(t, 2, nMakro, "unmapped transcript turns attributed to cwd basename")
+
+	var nDevTmux int
+	require.NoError(t, s.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM prompt_usage WHERE session_name='dev-tmux'`).Scan(&nDevTmux))
+	require.Equal(t, 0, nDevTmux, "mapped transcript skipped by the fallback")
+
+	// Re-scan must not double-count.
+	s.IngestProjectTranscripts(projectsDir)
+	require.NoError(t, s.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM prompt_usage WHERE call_function='claude_code' AND session_name='makro'`).Scan(&nMakro))
+	require.Equal(t, 2, nMakro, "re-scan of unchanged files must not duplicate")
 }
