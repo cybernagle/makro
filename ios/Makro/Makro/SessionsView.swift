@@ -127,14 +127,22 @@ private struct HeroSessionTile: View {
     let session: Session
     let index: Int
 
+    private var statusMode: StatusPill.Mode {
+        if session.working { return .thinking }
+        return session.active ? .active : .idle
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                StatusPill(mode: .active)
+                StatusPill(mode: statusMode)
                 Spacer()
                 Text(String(format: "%02d", index + 1))
                     .font(DS.mono(11, .semibold))
                     .foregroundStyle(.tertiary)
+                if session.unread > 0 {
+                    UnreadBadge(count: session.unread)
+                }
             }
             Text(session.name)
                 .font(DS.display(24, .semibold))
@@ -168,6 +176,11 @@ private struct SessionTile: View {
     let session: Session
     let index: Int
 
+    private var statusMode: StatusPill.Mode {
+        if session.working { return .thinking }
+        return session.active ? .active : .idle
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -175,10 +188,9 @@ private struct SessionTile: View {
                     .font(DS.mono(10, .semibold))
                     .foregroundStyle(.tertiary)
                 Spacer()
-                Circle()
-                    .fill(session.active ? DS.Ink.mint : DS.Ink.zinc)
-                    .frame(width: 6, height: 6)
-                    .breathing(session.active)
+                if session.unread > 0 {
+                    UnreadBadge(count: session.unread)
+                }
             }
             Text(session.name)
                 .font(DS.display(16, .semibold))
@@ -186,18 +198,27 @@ private struct SessionTile: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 4) {
-                Text(session.active ? "live" : "idle")
-                    .font(DS.micro(9, .semibold))
-                    .textCase(.uppercase)
-                    .foregroundStyle(session.active ? DS.Ink.mint : DS.Ink.zinc)
-            }
+            StatusPill(mode: statusMode, compact: true)
         }
         .padding(14)
         .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
         .background(DS.Canvas.card)
         .clipShape(RoundedRectangle(cornerRadius: DS.R.lg, style: .continuous))
         .glassBorder(DS.R.lg)
+    }
+}
+
+// Red count badge for finished-task notifications the user hasn't viewed.
+private struct UnreadBadge: View {
+    let count: Int
+    var body: some View {
+        Text(count > 9 ? "9+" : "\(count)")
+            .font(DS.micro(9, .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(DS.Ink.rose)
+            .clipShape(Capsule())
     }
 }
 

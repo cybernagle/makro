@@ -136,6 +136,20 @@ final class ChatViewModel: NSObject, ObservableObject {
         case "system":
             let msg = json["data"] as? String ?? ""
             messages.append(ChatMessage(role: .system, text: msg))
+        case "session_state":
+            // Per-session working/unread snapshot; re-broadcast to the
+            // Sessions list via NotificationCenter (it doesn't own this WS).
+            if let dataStr = json["data"] as? String,
+               let d = dataStr.data(using: .utf8),
+               let payload = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+               let session = payload["session"] as? String {
+                let info: [String: Any] = [
+                    "session": session,
+                    "working": payload["working"] as? Bool ?? false,
+                    "unread": payload["unread"] as? Int ?? 0,
+                ]
+                NotificationCenter.default.post(name: .sessionStateChanged, object: nil, userInfo: info)
+            }
         default:
             break
         }
