@@ -714,35 +714,82 @@ async function renderDashboard() {
 }
 
 // ── Usage (prompt consumption) panel ──
+let usageGran = "15m";
+let usageFilter = { session: "", source: "", model: "" };
+const GRAN_PRESETS = { "1m": [1, 2], "5m": [5, 6], "15m": [15, 12], "30m": [30, 24], "1h": [60, 24] };
+
+function filterQS() {
+    const p = new URLSearchParams();
+    if (usageFilter.session) p.set("session", usageFilter.session);
+    if (usageFilter.source) p.set("source", usageFilter.source);
+    if (usageFilter.model) p.set("model", usageFilter.model);
+    const s = p.toString();
+    return s ? "&" + s : "";
+}
+
 async function renderUsagePanel() {
     const panel = document.getElementById("usage-panel");
     if (!panel) return;
     panel.innerHTML = '<div class="usage-title">Prompt Usage</div><div class="usage-empty">Loading…</div>';
     try {
-        const [stats, diag, timeline] = await Promise.all([
-            api("/api/usage/stats?hours=24"),
+        const [stats, diag] = await Promise.all([
+            api("/api/usage/stats?hours=24" + filterQS()),
             api("/api/usage/diagnostics"),
-            api("/api/usage/timeline?hours=24"),
         ]);
-        panel.innerHTML = usagePanelHTML(stats, diag, timeline);
+        panel.innerHTML = usagePanelHTML(stats, diag);
+        // Filter dropdowns → re-render the whole panel with the new filter.
+        panel.querySelectorAll(".usage-filter").forEach(sel => {
+            sel.addEventListener("change", () => {
+                usageFilter[sel.dataset.filter] = sel.value;
+                renderUsagePanel();
+            });
+        });
+        // Granularity buttons → re-render just the timeline.
+        panel.querySelectorAll(".usage-gran-btn").forEach(b => {
+            b.addEventListener("click", () => {
+                usageGran = b.dataset.gran;
+                panel.querySelectorAll(".usage-gran-btn").forEach(x => x.classList.toggle("active", x === b));
+                renderTimeline();
+            });
+        });
+        renderTimeline();
     } catch (e) {
         panel.innerHTML = '<div class="usage-title">Prompt Usage</div><div class="usage-empty">Unavailable</div>';
     }
 }
 
-function usagePanelHTML(stats, diag, timeline) {
+function filterSelect(name, allLabel, options, current) {
+    let html = `<select class="usage-filter" data-filter="${name}"><option value="">${esc(allLabel)}</option>`;
+    for (const o of options) {
+        html += `<option value="${esc(o)}"${o === current ? " selected" : ""}>${esc(o)}</option>`;
+    }
+    return html + `</select>`;
+}
+
+function usagePanelHTML(stats, diag) {
     if (!stats) {
         return '<div class="usage-title">Prompt Usage</div><div class="usage-empty">No data yet</div>';
     }
     const stat = (label, val, warn) =>
         `<div class="usage-stat ${warn ? "warn" : ""}"><div class="usage-stat-val">${fmtNum(val)}</div><div class="usage-stat-label">${label}</div></div>`;
 
-    let html = `<div class="usage-head"><span class="usage-title">Prompt Usage</span><span class="usage-window">last ${stats.window_hours || 5}h</span>`;
+    let html = `<div class="usage-head"><span class="usage-title">Prompt Usage</span><span class="usage-window">last ${stats.window_hours || 24}h</span>`;
     if (stats.quota_total > 0) {
         const pct = Math.min(100, stats.quota_percent || 0);
         html += `<span class="usage-quota"><span class="usage-quota-bar"><span class="usage-quota-fill" style="width:${pct}%"></span></span><span class="usage-quota-text">${stats.quota_used}/${stats.quota_total} · ${pct.toFixed(0)}%</span></span>`;
     }
-    html += `</div><div class="usage-stats">`;
+    html += `</div>`;
+
+    // Filters: session / source / model (options from the unfiltered breakdowns).
+    const sessions = stats.by_session ? Object.keys(stats.by_session) : [];
+    const models = stats.by_model ? Object.keys(stats.by_model) : [];
+    html += `<div class="usage-filters">`;
+    html += filterSelect("session", "All sessions", sessions, usageFilter.session);
+    html += filterSelect("source", "All sources", ["Claude Code", "Makro"], usageFilter.source);
+    html += filterSelect("model", "All models", models, usageFilter.model);
+    html += `</div>`;
+
+    html += `<div class="usage-stats">`;
     html += stat("Prompts", stats.total_prompts, false);
     html += stat("Tokens", stats.total_tokens, false);
     html += stat("High-cost", stats.high_cost_calls, stats.high_cost_calls > 0);
@@ -751,7 +798,7 @@ function usagePanelHTML(stats, diag, timeline) {
     html += stat("Ineffective", stats.ineffective_calls, stats.ineffective_calls > 0);
     html += `</div>`;
 
-    // Breakdowns: source (Claude Code vs Makro), session/project, model.
+    // Breakdowns: source, session/project, model.
     html += renderBreakdown("Source", stats.by_source);
     html += renderBreakdown("Session", stats.by_session);
     html += renderBreakdown("Model", stats.by_model);
@@ -762,17 +809,32 @@ function usagePanelHTML(stats, diag, timeline) {
         html += `</div>`;
     }
 
-    if (timeline && timeline.length) {
-        const max = Math.max(...timeline.map(p => p.total_tokens), 1);
-        html += `<div class="usage-tl">`;
-        for (const p of timeline) {
-            const h = Math.max(2, (p.total_tokens / max) * 100);
-            const hr = (p.hour || "").slice(11, 13);
-            html += `<div class="usage-tl-col"><div class="usage-tl-bar" style="height:${h}%"></div><div class="usage-tl-label">${hr}</div></div>`;
-        }
-        html += `</div>`;
+    // Timeline header + container (bars rendered by renderTimeline).
+    html += `<div class="usage-tl-head"><span class="usage-tl-title">Tokens over time</span><div class="usage-gran">`;
+    for (const g of ["1m", "5m", "15m", "30m", "1h"]) {
+        html += `<button class="usage-gran-btn${g === usageGran ? " active" : ""}" data-gran="${g}">${g}</button>`;
     }
+    html += `</div></div><div class="usage-tl" id="usage-tl"></div>`;
     return html;
+}
+
+async function renderTimeline() {
+    const tl = document.getElementById("usage-tl");
+    if (!tl) return;
+    tl.innerHTML = '<div class="usage-empty">Loading…</div>';
+    const [gmin, hours] = GRAN_PRESETS[usageGran] || [15, 12];
+    const data = await api(`/api/usage/timeline?hours=${hours}&granularity=${gmin}${filterQS()}`);
+    if (!data || !data.length) { tl.innerHTML = '<div class="usage-empty">No data</div>'; return; }
+    const max = Math.max(...data.map(p => p.total_tokens), 1);
+    const step = Math.max(1, Math.floor(data.length / 8));
+    let html = "";
+    data.forEach((p, i) => {
+        const h = Math.max(2, (p.total_tokens / max) * 100);
+        const label = (p.hour || "").slice(11, 16);
+        const showLabel = i % step === 0;
+        html += `<div class="usage-tl-col"><div class="usage-tl-bar" style="height:${h}%" title="${esc(p.hour)} · ${fmtNum(p.total_tokens)} tok"></div>${showLabel ? `<div class="usage-tl-label">${label}</div>` : ""}</div>`;
+    });
+    tl.innerHTML = html;
 }
 
 function fmtNum(n) {

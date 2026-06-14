@@ -473,7 +473,8 @@ func usageStatsHandler(chatSvc *ChatService) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		st, err := chatSvc.UsageStats(r.URL.Query().Get("session"), queryHours(r, 5))
+		q := r.URL.Query()
+		st, err := chatSvc.UsageStats(q.Get("session"), q.Get("source"), q.Get("model"), queryHours(r, 5))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -505,7 +506,8 @@ func usageTimelineHandler(chatSvc *ChatService) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		tl, err := chatSvc.UsageTimeline(r.URL.Query().Get("session"), queryHours(r, 24))
+		q := r.URL.Query()
+		tl, err := chatSvc.UsageTimeline(q.Get("session"), q.Get("source"), q.Get("model"), queryHours(r, 24), queryInt(r, "granularity", 60))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -517,8 +519,13 @@ func usageTimelineHandler(chatSvc *ChatService) http.HandlerFunc {
 
 // queryHours parses an "hours" query param with a default fallback.
 func queryHours(r *http.Request, def int) int {
-	if h := r.URL.Query().Get("hours"); h != "" {
-		if n, err := strconv.Atoi(h); err == nil && n > 0 {
+	return queryInt(r, "hours", def)
+}
+
+// queryInt parses a query param as a positive int with a default fallback.
+func queryInt(r *http.Request, key string, def int) int {
+	if v := r.URL.Query().Get(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Stats is the /api/usage/stats payload for a window.
@@ -68,18 +69,18 @@ type TimelinePoint struct {
 
 // Stats aggregates usage over the last `hours` (default 5). highCostModels are
 // matched as prefixes; quotaTotal is the window quota (0 = unknown).
-func (s *Store) Stats(session string, hours int, highCostModels []string, quotaTotal int64) (*Stats, error) {
+func (s *Store) Stats(f Filter, hours int, highCostModels []string, quotaTotal int64) (*Stats, error) {
 	if s == nil || s.db == nil {
-		return &Stats{ByModel: map[string]ModelStats{}}, nil
+		return &Stats{ByModel: map[string]ModelStats{}, BySource: map[string]ModelStats{}, BySession: map[string]ModelStats{}}, nil
 	}
 	if hours <= 0 {
 		hours = 5
 	}
 	ctx := context.Background()
-	st := &Stats{Session: session, WindowHours: hours, QuotaTotal: quotaTotal,
+	st := &Stats{Session: f.Session, WindowHours: hours, QuotaTotal: quotaTotal,
 		ByModel: map[string]ModelStats{}, BySource: map[string]ModelStats{}, BySession: map[string]ModelStats{}}
 	win := fmt.Sprintf("-%d hours", hours)
-	sess, sessArg := sessionCond(session)
+	sess, sessArg := f.clause()
 
 	// Base aggregates + duplicates.
 	q := `SELECT COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
@@ -110,7 +111,7 @@ func (s *Store) Stats(session string, hours int, highCostModels []string, quotaT
 	_ = s.db.QueryRowContext(ctx, q3, append([]any{win}, sessArg...)...).Scan(&st.IneffectiveCalls)
 
 	// Frequent: total calls in 5 min from functions exceeding 30 calls/5min.
-	st.FrequentCalls = s.countFrequent(ctx, session, 5, 30)
+	st.FrequentCalls = s.countFrequent(ctx, f.Session, 5, 30)
 
 	// Breakdowns: by model, by source (Claude Code vs Makro), by session/project.
 	s.scanBreakdown(ctx, `SELECT model_type, COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0) FROM prompt_usage WHERE timestamp >= datetime('now','localtime',?)`+sess+` GROUP BY model_type`, win, sessArg, st.ByModel)
@@ -191,32 +192,44 @@ func (s *Store) Diagnostics(session string) (*Diagnostics, error) {
 	return d, nil
 }
 
-// Timeline returns hourly usage buckets over the last `hours`.
-func (s *Store) Timeline(session string, hours int) ([]TimelinePoint, error) {
+// Timeline returns usage buckets over the last `hours`, quantized to
+// granularityMin-minute buckets (default 60 = hourly). Bucket label is the
+// local wall-clock start of the bucket ("2006-01-02T15:04").
+func (s *Store) Timeline(f Filter, hours, granularityMin int) ([]TimelinePoint, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
 	if hours <= 0 {
 		hours = 24
 	}
+	if granularityMin <= 0 {
+		granularityMin = 60
+	}
+	bucket := int64(granularityMin) * 60 // seconds
 	ctx := context.Background()
 	win := fmt.Sprintf("-%d hours", hours)
-	sess, sessArg := sessionCond(session)
-	q := `SELECT strftime('%Y-%m-%dT%H:00:00', timestamp), COUNT(*),
-	      COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0)
+	sess, sessArg := f.clause()
+	// Quantize each timestamp's epoch to the bucket; group by bucket epoch.
+	// strftime('%s', ts) treats the local-stored ts as UTC, so formatting the
+	// bucket epoch back as UTC recovers the original local wall-clock time.
+	q := `SELECT (CAST(strftime('%s', timestamp) AS INTEGER) / ?) * ? AS b,
+	      COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0)
 	      FROM prompt_usage WHERE timestamp >= datetime('now','localtime',?)` + sess + `
-	      GROUP BY strftime('%Y-%m-%dT%H:00:00', timestamp) ORDER BY 1`
-	rows, err := s.db.QueryContext(ctx, q, append([]any{win}, sessArg...)...)
+	      GROUP BY b ORDER BY b`
+	rows, err := s.db.QueryContext(ctx, q, append([]any{bucket, bucket, win}, sessArg...)...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []TimelinePoint
 	for rows.Next() {
+		var b int64
 		var p TimelinePoint
-		if rows.Scan(&p.Hour, &p.Calls, &p.PromptTokens, &p.CompletionTokens, &p.TotalTokens) == nil {
-			out = append(out, p)
+		if rows.Scan(&b, &p.Calls, &p.PromptTokens, &p.CompletionTokens, &p.TotalTokens) != nil {
+			continue
 		}
+		p.Hour = time.Unix(b, 0).UTC().Format("2006-01-02T15:04")
+		out = append(out, p)
 	}
 	return out, nil
 }
@@ -245,6 +258,37 @@ func sessionCond(session string) (string, []any) {
 		return "", nil
 	}
 	return " AND session_name=?", []any{session}
+}
+
+// Filter narrows usage queries by session, source, and/or model.
+type Filter struct {
+	Session string // session_name (tmux/project)
+	Source  string // "Claude Code" | "Makro" | "" (all)
+	Model   string // model_type
+}
+
+// clause returns a " AND ..." SQL fragment + its args for the filter.
+func (f Filter) clause() (string, []any) {
+	var clauses []string
+	var args []any
+	if f.Session != "" {
+		clauses = append(clauses, "session_name=?")
+		args = append(args, f.Session)
+	}
+	switch f.Source {
+	case "Claude Code":
+		clauses = append(clauses, "call_function='claude_code'")
+	case "Makro":
+		clauses = append(clauses, "call_function!='claude_code'")
+	}
+	if f.Model != "" {
+		clauses = append(clauses, "model_type=?")
+		args = append(args, f.Model)
+	}
+	if len(clauses) == 0 {
+		return "", nil
+	}
+	return " AND " + strings.Join(clauses, " AND "), args
 }
 
 // scanBreakdown runs a `SELECT key, calls, prompt, completion, total ... GROUP

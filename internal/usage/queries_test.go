@@ -49,7 +49,7 @@ func TestStatsWindowModelHighCostIneffective(t *testing.T) {
 	insertRaw(t, s, now.Add(-10*time.Minute), "dev", "glm-4.7", 50, 5, "orchestrator.complete", "ctx", false)  // comp<10 → ineffective
 	insertRaw(t, s, now.Add(-48*time.Hour), "dev", "glm-5.2", 999, 999, "orchestrator.complete", "ctx", false) // outside window
 
-	st, err := s.Stats("dev", 5, []string{"glm-5.2"}, 80)
+	st, err := s.Stats(Filter{Session: "dev"}, 5, []string{"glm-5.2"}, 80)
 	require.NoError(t, err)
 	require.Equal(t, int64(3), st.TotalPrompts, "3 recent calls in 5h window")
 	require.Equal(t, int64(1), st.DuplicateCalls)
@@ -103,9 +103,35 @@ func TestTimelineBuckets(t *testing.T) {
 	insertRaw(t, s, now.Add(-10*time.Minute), "dev", "glm-5.2", 100, 50, "f", "c", false)
 	insertRaw(t, s, now.Add(-90*time.Minute), "dev", "glm-5.2", 200, 60, "f", "c", false)
 
-	tl, err := s.Timeline("dev", 3)
+	tl, err := s.Timeline(Filter{Session: "dev"}, 3, 60)
 	require.NoError(t, err)
 	require.Len(t, tl, 2, "two distinct hour buckets")
 	require.NotEmpty(t, tl[0].Hour)
 	require.Equal(t, int64(410), tl[0].TotalTokens+tl[1].TotalTokens)
+}
+
+func TestTimelineMinuteGranularity(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "u.db"))
+	require.NoError(t, err)
+	defer s.Close()
+
+	now := time.Now()
+	// Three calls 15+ min apart → guaranteed distinct 15-min buckets.
+	insertRaw(t, s, now.Add(-10*time.Minute), "dev", "glm-5.2", 100, 10, "f", "c", false)
+	insertRaw(t, s, now.Add(-25*time.Minute), "dev", "glm-5.2", 200, 20, "f", "c", false)
+	insertRaw(t, s, now.Add(-50*time.Minute), "dev", "glm-5.2", 300, 30, "f", "c", false)
+
+	tl, err := s.Timeline(Filter{Session: "dev"}, 2, 15) // 2h window, 15-min buckets
+	require.NoError(t, err)
+	require.Len(t, tl, 3, "three calls >15min apart land in distinct 15-min buckets")
+	// Labels are HH:MM.
+	require.NotEmpty(t, tl[0].Hour)
+	require.Contains(t, tl[0].Hour, ":")
+	// Sum = (100+10)+(200+20)+(300+30) = 660.
+	var sum int64
+	for _, p := range tl {
+		sum += p.TotalTokens
+	}
+	require.Equal(t, int64(660), sum)
 }

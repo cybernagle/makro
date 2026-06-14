@@ -78,12 +78,13 @@ func (s *ChatService) MarkSessionViewed(session string) {
 	s.emitSessionState(session)
 }
 
-// UsageStats returns windowed usage stats (nil-safe when tracking is disabled).
-func (s *ChatService) UsageStats(session string, hours int) (*usage.Stats, error) {
+// UsageStats returns windowed usage stats, optionally filtered by session/
+// source/model. Nil-safe when tracking is disabled.
+func (s *ChatService) UsageStats(session, source, model string, hours int) (*usage.Stats, error) {
 	if s.usageStore == nil {
-		return &usage.Stats{ByModel: map[string]usage.ModelStats{}}, nil
+		return &usage.Stats{ByModel: map[string]usage.ModelStats{}, BySource: map[string]usage.ModelStats{}, BySession: map[string]usage.ModelStats{}}, nil
 	}
-	return s.usageStore.Stats(session, hours, s.highCostModels, s.usageQuota5h)
+	return s.usageStore.Stats(usage.Filter{Session: session, Source: source, Model: model}, hours, s.highCostModels, s.usageQuota5h)
 }
 
 // UsageDiagnostics returns duplicate/frequent/ineffective patterns.
@@ -94,12 +95,13 @@ func (s *ChatService) UsageDiagnostics(session string) (*usage.Diagnostics, erro
 	return s.usageStore.Diagnostics(session)
 }
 
-// UsageTimeline returns hourly usage buckets.
-func (s *ChatService) UsageTimeline(session string, hours int) ([]usage.TimelinePoint, error) {
+// UsageTimeline returns usage buckets (granMin-minute granularity, default hourly)
+// over the last `hours`, optionally filtered by session/source/model.
+func (s *ChatService) UsageTimeline(session, source, model string, hours, granMin int) ([]usage.TimelinePoint, error) {
 	if s.usageStore == nil {
 		return nil, nil
 	}
-	return s.usageStore.Timeline(session, hours)
+	return s.usageStore.Timeline(usage.Filter{Session: session, Source: source, Model: model}, hours, granMin)
 }
 
 // usageIngestLoop ingests Claude Code transcript usage immediately, then every
