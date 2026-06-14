@@ -294,3 +294,99 @@ func TestParseNotification(t *testing.T) {
 3. **LLM model selection** — Reads model config from `.claude` directory (reuses existing Claude Code configuration). Falls back to sensible defaults if not found.
 4. **Dedicated tmux server** — Yes. Makro spawns its own tmux server via `tmux -S ~/.makro/tmux.sock` so it never interferes with the user's existing tmux sessions.
 5. **tmux scrollback** — Handled by tmux itself. Makro just renders what tmux sends; no additional buffering needed.
+
+---
+
+## Session Log — 2026-06-13/14
+
+### 1. Removed kill_session tool (commit `2af912b`)
+
+The `kill_session` LLM tool was error-prone — the orchestrator occasionally killed the wrong tmux session. Removed the tool definition (`internal/agent/tools/kill_session.go`), the `/kill` slash command (`internal/agent/commands.go`), tool docs from the orchestrator system prompt, and the `TestKillSessionTool` test. The GUI's manual DELETE endpoint (`cmd/gui/tmux_service.go`) is preserved — only the LLM-accessible tool was removed.
+
+### 2. Removed Wails v3 dead scaffolding (commit `fedab01`)
+
+The GUI ships via **Electron + electron-builder** (`cmd/gui/package.json`), but a complete **Wails v3** project scaffold was left over from early bootstrap:
+- `APP_NAME: "gui"`, placeholder metadata (`"My Company"`, `version: 0.0.1`)
+- Per-platform Taskfiles calling `wails3` against outputs the Electron flow never produces
+
+Deleted 72 files across `cmd/gui/build/{android,docker,linux,windows,ios}`, `build/appicon.{icon,iconset}`, top-level `Taskfile.yml`s, `config.yml`, and Wails-only darwin assets. Kept `build/darwin/icons.icns` (referenced by `package.json` mac.icon), `build/appicon.png` (icon_gen.py output), and `build/icons_preview/` (icon variants).
+
+### 3. Removed Wails v3 from Go code layer
+
+After the build scaffolding, removed Wails from the Go code itself:
+- **`cmd/gui/main.go`**: Deleted the default Wails GUI branch (`application.New`, `app.Window.NewWithOptions`, `app.Run`). Only `serve` (HTTP server for Electron) + `notify`/`permission` (hook forwarders) remain.
+- **`cmd/gui/terminal_service.go`**: Deleted `TerminalService` struct + all Wails RPC methods (`AttachSession`, `WriteInput`, `ResizeTerminal`, `DetachSession`, `SetApp`, `Startup`). Kept PTY helper functions (`terminalProcess`, `setWinsize`, `winsize`, `ensureTerm`, `detachStaleClients`) used by the xterm WebSocket handler.
+- **`cmd/gui/chat_service.go`**: Deleted `app *application.App` field, `SetApp()`, `Startup()`, and the Wails `emit` fallback path (`s.app.Event.Emit`). Only the SSE hub path remains. `NewChatService()` signature simplified (no args).
+- **`go.mod`**: `github.com/wailsapp/wails/v3` dependency removed.
+
+### 4. Desktop notification feature (v0.6.0, commit `08fa043` + `c32134a`)
+
+When a coding agent finishes its task, Makro posts a macOS desktop notification so the user notices even when not focused.
+
+**New package `internal/notify/`:**
+- `notify.go` — `Notify()` posts via `terminal-notifier` (clickable, activates Makro on click) with `osascript display notification` fallback. `IsFrontmost()` checks if Makro is the active app via `osascript` (fail-open: notify when unsure). `truncateBody()` keeps first line, ≤200 runes.
+- `client.go` — `SendHook()` forwards hook payloads to a running Makro instance over the Unix socket (`~/.makro/hooks.sock`). Used by the `makro-serve notify`/`permission` subcommands.
+- `bark.go` — `BarkPush()` sends push via the Bark app's HTTP API (see §6 below).
+
+**Wiring:**
+- `cmd/gui/main.go`: Added `notify`/`permission` subcommands that forward events over the socket to a running instance.
+- `cmd/gui/chat_service.go`: `OnAgentStop` callback now fires desktop notify (when not frontmost) + Bark push (when configured). `init()` injects Claude Code Stop/Permission hooks (idempotent `EnsureStopHook`/`EnsurePermissionHook`). `serve()` eager-inits so the notifier is live at startup.
+- `main.go` (TUI): `OnAgentStop` fires desktop notify always (TUI can't reliably detect focus).
+
+### 5. Chat duplicate message fix
+
+**Root cause:** `chatWSHandler` (`cmd/gui/server.go`) replayed the entire `hub.history` (up to 200 events) on every WebSocket (re)connect. iPhone's `loadHistory()` (HTTP) + WS history replay = double display.
+
+**Fix:** Removed the history replay block from `chatWSHandler` (lines ~667-673). WS now only streams **new** events. Clients load history via `GET /api/chat/history`. Verified Electron frontend (`main.js`) also uses HTTP history (not WS replay).
+
+### 6. iOS push notification — APNs attempt (blocked)
+
+Full APNs infrastructure built but blocked by iOS 26 beta installd:
+
+**Backend (`internal/apns/`):**
+- `apns.go` — APNs HTTP/2 client. ES256 JWT signing (PKCS#8 `.p8` key, `x509.ParsePKCS8PrivateKey` + `pem.Decode`). `Push()` POSTs to `api.sandbox.push.apple.com` (sandbox) or `api.push.apple.com` (production).
+- Config: `apns_key_path`, `apns_key_id`, `apns_team_id`, `apns_bundle_id`, `apns_sandbox` in config.json + `MAKRO_APNS_*` env overrides.
+- `cmd/gui/device_store.go` — Device token persistence (`~/.makro/device_tokens.json`, `map[device_id]token`).
+- `POST /api/device-token` endpoint in `server.go`.
+
+**iOS app (`ios/Makro/`):**
+- `AppDelegate.swift` — `registerForRemoteNotifications`, token hex-encode + `APIClient.registerDeviceToken()` upload, `UNUserNotificationCenterDelegate` for tap deep-link.
+- `MakroApp.swift` — `@UIApplicationDelegateAdaptor`, tab selection + `makroOpenSession` notification.
+- `APIClient.swift` — `registerDeviceToken(deviceID:token:)`.
+- `Makro.entitlements` — `aps-environment = development`.
+- `project.yml` — `CODE_SIGN_ENTITLEMENTS`, `capabilities: [com.apple.Push]`.
+- `Info.plist` — `UIBackgroundModes: [remote-notification]`.
+
+**Blocker:** iOS 26 beta installd rejects `aps-environment` entitlement with `0xe8008015` ("A valid provisioning profile for this executable was not found"). Confirmed via controlled experiment: `keychain-access-groups` installs fine, `aps-environment` uniquely rejected. All config verified correct (profile has aps, cert in profile, device in profile, portal Push capability + Development SSL Certificate created). The rejection happens regardless of install method (devicectl, ios-deploy, ideviceinstaller, Xcode Cmd+R). Likely an iOS 26 beta installd bug. **Deferred to iOS 26 stable.**
+
+### 7. iOS push notification — Bark (working)
+
+Since APNs is blocked by iOS 26 beta, Bark provides push via the Bark app's own APNs certificate:
+
+**Implementation:**
+- `internal/notify/bark.go` — `BarkPush()` sends HTTP POST to `https://api.day.app/<key>` with JSON payload (title, subtitle, body, group, sound).
+- Config: `bark_key`, `bark_url` (default `https://api.day.app`) in config.json + `MAKRO_BARK_*` env overrides.
+- `chat_service.go` `OnAgentStop`: When `barkKey` is configured, sends Bark push (covers Mac + iPhone). When Bark is configured, **skips desktop notify** (avoids Mac duplicate). When Bark is not configured, falls back to desktop notify (frontmost check).
+
+**Current config:** `bark_key: 6nSWNuG8TsNrajVgc3Xywi`, sound: `multiwayinvitation`.
+
+**Full chain:** Agent finishes → Claude Code Stop hook → `makro notify <session> done` → socket → `OnAgentStop` → `BarkPush` → iPhone + Mac notification.
+
+### 8. Model upgrade
+
+- Makro config: `llm_model: glm-5.1` → `glm-5.2`
+- Claude Code settings: `ANTHROPIC_DEFAULT_OPUS_MODEL` + `ANTHROPIC_DEFAULT_SONNET_MODEL` → `glm-5.2` (haiku stays `glm-4.7`)
+
+### Releases
+
+| Version | Tag | What |
+|---------|-----|------|
+| v0.5.0 | (skipped — already taken) | — |
+| v0.6.0 | `v0.6.0` | Desktop notifications + Wails dead code removal + kill_session removal |
+| (uncommitted) | — | Bark push + chat duplicate fix + APNs infrastructure (blocked) + model upgrade |
+
+### Backlog (not yet implemented)
+
+1. **Session tab UX** — tabs don't show which session is working vs idle. Want per-session color/state (working=pulse, idle=muted, notification=badge). Tabs may be replaced with mini-window cards.
+2. **iOS app launch** — next session.
+3. **APNs push** — deferred to iOS 26 stable (installd beta bug).
