@@ -104,15 +104,19 @@ func (o *Orchestrator) recordUsage(callFunction, session, ctxInfo, model string,
 		session = "orchestrator"
 	}
 	rec := usage.Record{
-		Timestamp:        time.Now(),
-		SessionName:      session,
-		ModelType:        model,
-		PromptTokens:     u.InputTokens,
-		CompletionTokens: u.OutputTokens,
-		TotalTokens:      u.TotalTokens,
-		CallFunction:     callFunction,
-		CallContext:      ctxInfo,
-		CallDurationMS:   durMS,
+		Timestamp:           time.Now(),
+		SessionName:         session,
+		ModelType:           model,
+		PromptTokens:        u.InputTokens,
+		CompletionTokens:    u.OutputTokens,
+		CacheReadTokens:     u.CacheReadTokens,
+		CacheCreationTokens: u.CacheCreationTokens,
+		// Total includes cache (the dominant bucket for cached providers) — the
+		// provider's own TotalTokens only counts non-cached input + output.
+		TotalTokens:    u.InputTokens + u.CacheReadTokens + u.CacheCreationTokens + u.OutputTokens,
+		CallFunction:   callFunction,
+		CallContext:    ctxInfo,
+		CallDurationMS: durMS,
 	}
 	if callErr != nil {
 		rec.Error = callErr.Error()

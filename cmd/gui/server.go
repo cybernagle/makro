@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -168,6 +169,7 @@ func serve(addr string, tlsCert, tlsKey, password string) error {
 	mux.HandleFunc("/api/usage/stats", usageStatsHandler(chatSvc))
 	mux.HandleFunc("/api/usage/diagnostics", usageDiagnosticsHandler(chatSvc))
 	mux.HandleFunc("/api/usage/timeline", usageTimelineHandler(chatSvc))
+	mux.HandleFunc("/api/usage/export", usageExportHandler(chatSvc))
 	mux.HandleFunc("/ws/xterm/", xtermWSHandler)
 	mux.HandleFunc("/ws/snapshot/", wsSnapshotHandler)
 	mux.HandleFunc("/ws/chat", chatWSHandler(hub))
@@ -520,6 +522,40 @@ func usageTimelineHandler(chatSvc *ChatService) http.HandlerFunc {
 // queryHours parses an "hours" query param with a default fallback.
 func queryHours(r *http.Request, def int) int {
 	return queryInt(r, "hours", def)
+}
+
+// usageExportHandler streams the raw prompt_usage rows as CSV (newest first),
+// scoped by the same session/source/model filter + window as the dashboard.
+func usageExportHandler(chatSvc *ChatService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		q := r.URL.Query()
+		rows, err := chatSvc.UsageExport(q.Get("session"), q.Get("source"), q.Get("model"), queryHours(r, 24))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="prompt_usage.csv"`)
+		w.Write([]byte("\xef\xbb\xbf")) // UTF-8 BOM so Excel opens it correctly
+		cw := csv.NewWriter(w)
+		cw.Write([]string{"timestamp", "session", "function", "model", "prompt_tokens",
+			"completion_tokens", "cache_read", "cache_creation", "total_tokens",
+			"is_duplicate", "duration_ms", "error"})
+		for _, row := range rows {
+			cw.Write([]string{
+				row.Timestamp.Format("2006-01-02 15:04:05"), row.Session, row.Function, row.Model,
+				strconv.FormatInt(row.PromptTokens, 10), strconv.FormatInt(row.CompletionTokens, 10),
+				strconv.FormatInt(row.CacheReadTokens, 10), strconv.FormatInt(row.CacheCreationTokens, 10),
+				strconv.FormatInt(row.TotalTokens, 10), strconv.FormatBool(row.IsDuplicate),
+				strconv.FormatInt(row.DurationMS, 10), row.Error,
+			})
+		}
+		cw.Flush()
+	}
 }
 
 // queryInt parses a query param as a positive int with a default fallback.

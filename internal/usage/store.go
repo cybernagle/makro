@@ -16,17 +16,19 @@ import (
 
 // Record is one logged LLM API call.
 type Record struct {
-	Timestamp        time.Time
-	SessionName      string // best-effort: @mention target, else "orchestrator"
-	ModelType        string
-	PromptTokens     int64
-	CompletionTokens int64
-	TotalTokens      int64
-	CallFunction     string // e.g. "orchestrator.complete", "cross_agent_relay"
-	CallContext      string // e.g. "turn=3 tools=2"
-	IsDuplicate      bool   // Phase 2 detection; always false in Phase 1
-	CallDurationMS   int64
-	Error            string
+	Timestamp           time.Time
+	SessionName         string // best-effort: @mention target, else "orchestrator"
+	ModelType           string
+	PromptTokens        int64 // non-cached input
+	CompletionTokens    int64 // output
+	TotalTokens         int64 // prompt + cache_read + cache_creation + completion
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	CallFunction        string // e.g. "orchestrator.complete", "cross_agent_relay"
+	CallContext         string // e.g. "turn=3 tools=2"
+	IsDuplicate         bool   // Phase 2 detection; always false in Phase 1
+	CallDurationMS      int64
+	Error               string
 }
 
 // Store wraps a SQLite connection for usage records.
@@ -43,6 +45,8 @@ CREATE TABLE IF NOT EXISTS prompt_usage (
     prompt_tokens INTEGER,
     completion_tokens INTEGER,
     total_tokens INTEGER,
+    cache_read_tokens INTEGER DEFAULT 0,
+    cache_creation_tokens INTEGER DEFAULT 0,
     call_function TEXT,
     call_context TEXT,
     is_duplicate BOOLEAN DEFAULT 0,
@@ -82,7 +86,41 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("usage: schema: %w", err)
 	}
+	migrateCacheColumns(db) // older DBs predate the cache_* columns
 	return &Store{db: db}, nil
+}
+
+// migrateCacheColumns adds cache_read_tokens + cache_creation_tokens to legacy
+// prompt_usage tables, then forces a Claude Code re-ingest so historical rows
+// (which dropped cache) get rebuilt from transcripts with cache counts.
+// Idempotent: a no-op once the columns exist.
+func migrateCacheColumns(db *sql.DB) {
+	ctx := context.Background()
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info(prompt_usage)")
+	if err != nil {
+		return
+	}
+	hasCache := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		_ = rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk)
+		if name == "cache_read_tokens" {
+			hasCache = true
+		}
+	}
+	rows.Close()
+	if hasCache {
+		return
+	}
+	log.Printf("[usage] migrating: adding cache columns + re-ingesting claude_code history")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE prompt_usage ADD COLUMN cache_read_tokens INTEGER DEFAULT 0")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE prompt_usage ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0")
+	// Drop old cache-less Claude Code rows and reset ingest offsets so the
+	// ingester rebuilds them from transcripts, this time counting cache.
+	_, _ = db.ExecContext(ctx, "DELETE FROM prompt_usage WHERE call_function='claude_code'")
+	_, _ = db.ExecContext(ctx, "DELETE FROM claude_ingest_offset")
 }
 
 // Record inserts one usage record. It is best-effort: a DB error is logged but
@@ -115,10 +153,12 @@ func (s *Store) Record(r Record) {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO prompt_usage
 		   (timestamp, session_name, model_type, prompt_tokens, completion_tokens,
-		    total_tokens, call_function, call_context, is_duplicate, call_duration, error)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		    total_tokens, cache_read_tokens, cache_creation_tokens,
+		    call_function, call_context, is_duplicate, call_duration, error)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		ts, r.SessionName, r.ModelType,
 		r.PromptTokens, r.CompletionTokens, r.TotalTokens,
+		r.CacheReadTokens, r.CacheCreationTokens,
 		r.CallFunction, r.CallContext, r.IsDuplicate, r.CallDurationMS, r.Error,
 	)
 	if err != nil {

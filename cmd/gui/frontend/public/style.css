@@ -909,6 +909,12 @@ html, body { height: 100%; overflow: hidden; }
 }
 .usage-range-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
 .usage-range-btn.active { background: var(--accent-muted); color: var(--accent); }
+.usage-export-btn {
+  font-size: 10px; color: var(--text-secondary);
+  background: var(--bg-surface); border: 1px solid var(--border-default);
+  border-radius: 4px; padding: 2px 8px; cursor: pointer; font-family: var(--font-mono);
+}
+.usage-export-btn:hover { background: var(--bg-hover); color: var(--accent); }
 .usage-chart { position: relative; height: 200px; }
 .usage-chart.usage-doughnut { height: 220px; }
 .usage-tltype, .usage-bdims { display: flex; gap: 2px; }

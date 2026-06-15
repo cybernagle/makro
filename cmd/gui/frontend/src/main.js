@@ -804,11 +804,31 @@ async function renderUsagePanel() {
                 renderBreakdownChart(stats);
             });
         });
+        const exportBtn = panel.querySelector("#usage-export-btn");
+        if (exportBtn) exportBtn.addEventListener("click", exportUsageCsv);
         renderTimeline();
         renderBreakdownChart(stats);
     } catch (e) {
         panel.innerHTML = '<div class="usage-title">Prompt Usage</div><div class="usage-empty">Unavailable</div>';
     }
+}
+
+// exportUsageCsv downloads the raw rows (scoped to the current range + filter)
+// as a CSV file. Fetches with the auth header, then triggers a blob download.
+async function exportUsageCsv() {
+    try {
+        const r = await fetch(BACKEND + "/api/usage/export?hours=" + usageRange + filterQS(), { headers: authHeaders() });
+        if (!r.ok) return;
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "prompt_usage.csv";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    } catch (e) {}
 }
 
 function filterSelect(name, allLabel, options, current) {
@@ -836,7 +856,7 @@ function usagePanelHTML(stats, diag) {
     for (const [val, label] of RANGES) {
         html += `<button class="usage-range-btn${val === usageRange ? " active" : ""}" data-range="${val}">${label}</button>`;
     }
-    html += `</div></div>`;
+    html += `</div><button class="usage-export-btn" id="usage-export-btn" title="Export CSV">⤓ CSV</button></div>`;
 
     // Filters: session / source / model (options from the unfiltered breakdowns).
     const sessions = stats.by_session ? Object.keys(stats.by_session) : [];

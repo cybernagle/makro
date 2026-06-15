@@ -104,6 +104,14 @@ func (s *ChatService) UsageTimeline(session, source, model string, hours, granMi
 	return s.usageStore.Timeline(usage.Filter{Session: session, Source: source, Model: model}, hours, granMin)
 }
 
+// UsageExport returns raw usage rows for CSV/detail download.
+func (s *ChatService) UsageExport(session, source, model string, hours int) ([]usage.ExportRow, error) {
+	if s.usageStore == nil {
+		return nil, nil
+	}
+	return s.usageStore.Export(usage.Filter{Session: session, Source: source, Model: model}, hours)
+}
+
 // usageIngestLoop ingests Claude Code transcript usage immediately, then every
 // minute. Mapped sessions (SessionStart hook) are attributed to their tmux name;
 // the fallback project scan attributes already-running sessions by cwd basename.

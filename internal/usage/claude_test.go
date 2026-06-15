@@ -17,7 +17,9 @@ func TestParseAssistantLine(t *testing.T) {
 	require.Equal(t, "glm-5.2", rec.ModelType)
 	require.Equal(t, int64(100), rec.PromptTokens)
 	require.Equal(t, int64(50), rec.CompletionTokens)
-	require.Equal(t, int64(150), rec.TotalTokens)
+	require.Equal(t, int64(10), rec.CacheReadTokens)
+	require.Equal(t, int64(5), rec.CacheCreationTokens)
+	require.Equal(t, int64(165), rec.TotalTokens) // 100 input + 10 cache_read + 5 cache_create + 50 output
 	require.Equal(t, "u1", rec.CallContext)
 	require.Equal(t, "/Users/x/Desktop/Code/makro", cwd)
 

@@ -180,16 +180,17 @@ func parseAssistantLine(line []byte) (rec Record, cwd string, ok bool) {
 		return Record{}, "", false
 	}
 	ts, _ := time.Parse(time.RFC3339, entry.Timestamp)
-	// Cache tokens (cache_read/creation) aren't stored — the prompt_usage schema
-	// has no columns for them. Only input/output are counted, consistent with the
-	// orchestrator records. (Cache tracking is a follow-up if needed.)
+	// Total includes cache (cache_read is the dominant bucket for cached
+	// providers like Claude Code — without it the real volume is undercounted).
 	return Record{
-		Timestamp:        ts,
-		ModelType:        entry.Message.Model,
-		PromptTokens:     u.InputTokens,
-		CompletionTokens: u.OutputTokens,
-		TotalTokens:      u.InputTokens + u.OutputTokens,
-		CallContext:      entry.UUID, // unique per turn → avoids false duplicate flags
+		Timestamp:           ts,
+		ModelType:           entry.Message.Model,
+		PromptTokens:        u.InputTokens,
+		CompletionTokens:    u.OutputTokens,
+		CacheReadTokens:     u.CacheReadInputTokens,
+		CacheCreationTokens: u.CacheCreationInputTokens,
+		TotalTokens:         u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens + u.OutputTokens,
+		CallContext:         entry.UUID, // unique per turn → avoids false duplicate flags
 	}, entry.Cwd, true
 }
 
