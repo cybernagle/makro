@@ -843,8 +843,10 @@ function usagePanelHTML(stats, diag) {
     if (!stats) {
         return '<div class="usage-title">Prompt Usage</div><div class="usage-empty">No data yet</div>';
     }
-    const stat = (label, val, warn) =>
-        `<div class="usage-stat ${warn ? "warn" : ""}"><div class="usage-stat-val">${fmtNum(val)}</div><div class="usage-stat-label">${label}</div></div>`;
+    const stat = (label, val, warn) => {
+        const v = typeof val === "string" ? val : fmtNum(val);
+        return `<div class="usage-stat ${warn ? "warn" : ""}"><div class="usage-stat-val">${v}</div><div class="usage-stat-label">${label}</div></div>`;
+    };
 
     let html = `<div class="usage-head"><span class="usage-title">Prompt Usage</span>`;
     if (stats.quota_total > 0) {
@@ -867,18 +869,24 @@ function usagePanelHTML(stats, diag) {
     html += filterSelect("model", "All models", models, usageFilter.model);
     html += `</div>`;
 
+    // Cache hit rate = cache_read / (input + cache_read + cache_creation).
+    const denom = (stats.prompt_tokens || 0) + (stats.cache_read_tokens || 0) + (stats.cache_creation_tokens || 0);
+    const hitRate = denom > 0 ? (stats.cache_read_tokens || 0) / denom * 100 : 0;
+
     html += `<div class="usage-stats">`;
     html += stat("Prompts", stats.total_prompts, false);
     html += stat("Tokens", stats.total_tokens, false);
-    html += stat("High-cost", stats.high_cost_calls, stats.high_cost_calls > 0);
+    html += stat("Cache read", stats.cache_read_tokens || 0, false);
+    html += stat("Hit rate", hitRate.toFixed(0) + "%", false);
+    html += stat("Input", stats.prompt_tokens, false);
+    html += stat("Output", stats.completion_tokens, false);
     html += stat("Duplicates", stats.duplicate_calls, stats.duplicate_calls > 0);
     html += stat("Frequent", stats.frequent_calls, stats.frequent_calls > 0);
-    html += stat("Ineffective", stats.ineffective_calls, stats.ineffective_calls > 0);
     html += `</div>`;
 
-    // Breakdown doughnut — switch dimension (session / source / model).
+    // Breakdown doughnut — switch dimension (component / session / source / model).
     html += `<div class="usage-bd-head"><span class="usage-tl-title">Breakdown</span><div class="usage-bdims">`;
-    for (const d of ["session", "source", "model"]) {
+    for (const d of ["component", "session", "source", "model"]) {
         html += `<button class="usage-bdim-btn${d === usageBreakdownDim ? " active" : ""}" data-bdim="${d}">${d}</button>`;
     }
     html += `</div></div><div class="usage-chart usage-doughnut"><canvas id="usage-doughnut-canvas"></canvas></div>`;
@@ -949,9 +957,12 @@ function renderBreakdownChart(stats) {
     const canvas = document.getElementById("usage-doughnut-canvas");
     if (!canvas || !stats) return;
     if (usageDoughnutChart) { usageDoughnutChart.destroy(); usageDoughnutChart = null; }
-    const map = stats["by_" + usageBreakdownDim] || {};
+    // "component" is built client-side from the stats scalars (not a GROUP BY).
+    const map = usageBreakdownDim === "component"
+        ? { cache_read: stats.cache_read_tokens || 0, input: stats.prompt_tokens || 0, output: stats.completion_tokens || 0, ...(stats.cache_creation_tokens ? { cache_create: stats.cache_creation_tokens } : {}) }
+        : (stats["by_" + usageBreakdownDim] || {});
     const entries = Object.entries(map)
-        .map(([k, v]) => ({ k, t: v.total_tokens || 0 }))
+        .map(([k, v]) => ({ k, t: (typeof v === "number" ? v : (v.total_tokens || 0)) }))
         .sort((a, b) => b.t - a.t);
     if (!entries.length) return;
     const top = entries.slice(0, 8);

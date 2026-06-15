@@ -9,22 +9,24 @@ import (
 
 // Stats is the /api/usage/stats payload for a window.
 type Stats struct {
-	Session          string                `json:"session"`
-	WindowHours      int                   `json:"window_hours"`
-	TotalPrompts     int64                 `json:"total_prompts"`
-	TotalTokens      int64                 `json:"total_tokens"`
-	PromptTokens     int64                 `json:"prompt_tokens"`
-	CompletionTokens int64                 `json:"completion_tokens"`
-	DuplicateCalls   int64                 `json:"duplicate_calls"`
-	FrequentCalls    int64                 `json:"frequent_calls"`
-	HighCostCalls    int64                 `json:"high_cost_calls"`
-	IneffectiveCalls int64                 `json:"ineffective_calls"`
-	QuotaUsed        int64                 `json:"quota_used"`
-	QuotaTotal       int64                 `json:"quota_total"`
-	QuotaPercent     float64               `json:"quota_percent"`
-	ByModel          map[string]ModelStats `json:"by_model"`
-	BySource         map[string]ModelStats `json:"by_source"`  // Claude Code vs Makro
-	BySession        map[string]ModelStats `json:"by_session"` // per project/tmux session
+	Session           string                `json:"session"`
+	WindowHours       int                   `json:"window_hours"`
+	TotalPrompts      int64                 `json:"total_prompts"`
+	TotalTokens       int64                 `json:"total_tokens"`
+	PromptTokens      int64                 `json:"prompt_tokens"`
+	CompletionTokens  int64                 `json:"completion_tokens"`
+	CacheReadTokens   int64                 `json:"cache_read_tokens"`
+	CacheCreateTokens int64                 `json:"cache_creation_tokens"`
+	DuplicateCalls    int64                 `json:"duplicate_calls"`
+	FrequentCalls     int64                 `json:"frequent_calls"`
+	HighCostCalls     int64                 `json:"high_cost_calls"`
+	IneffectiveCalls  int64                 `json:"ineffective_calls"`
+	QuotaUsed         int64                 `json:"quota_used"`
+	QuotaTotal        int64                 `json:"quota_total"`
+	QuotaPercent      float64               `json:"quota_percent"`
+	ByModel           map[string]ModelStats `json:"by_model"`
+	BySource          map[string]ModelStats `json:"by_source"`  // Claude Code vs Makro
+	BySession         map[string]ModelStats `json:"by_session"` // per project/tmux session
 }
 
 // ModelStats is a per-model breakdown.
@@ -82,13 +84,15 @@ func (s *Store) Stats(f Filter, hours int, highCostModels []string, quotaTotal i
 	win := fmt.Sprintf("-%d hours", hours)
 	sess, sessArg := f.clause()
 
-	// Base aggregates + duplicates.
+	// Base aggregates + duplicates + cache.
 	q := `SELECT COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
-	      COALESCE(SUM(total_tokens),0), COALESCE(SUM(CASE WHEN is_duplicate=1 THEN 1 ELSE 0 END),0)
+	      COALESCE(SUM(total_tokens),0), COALESCE(SUM(CASE WHEN is_duplicate=1 THEN 1 ELSE 0 END),0),
+	      COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_creation_tokens),0)
 	      FROM prompt_usage WHERE timestamp >= datetime('now','localtime',?)` + sess
 	var dup int64
 	_ = s.db.QueryRowContext(ctx, q, append([]any{win}, sessArg...)...).Scan(
-		&st.TotalPrompts, &st.PromptTokens, &st.CompletionTokens, &st.TotalTokens, &dup)
+		&st.TotalPrompts, &st.PromptTokens, &st.CompletionTokens, &st.TotalTokens, &dup,
+		&st.CacheReadTokens, &st.CacheCreateTokens)
 	st.DuplicateCalls = dup
 
 	// High-cost calls (model matches a high-cost prefix).

@@ -853,7 +853,7 @@ html, body { height: 100%; overflow: hidden; }
 .usage-quota-bar { width: 80px; height: 6px; border-radius: 3px; background: var(--bg-active); overflow: hidden; }
 .usage-quota-fill { display: block; height: 100%; background: var(--accent); }
 .usage-quota-text { font-size: 10px; color: var(--text-tertiary); font-family: var(--font-mono); }
-.usage-stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.usage-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; }
 .usage-stat {
   background: var(--bg-surface);
   border: 1px solid var(--border-default);
