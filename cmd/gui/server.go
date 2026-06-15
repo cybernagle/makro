@@ -547,7 +547,7 @@ func usageExportHandler(chatSvc *ChatService) http.HandlerFunc {
 			"is_duplicate", "duration_ms", "error"})
 		for _, row := range rows {
 			cw.Write([]string{
-				row.Timestamp.Format("2006-01-02 15:04:05"), row.Session, row.Function, row.Model,
+				row.Timestamp, row.Session, row.Function, row.Model,
 				strconv.FormatInt(row.PromptTokens, 10), strconv.FormatInt(row.CompletionTokens, 10),
 				strconv.FormatInt(row.CacheReadTokens, 10), strconv.FormatInt(row.CacheCreationTokens, 10),
 				strconv.FormatInt(row.TotalTokens, 10), strconv.FormatBool(row.IsDuplicate),

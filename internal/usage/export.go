@@ -4,12 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
 )
 
 // ExportRow is one prompt_usage row for CSV / detail download.
 type ExportRow struct {
-	Timestamp           time.Time
+	Timestamp           string // raw stored local timestamp
 	Session             string
 	Function            string
 	Model               string
@@ -48,14 +47,13 @@ func (s *Store) Export(f Filter, hours int) ([]ExportRow, error) {
 	var out []ExportRow
 	for rows.Next() {
 		var r ExportRow
-		var ts, fn, mdl string
+		var fn, mdl string
 		var errStr sql.NullString
-		if err := rows.Scan(&ts, &r.Session, &fn, &mdl, &r.PromptTokens, &r.CompletionTokens,
+		if err := rows.Scan(&r.Timestamp, &r.Session, &fn, &mdl, &r.PromptTokens, &r.CompletionTokens,
 			&r.CacheReadTokens, &r.CacheCreationTokens, &r.TotalTokens, &r.IsDuplicate,
 			&r.DurationMS, &errStr); err != nil {
 			continue
 		}
-		r.Timestamp, _ = time.ParseInLocation("2006-01-02 15:04:05", ts, time.Local)
 		r.Function, r.Model, r.Error = fn, mdl, errStr.String
 		out = append(out, r)
 	}
