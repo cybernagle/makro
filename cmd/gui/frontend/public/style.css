@@ -909,6 +909,18 @@ html, body { height: 100%; overflow: hidden; }
 }
 .usage-range-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
 .usage-range-btn.active { background: var(--accent-muted); color: var(--accent); }
+.usage-chart { position: relative; height: 200px; }
+.usage-chart.usage-doughnut { height: 220px; }
+.usage-tltype, .usage-bdims { display: flex; gap: 2px; }
+.usage-bdims { margin-left: auto; }
+.usage-tltype-btn, .usage-bdim-btn {
+  font-size: 10px; color: var(--text-tertiary);
+  background: transparent; border: 1px solid transparent; border-radius: 4px;
+  padding: 2px 6px; cursor: pointer; font-family: var(--font-mono); text-transform: capitalize;
+}
+.usage-tltype-btn:hover, .usage-bdim-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
+.usage-tltype-btn.active, .usage-bdim-btn.active { background: var(--accent-muted); color: var(--accent); }
+.usage-bd-head { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 
 /* ── Kanban Board ── */
 

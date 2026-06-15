@@ -23,6 +23,7 @@ function authHeaders(extra = {}) {
 import {Terminal} from "@xterm/xterm";
 import {FitAddon} from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import Chart from "chart.js/auto";
 import {marked} from "marked";
 import hljs from "highlight.js/lib/core";
 import js from "highlight.js/lib/languages/javascript";
@@ -719,10 +720,25 @@ async function renderDashboard() {
 let usageRange = 24;   // hours: 1 / 5 / 24 / 168 (7d) / 720 (30d)
 let usageGran = 60;    // minutes per bucket: 1 / 5 / 15 / 30 / 60
 let usageFilter = { session: "", source: "", model: "" };
+let usageChartType = "line";       // timeline chart: "line" | "bar"
+let usageBreakdownDim = "session"; // doughnut dimension: session | source | model
+let usageTlChart = null;           // Chart instance (timeline)
+let usageDoughnutChart = null;     // Chart instance (breakdown)
 const RANGES = [[1, "1h"], [5, "5h"], [24, "24h"], [168, "7d"], [720, "30d"]];
 const GRANS = [[1, "1m"], [5, "5m"], [15, "15m"], [30, "30m"], [60, "1h"]];
 // Auto-pick a sensible granularity when the range changes (~30-60 buckets).
 const RANGE_DEFAULT_GRAN = { 1: 5, 5: 30, 24: 60, 168: 60, 720: 60 };
+// Chart palette (Chart.js needs concrete colors, not CSS vars).
+const CHART = {
+    accent: "#34d399",
+    accentSoft: "rgba(52,211,153,0.18)",
+    accentBar: "rgba(52,211,153,0.55)",
+    grid: "rgba(255,255,255,0.06)",
+    text: "#a1a1aa",
+    ticks: "#71717a",
+    // doughnut slices
+    slices: ["#34d399", "#60a5fa", "#fbbf24", "#f87171", "#c084fc", "#22d3ee", "#a3e635", "#fb923c", "#71717a"],
+};
 
 function filterQS() {
     const p = new URLSearchParams();
@@ -733,9 +749,15 @@ function filterQS() {
     return s ? "&" + s : "";
 }
 
+function destroyUsageCharts() {
+    if (usageTlChart) { usageTlChart.destroy(); usageTlChart = null; }
+    if (usageDoughnutChart) { usageDoughnutChart.destroy(); usageDoughnutChart = null; }
+}
+
 async function renderUsagePanel() {
     const panel = document.getElementById("usage-panel");
     if (!panel) return;
+    destroyUsageCharts(); // canvases are about to be wiped from the DOM
     panel.innerHTML = '<div class="usage-title">Prompt Usage</div><div class="usage-empty">Loading…</div>';
     try {
         const [stats, diag] = await Promise.all([
@@ -766,7 +788,24 @@ async function renderUsagePanel() {
                 renderTimeline();
             });
         });
+        // Timeline chart type (line/bar) → re-render just the timeline.
+        panel.querySelectorAll(".usage-tltype-btn").forEach(b => {
+            b.addEventListener("click", () => {
+                usageChartType = b.dataset.tltype;
+                panel.querySelectorAll(".usage-tltype-btn").forEach(x => x.classList.toggle("active", x === b));
+                renderTimeline();
+            });
+        });
+        // Breakdown dimension (session/source/model) → re-render just the doughnut.
+        panel.querySelectorAll(".usage-bdim-btn").forEach(b => {
+            b.addEventListener("click", () => {
+                usageBreakdownDim = b.dataset.bdim;
+                panel.querySelectorAll(".usage-bdim-btn").forEach(x => x.classList.toggle("active", x === b));
+                renderBreakdownChart(stats);
+            });
+        });
         renderTimeline();
+        renderBreakdownChart(stats);
     } catch (e) {
         panel.innerHTML = '<div class="usage-title">Prompt Usage</div><div class="usage-empty">Unavailable</div>';
     }
@@ -817,10 +856,12 @@ function usagePanelHTML(stats, diag) {
     html += stat("Ineffective", stats.ineffective_calls, stats.ineffective_calls > 0);
     html += `</div>`;
 
-    // Breakdowns: source, session/project, model.
-    html += renderBreakdown("Source", stats.by_source);
-    html += renderBreakdown("Session", stats.by_session);
-    html += renderBreakdown("Model", stats.by_model);
+    // Breakdown doughnut — switch dimension (session / source / model).
+    html += `<div class="usage-bd-head"><span class="usage-tl-title">Breakdown</span><div class="usage-bdims">`;
+    for (const d of ["session", "source", "model"]) {
+        html += `<button class="usage-bdim-btn${d === usageBreakdownDim ? " active" : ""}" data-bdim="${d}">${d}</button>`;
+    }
+    html += `</div></div><div class="usage-chart usage-doughnut"><canvas id="usage-doughnut-canvas"></canvas></div>`;
 
     if (diag && diag.recommendations && diag.recommendations.length) {
         html += `<div class="usage-alerts">`;
@@ -828,33 +869,88 @@ function usagePanelHTML(stats, diag) {
         html += `</div>`;
     }
 
-    // Timeline header + container (bars rendered by renderTimeline).
-    html += `<div class="usage-tl-head"><span class="usage-tl-title">Tokens over time</span><div class="usage-gran">`;
+    // Timeline header: title + line/bar toggle + granularity; canvas below.
+    html += `<div class="usage-tl-head"><span class="usage-tl-title">Tokens over time</span>`;
+    html += `<div class="usage-tltype"><button class="usage-tltype-btn${usageChartType === "line" ? " active" : ""}" data-tltype="line">line</button><button class="usage-tltype-btn${usageChartType === "bar" ? " active" : ""}" data-tltype="bar">bar</button></div>`;
+    html += `<div class="usage-gran">`;
     for (const [val, label] of GRANS) {
         html += `<button class="usage-gran-btn${val === usageGran ? " active" : ""}" data-gran="${val}">${label}</button>`;
     }
-    html += `</div></div><div class="usage-tl" id="usage-tl"></div>`;
+    html += `</div></div><div class="usage-chart usage-tl"><canvas id="usage-tl-canvas"></canvas></div>`;
     return html;
 }
 
 async function renderTimeline() {
-    const tl = document.getElementById("usage-tl");
-    if (!tl) return;
-    tl.innerHTML = '<div class="usage-empty">Loading…</div>';
+    const canvas = document.getElementById("usage-tl-canvas");
+    if (!canvas) return;
     const data = await api(`/api/usage/timeline?hours=${usageRange}&granularity=${usageGran}${filterQS()}`);
-    if (!data || !data.length) { tl.innerHTML = '<div class="usage-empty">No data</div>'; return; }
-    const max = Math.max(...data.map(p => p.total_tokens), 1);
-    const step = Math.max(1, Math.floor(data.length / 8));
-    const long = usageRange > 48; // label needs the date for multi-day windows
-    let html = "";
-    data.forEach((p, i) => {
-        const h = Math.max(2, (p.total_tokens / max) * 100);
+    if (usageTlChart) { usageTlChart.destroy(); usageTlChart = null; }
+    if (!data || !data.length) return;
+    const long = usageRange > 48;
+    const labels = data.map(p => {
         const hr = p.hour || "";
-        const label = long ? `${hr.slice(5, 10)} ${hr.slice(11, 13)}:00` : hr.slice(11, 16);
-        const showLabel = i % step === 0;
-        html += `<div class="usage-tl-col"><div class="usage-tl-bar" style="height:${h}%" title="${esc(hr)} · ${fmtNum(p.total_tokens)} tok"></div>${showLabel ? `<div class="usage-tl-label">${label}</div>` : ""}</div>`;
+        return long ? `${hr.slice(5, 10)} ${hr.slice(11, 13)}:00` : hr.slice(11, 16);
     });
-    tl.innerHTML = html;
+    const isLine = usageChartType === "line";
+    usageTlChart = new Chart(canvas, {
+        type: usageChartType,
+        data: {
+            labels,
+            datasets: [{
+                label: "tokens",
+                data: data.map(p => p.total_tokens),
+                borderColor: CHART.accent,
+                backgroundColor: isLine ? CHART.accentSoft : CHART.accentBar,
+                borderWidth: 2,
+                tension: 0.3,
+                fill: isLine,
+                pointRadius: isLine ? 0 : undefined,
+                pointHoverRadius: isLine ? 3 : undefined,
+            }],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false, animation: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+                legend: { labels: { color: CHART.text, boxWidth: 12, font: { size: 11 } } },
+                tooltip: { callbacks: { label: (c) => `${fmtNum(c.parsed.y)} tokens · ${data[c.dataIndex].calls} calls` } },
+            },
+            scales: {
+                x: { ticks: { color: CHART.ticks, maxTicksLimit: 8, autoSkip: true }, grid: { color: CHART.grid } },
+                y: { beginAtZero: true, ticks: { color: CHART.ticks, callback: (v) => fmtNum(v) }, grid: { color: CHART.grid }, title: { display: true, text: "tokens", color: CHART.ticks } },
+            },
+        },
+    });
+}
+
+// renderBreakdownChart draws a doughnut of token share for the chosen dimension
+// (session / source / model), top 8 slices + "other".
+function renderBreakdownChart(stats) {
+    const canvas = document.getElementById("usage-doughnut-canvas");
+    if (!canvas || !stats) return;
+    if (usageDoughnutChart) { usageDoughnutChart.destroy(); usageDoughnutChart = null; }
+    const map = stats["by_" + usageBreakdownDim] || {};
+    const entries = Object.entries(map)
+        .map(([k, v]) => ({ k, t: v.total_tokens || 0 }))
+        .sort((a, b) => b.t - a.t);
+    if (!entries.length) return;
+    const top = entries.slice(0, 8);
+    const rest = entries.slice(8).reduce((s, e) => s + e.t, 0);
+    if (rest > 0) top.push({ k: "other", t: rest });
+    usageDoughnutChart = new Chart(canvas, {
+        type: "doughnut",
+        data: {
+            labels: top.map(e => e.k),
+            datasets: [{ data: top.map(e => e.t), backgroundColor: CHART.slices, borderWidth: 0 }],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false, cutout: "60%",
+            plugins: {
+                legend: { position: "right", labels: { color: CHART.text, boxWidth: 12, font: { size: 11 } } },
+                tooltip: { callbacks: { label: (c) => `${c.label}: ${fmtNum(c.parsed)} tok` } },
+            },
+        },
+    });
 }
 
 function fmtNum(n) {
