@@ -10,10 +10,13 @@ final class ChatViewModel: NSObject, ObservableObject {
     @Published private(set) var thinkingText: String?
 
     // Voice conversation state.
-    @Published var isVoiceMode = false
+    // expectSpokenReply is a one-shot flag: set true only when the user's
+    // message was produced by speech recognition, and cleared right after the
+    // reply is spoken (or interrupted). This keeps typed messages silent.
     @Published private(set) var partialTranscript: String?
     @Published private(set) var isListening = false
     @Published private(set) var isSpeaking = false
+    private var expectSpokenReply = false
 
     private var cancellables: Set<AnyCancellable> = []
 
@@ -35,11 +38,13 @@ final class ChatViewModel: NSObject, ObservableObject {
     }
 
     private func wireSpeech() {
-        // STT result → send as a normal chat message (reuses existing path).
+        // STT result → send as a normal chat message (reuses existing path)
+        // and arm the one-shot flag so the reply gets read aloud.
         speech.onRecognized = { [weak self] text in
             guard let self else { return }
             self.partialTranscript = nil
             self.isListening = false
+            self.expectSpokenReply = true
             self.send(text: text)
         }
         // Surface partial recognition so the UI can show "正在听…".
@@ -58,15 +63,22 @@ final class ChatViewModel: NSObject, ObservableObject {
             }
         }.store(in: &cancellables)
         // Speaking state → drives the waveform animation + button affordance.
+        // Clear the one-shot flag once playback ends so the NEXT message only
+        // speaks if it was itself triggered by voice.
         speech.$speakState.sink { [weak self] state in
-            self?.isSpeaking = (state == .speaking)
+            guard let self else { return }
+            self.isSpeaking = (state == .speaking)
+            if state != .speaking {
+                self.expectSpokenReply = false
+            }
         }.store(in: &cancellables)
-        // Quota wall → tell the user and drop out of voice mode.
+        // Quota wall → tell the user and stop active listening/speaking.
         speech.onQuotaExhausted = { [weak self] msg in
-            self?.messages.append(ChatMessage(role: .system, text: msg))
-            self?.isVoiceMode = false
-            self?.stopListening()
-            self?.stopSpeaking()
+            guard let self else { return }
+            self.messages.append(ChatMessage(role: .system, text: msg))
+            self.expectSpokenReply = false
+            self.stopListening()
+            self.stopSpeaking()
         }
     }
 
@@ -144,19 +156,17 @@ final class ChatViewModel: NSObject, ObservableObject {
         speech.stopListening()
         isListening = false
         partialTranscript = nil
+        // If the user stops before any recognized text fires, there's nothing
+        // to reply to — make sure a stray done event won't trigger TTS.
+        // (expectSpokenReply is only armed by onRecognized, so this is just
+        // defensive cleanup of the case where STT was cancelled entirely.)
     }
 
     func stopSpeaking() {
         speech.stopSpeaking()
         isSpeaking = false
-    }
-
-    func toggleVoiceMode() {
-        isVoiceMode.toggle()
-        if !isVoiceMode {
-            stopListening()
-            stopSpeaking()
-        }
+        // Stopping playback also cancels any pending spoken reply.
+        expectSpokenReply = false
     }
 
     private func openConnection() {
@@ -208,8 +218,9 @@ final class ChatViewModel: NSObject, ObservableObject {
         case "done":
             thinkingText = nil
             isStreaming = false
-            // Voice mode: read the completed assistant reply aloud.
-            if isVoiceMode,
+            // Only read aloud replies that were triggered by voice. Typed
+            // messages never set expectSpokenReply, so they stay silent.
+            if expectSpokenReply,
                let last = messages.last,
                last.role == .assistant,
                !last.text.isEmpty {

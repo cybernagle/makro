@@ -171,8 +171,10 @@ struct ChatView: View {
 
     private var micButton: some View {
         Button {
-            vm.toggleVoiceMode()
-            if vm.isVoiceMode { vm.toggleListening() }
+            // Tap mic → start/stop listening directly. No persistent voice
+            // mode: typed messages are never spoken, and a spoken reply is
+            // read aloud exactly once (managed by expectSpokenReply).
+            vm.toggleListening()
         } label: {
             Image(systemName: micIcon)
                 .font(.system(size: 15, weight: .semibold))
@@ -182,21 +184,18 @@ struct ChatView: View {
                 .clipShape(Circle())
                 .breathing(vm.isListening || vm.isSpeaking)
         }
-        .animation(DS.snappy, value: vm.isVoiceMode)
         .animation(DS.snappy, value: vm.isListening)
     }
 
     private var micIcon: String {
         if vm.isListening { return "waveform" }
         if vm.isSpeaking { return "speaker.wave.2.fill" }
-        if vm.isVoiceMode { return "mic.fill" }
         return "mic"
     }
 
     private var micColor: Color {
         if vm.isListening { return DS.Ink.rose }
         if vm.isSpeaking { return DS.Ink.mint }
-        if vm.isVoiceMode { return DS.Ink.mint }
         return DS.Ink.zinc
     }
 
