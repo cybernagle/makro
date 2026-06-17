@@ -21,16 +21,18 @@
 		82D0067DFF4CF9B075296805 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 791D50F6D3288C4934C2006A /* AppDelegate.swift */; };
 		9680A9D36267A514B9281C89 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5771BD2F137609458953553 /* APIClient.swift */; };
 		99BB950716C1F19A97E632A6 /* KanbanViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62DA63C8C7F48649AC028A2E /* KanbanViewModel.swift */; };
+		9AE1CF3C714C34A02E827EEB /* Pods_Makro.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0D055BC1A0B6F479CFFF89B8 /* Pods_Makro.framework */; };
 		AB8246F1BEF0BA659B3D046C /* ANSI.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA9859C06BC6CD8E48858057 /* ANSI.swift */; };
+		B6B835DDF321ECDBF47E6894 /* NowPlayingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80C150376C27220D3A78BDDD /* NowPlayingManager.swift */; };
 		C6CDDA92EA8534AEEAAFCF65 /* CallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 783498E9FFBDCC956156CD6E /* CallView.swift */; };
 		CF6DA06ADF699F440BEEE89F /* KanbanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93807192D2A1EEB3BDB83074 /* KanbanView.swift */; };
 		DB07A8E1A37C8EBD9ED78419 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84743919C8053EAACF231B37 /* Config.swift */; };
-		DFC57CEF3BE126D08A162240 /* Pods_Makro.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F4C99FAA331943E65FEE7123 /* Pods_Makro.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		07256E45F5130600B29B76D3 /* Makro.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Makro.entitlements; sourceTree = "<group>"; };
 		073F7A972B71A581504EC2F4 /* Makro.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Makro.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		0D055BC1A0B6F479CFFF89B8 /* Pods_Makro.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Makro.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		2AFE09E16F77FB3DF26DD049 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		2F32FE4F7A4421F150EB56D6 /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
 		2F4D53CAEC92B38B12F3EA9E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -40,33 +42,51 @@
 		7606DB674BC71275A25D1B50 /* TerminalViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalViewModel.swift; sourceTree = "<group>"; };
 		783498E9FFBDCC956156CD6E /* CallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallView.swift; sourceTree = "<group>"; };
 		791D50F6D3288C4934C2006A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		80C150376C27220D3A78BDDD /* NowPlayingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingManager.swift; sourceTree = "<group>"; };
 		84743919C8053EAACF231B37 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
 		8D8533CA7E26A870B431E644 /* SessionsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsViewModel.swift; sourceTree = "<group>"; };
+		90CE04779A4EBA89355EF379 /* Pods-Makro.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Makro.debug.xcconfig"; path = "Target Support Files/Pods-Makro/Pods-Makro.debug.xcconfig"; sourceTree = "<group>"; };
 		93807192D2A1EEB3BDB83074 /* KanbanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KanbanView.swift; sourceTree = "<group>"; };
-		AF24DED39EED13F41F27FF94 /* Pods-Makro.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Makro.release.xcconfig"; path = "Target Support Files/Pods-Makro/Pods-Makro.release.xcconfig"; sourceTree = "<group>"; };
 		B845DA418647EA128499AB3A /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
-		BBC0DA96A10E6AC11CD2436D /* Pods-Makro.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Makro.debug.xcconfig"; path = "Target Support Files/Pods-Makro/Pods-Makro.debug.xcconfig"; sourceTree = "<group>"; };
 		D33487D9063356B4947134C2 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		DA9859C06BC6CD8E48858057 /* ANSI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ANSI.swift; sourceTree = "<group>"; };
 		E5771BD2F137609458953553 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		E7115624D08EB3EC3D45859F /* MakroApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MakroApp.swift; sourceTree = "<group>"; };
 		EF4E0E4B479FA41D70865DD8 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
-		F4C99FAA331943E65FEE7123 /* Pods_Makro.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Makro.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		F5E6B67923EEF26C0C9C361B /* Pods-Makro.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Makro.release.xcconfig"; path = "Target Support Files/Pods-Makro/Pods-Makro.release.xcconfig"; sourceTree = "<group>"; };
 		FBE95557715F0222A9A2D898 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		A60D28207E5EF95005085C61 /* Frameworks */ = {
+		B5115F05F64D1C2A4315F1BE /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DFC57CEF3BE126D08A162240 /* Pods_Makro.framework in Frameworks */,
+				9AE1CF3C714C34A02E827EEB /* Pods_Makro.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		05BBE59AA2D8B71E2C10170F /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				90CE04779A4EBA89355EF379 /* Pods-Makro.debug.xcconfig */,
+				F5E6B67923EEF26C0C9C361B /* Pods-Makro.release.xcconfig */,
+			);
+			name = Pods;
+			path = Pods;
+			sourceTree = "<group>";
+		};
+		498E47ADD394B467D1965BC1 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				0D055BC1A0B6F479CFFF89B8 /* Pods_Makro.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		9A7AD897179BC4C3348928D1 /* Makro */ = {
 			isa = PBXGroup;
 			children = (
@@ -85,6 +105,7 @@
 				07256E45F5130600B29B76D3 /* Makro.entitlements */,
 				E7115624D08EB3EC3D45859F /* MakroApp.swift */,
 				FBE95557715F0222A9A2D898 /* Models.swift */,
+				80C150376C27220D3A78BDDD /* NowPlayingManager.swift */,
 				2F32FE4F7A4421F150EB56D6 /* SessionsView.swift */,
 				8D8533CA7E26A870B431E644 /* SessionsViewModel.swift */,
 				D33487D9063356B4947134C2 /* SettingsView.swift */,
@@ -102,31 +123,13 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		C49C58623549FF17F5BCD17F /* Pods */ = {
-			isa = PBXGroup;
-			children = (
-				BBC0DA96A10E6AC11CD2436D /* Pods-Makro.debug.xcconfig */,
-				AF24DED39EED13F41F27FF94 /* Pods-Makro.release.xcconfig */,
-			);
-			name = Pods;
-			path = Pods;
-			sourceTree = "<group>";
-		};
-		EF1E17AE86765581E185D8D3 /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-				F4C99FAA331943E65FEE7123 /* Pods_Makro.framework */,
-			);
-			name = Frameworks;
-			sourceTree = "<group>";
-		};
 		F57C61FD7099E8A002C0A625 = {
 			isa = PBXGroup;
 			children = (
 				9A7AD897179BC4C3348928D1 /* Makro */,
 				B78F8B751FC8816D0CFBC7E1 /* Products */,
-				C49C58623549FF17F5BCD17F /* Pods */,
-				EF1E17AE86765581E185D8D3 /* Frameworks */,
+				05BBE59AA2D8B71E2C10170F /* Pods */,
+				498E47ADD394B467D1965BC1 /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -137,11 +140,11 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 76C359406432363A739394C4 /* Build configuration list for PBXNativeTarget "Makro" */;
 			buildPhases = (
-				2BC88B1B20E005A9DBB7099B /* [CP] Check Pods Manifest.lock */,
+				F4080DC31349E83F5835C8FB /* [CP] Check Pods Manifest.lock */,
 				6CD5296BD50C56EAE2061F3E /* Sources */,
 				269CF20ABFBAC842C6927048 /* Resources */,
-				A60D28207E5EF95005085C61 /* Frameworks */,
-				3FF28F3BC791860CCA34E8B8 /* [CP] Embed Pods Frameworks */,
+				B5115F05F64D1C2A4315F1BE /* Frameworks */,
+				7D83E3EB0F7D489B0B88A651 /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
 			);
@@ -198,7 +201,24 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		2BC88B1B20E005A9DBB7099B /* [CP] Check Pods Manifest.lock */ = {
+		7D83E3EB0F7D489B0B88A651 /* [CP] Embed Pods Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Makro/Pods-Makro-frameworks-${CONFIGURATION}-input-files.xcfilelist",
+			);
+			name = "[CP] Embed Pods Frameworks";
+			outputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Makro/Pods-Makro-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Makro/Pods-Makro-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		F4080DC31349E83F5835C8FB /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -220,23 +240,6 @@
 			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
 			showEnvVarsInLog = 0;
 		};
-		3FF28F3BC791860CCA34E8B8 /* [CP] Embed Pods Frameworks */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-Makro/Pods-Makro-frameworks-${CONFIGURATION}-input-files.xcfilelist",
-			);
-			name = "[CP] Embed Pods Frameworks";
-			outputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-Makro/Pods-Makro-frameworks-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Makro/Pods-Makro-frameworks.sh\"\n";
-			showEnvVarsInLog = 0;
-		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -256,6 +259,7 @@
 				99BB950716C1F19A97E632A6 /* KanbanViewModel.swift in Sources */,
 				649C3CBD0C16454577837CDC /* MakroApp.swift in Sources */,
 				04CE88BE0C73102C401150DA /* Models.swift in Sources */,
+				B6B835DDF321ECDBF47E6894 /* NowPlayingManager.swift in Sources */,
 				13A63DF6D5D49C1AE27F45EC /* SessionsView.swift in Sources */,
 				4D15D15B0428A5E9654B0172 /* SessionsViewModel.swift in Sources */,
 				7FDD68202EF81E94CE31A6D6 /* SettingsView.swift in Sources */,
@@ -388,7 +392,7 @@
 		};
 		CA121894D8B46B6B5E24A589 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBC0DA96A10E6AC11CD2436D /* Pods-Makro.debug.xcconfig */;
+			baseConfigurationReference = 90CE04779A4EBA89355EF379 /* Pods-Makro.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Makro/Makro.entitlements;
@@ -412,7 +416,7 @@
 		};
 		FC9D9B58664D93AB17F2570E /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = AF24DED39EED13F41F27FF94 /* Pods-Makro.release.xcconfig */;
+			baseConfigurationReference = F5E6B67923EEF26C0C9C361B /* Pods-Makro.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Makro/Makro.entitlements;

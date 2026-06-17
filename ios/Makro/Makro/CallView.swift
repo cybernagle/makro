@@ -30,6 +30,17 @@ struct CallView: View {
         .preferredColorScheme(.dark)
         .onAppear { vm.startCall() }
         .onDisappear { vm.endCall() }
+        .onChange(of: phase) { newPhase in
+            // Keep the lock-screen card in sync with the call phase.
+            if vm.isMuted {
+                NowPlayingManager.shared.updatePhase("已静音")
+            } else {
+                NowPlayingManager.shared.updatePhase(phaseLabel(for: newPhase))
+            }
+        }
+        .onChange(of: vm.isMuted) { muted in
+            NowPlayingManager.shared.updatePhase(muted ? "已静音" : phaseLabel(for: phase))
+        }
     }
 
     // MARK: - Header
@@ -141,7 +152,7 @@ struct CallView: View {
 
     @State private var animateRings = false
 
-    private enum Phase { case listening, thinking, speaking }
+    private enum Phase: Equatable { case listening, thinking, speaking }
     private var phase: Phase {
         if vm.isSpeaking { return .speaking }
         if vm.thinkingText != nil || vm.isStreaming { return .thinking }
@@ -149,7 +160,11 @@ struct CallView: View {
     }
 
     private var phaseLabel: String {
-        switch phase {
+        phaseLabel(for: phase)
+    }
+
+    private func phaseLabel(for p: Phase) -> String {
+        switch p {
         case .listening: return vm.isListening ? "正在聆听…" : "准备中…"
         case .thinking: return "思考中…"
         case .speaking: return "正在回答…"

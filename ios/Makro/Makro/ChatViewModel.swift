@@ -20,6 +20,7 @@ final class ChatViewModel: NSObject, ObservableObject {
 
     // Call mode (phone-call style): continuous listening + auto TTS loop.
     @Published var isInCall = false
+    @Published var isMuted = false
 
     private var cancellables: Set<AnyCancellable> = []
 
@@ -195,17 +196,41 @@ final class ChatViewModel: NSObject, ObservableObject {
             return
         }
         isInCall = true
+        isMuted = false
         // Arm spoken replies for the whole call; the done→TTS path checks isInCall.
         stopSpeaking()
         speech.startListening(continuous: true)
+        // Wire lock-screen controls.
+        NowPlayingManager.shared.onHangUp = { [weak self] in
+            Task { @MainActor in self?.endCall() }
+        }
+        NowPlayingManager.shared.onToggleMute = { [weak self] in
+            Task { @MainActor in self?.toggleMute() }
+        }
+        NowPlayingManager.shared.startCall()
     }
 
     /// End the call: stop the mic and any playback.
     func endCall() {
         isInCall = false
+        isMuted = false
         expectSpokenReply = false
+        NowPlayingManager.shared.endCall()
         stopListening()
         stopSpeaking()
+    }
+
+    /// Mute/unmute the mic during a call (mapped to the lock-screen play/pause button).
+    func toggleMute() {
+        guard isInCall else { return }
+        isMuted.toggle()
+        if isMuted {
+            speech.suspendListening()
+            NowPlayingManager.shared.updatePhase("已静音")
+        } else {
+            speech.resumeListening()
+            NowPlayingManager.shared.updatePhase("正在聆听…")
+        }
     }
 
     private func openConnection() {
