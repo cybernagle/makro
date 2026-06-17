@@ -236,6 +236,9 @@ final class AzureSpeechManager: NSObject, ObservableObject {
 
     /// Delivered when STT produces a final utterance (user finished a turn).
     var onRecognized: ((String) -> Void)?
+    /// Delivered on the first partial recognition of a NEW utterance. Used in
+    /// call mode to detect the user starting to speak (so TTS can be interrupted).
+    var onPartialSpeech: (() -> Void)?
     /// Delivered when TTS finishes a full utterance.
     var onSpeakFinished: (() -> Void)?
     /// Delivered when a quota wall is hit; the message is user-facing.
@@ -317,9 +320,17 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             recognizer.addRecognizingEventHandler { [weak self] _, evt in
                 guard let self else { return }
                 Task { @MainActor in
-                    // Ignore while suspended (TTS is playing in call mode).
+                    // Ignore while suspended (mute button in call mode).
                     guard !self.isListeningSuspended else { return }
                     if let partial = evt.result.text, !partial.isEmpty {
+                        // The first partial of a new utterance signals the user
+                        // started speaking — fire onPartialSpeech so call mode
+                        // can interrupt any TTS still playing. We detect "first
+                        // partial" by accumulatedText being empty (no final
+                        // result has landed yet this turn).
+                        if self.accumulatedText.isEmpty {
+                            self.onPartialSpeech?()
+                        }
                         self.listenState = .listening(partial: partial)
                         self.resetSilenceTimer()
                     }

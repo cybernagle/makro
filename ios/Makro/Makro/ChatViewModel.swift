@@ -51,6 +51,16 @@ final class ChatViewModel: NSObject, ObservableObject {
             self.expectSpokenReply = true
             self.send(text: text)
         }
+        // First partial of a new utterance → if the assistant is still
+        // speaking, stop it. This is the interruption path: the user talks
+        // over the TTS and we cut it off. .voiceChat echo cancellation keeps
+        // the assistant's own audio from falsely triggering this.
+        speech.onPartialSpeech = { [weak self] in
+            guard let self else { return }
+            if self.isSpeaking {
+                self.stopSpeaking()
+            }
+        }
         // Surface partial recognition so the UI can show "正在听…".
         speech.$listenState.sink { [weak self] state in
             guard let self else { return }
@@ -67,21 +77,16 @@ final class ChatViewModel: NSObject, ObservableObject {
             }
         }.store(in: &cancellables)
         // Speaking state → drives the waveform animation + button affordance.
-        // In call mode, pause the mic while speaking and resume after, so the
-        // assistant's own voice isn't captured as a new user turn.
+        // We do NOT suspend the mic while speaking — instead we keep listening
+        // so the user can interrupt the assistant. The .voiceChat session mode
+        // provides system echo cancellation to suppress the TTS leaking back
+        // in. When real user speech is detected mid-playback, the recognizing
+        // handler stops TTS (see onPartialSpeech below).
         speech.$speakState.sink { [weak self] state in
             guard let self else { return }
             self.isSpeaking = (state == .speaking)
-            if state == .speaking && self.isInCall {
-                self.speech.suspendListening()
-            }
-            if state != .speaking {
-                if self.isInCall {
-                    // Keep the spoken-reply arm on so the next reply also talks.
-                    self.speech.resumeListening()
-                } else {
-                    self.expectSpokenReply = false
-                }
+            if state != .speaking, !self.isInCall {
+                self.expectSpokenReply = false
             }
         }.store(in: &cancellables)
         // Quota wall → tell the user and stop active listening/speaking.
