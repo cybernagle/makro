@@ -108,10 +108,11 @@ func (s *Store) Stats(f Filter, hours int, highCostModels []string, quotaTotal i
 		_ = s.db.QueryRowContext(ctx, q2, append(args, sessArg...)...).Scan(&st.HighCostCalls)
 	}
 
-	// Ineffective: response < 10 tokens, no error. Excludes claude_code — Claude
-	// Code's short glm-5.x routing turns are an efficient pattern, not waste.
+	// Ineffective: response < 10 tokens, no error. Excludes external sources
+	// (claude_code, zcode) — their short routing/title turns are an efficient
+	// pattern, not waste.
 	q3 := `SELECT COUNT(*) FROM prompt_usage WHERE timestamp >= datetime('now','localtime',?)
-	        AND completion_tokens < 10 AND call_function!='claude_code' AND (error IS NULL OR error='')` + sess
+	        AND completion_tokens < 10 AND call_function NOT IN ('claude_code','zcode') AND (error IS NULL OR error='')` + sess
 	_ = s.db.QueryRowContext(ctx, q3, append([]any{win}, sessArg...)...).Scan(&st.IneffectiveCalls)
 
 	// Frequent: total calls in 5 min from functions exceeding 30 calls/5min.
@@ -119,7 +120,7 @@ func (s *Store) Stats(f Filter, hours int, highCostModels []string, quotaTotal i
 
 	// Breakdowns: by model, by source (Claude Code vs Makro), by session/project.
 	s.scanBreakdown(ctx, `SELECT model_type, COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0) FROM prompt_usage WHERE timestamp >= datetime('now','localtime',?)`+sess+` GROUP BY model_type`, win, sessArg, st.ByModel)
-	s.scanBreakdown(ctx, `SELECT CASE WHEN call_function='claude_code' THEN 'Claude Code' ELSE 'Makro' END, COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0) FROM prompt_usage WHERE timestamp >= datetime('now','localtime',?)`+sess+` GROUP BY 1`, win, sessArg, st.BySource)
+	s.scanBreakdown(ctx, `SELECT CASE WHEN call_function='claude_code' THEN 'Claude Code' WHEN call_function='zcode' THEN 'ZCode' ELSE 'Makro' END, COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0) FROM prompt_usage WHERE timestamp >= datetime('now','localtime',?)`+sess+` GROUP BY 1`, win, sessArg, st.BySource)
 	s.scanBreakdown(ctx, `SELECT session_name, COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), COALESCE(SUM(total_tokens),0) FROM prompt_usage WHERE timestamp >= datetime('now','localtime',?)`+sess+` GROUP BY session_name ORDER BY COALESCE(SUM(total_tokens),0) DESC LIMIT 30`, win, sessArg, st.BySession)
 
 	// Quota (window quota counts prompts).
@@ -136,7 +137,7 @@ func (s *Store) countFrequent(ctx context.Context, session string, minutes, thre
 	sess, sessArg := sessionCond(session)
 	q := fmt.Sprintf(`SELECT COALESCE(SUM(cnt),0) FROM (
 		  SELECT COUNT(*) as cnt FROM prompt_usage
-		  WHERE timestamp >= datetime('now','localtime','-%d minutes')%s AND call_function!='claude_code'
+		  WHERE timestamp >= datetime('now','localtime','-%d minutes')%s AND call_function NOT IN ('claude_code','zcode')
 		  GROUP BY call_function HAVING cnt > %d)`, minutes, sess, threshold)
 	var n int64
 	_ = s.db.QueryRowContext(ctx, q, sessArg...).Scan(&n)
@@ -171,8 +172,8 @@ func (s *Store) Diagnostics(session string) (*Diagnostics, error) {
 	seen := map[string]bool{}
 	for _, w := range []struct{ min, thr int }{{1, 10}, {5, 30}} {
 		fq := fmt.Sprintf(`SELECT call_function, COUNT(*) FROM prompt_usage
-		                   WHERE timestamp >= datetime('now','localtime','-%d minutes')%s AND call_function!='claude_code'
-		                   GROUP BY call_function HAVING COUNT(*) > %d ORDER BY COUNT(*) DESC`, w.min, sess, w.min)
+			                   WHERE timestamp >= datetime('now','localtime','-%d minutes')%s AND call_function NOT IN ('claude_code','zcode')
+			                   GROUP BY call_function HAVING COUNT(*) > %d ORDER BY COUNT(*) DESC`, w.min, sess, w.min)
 		fr, err := s.db.QueryContext(ctx, fq, sessArg...)
 		if err != nil {
 			continue
@@ -188,8 +189,8 @@ func (s *Store) Diagnostics(session string) (*Diagnostics, error) {
 		fr.Close()
 	}
 
-	// Ineffective (excludes claude_code — see Stats ineffective note).
-	qi := `SELECT COUNT(*) FROM prompt_usage WHERE completion_tokens < 10 AND call_function!='claude_code' AND (error IS NULL OR error='')` + sess
+	// Ineffective (excludes external sources — see Stats ineffective note).
+	qi := `SELECT COUNT(*) FROM prompt_usage WHERE completion_tokens < 10 AND call_function NOT IN ('claude_code','zcode') AND (error IS NULL OR error='')` + sess
 	_ = s.db.QueryRowContext(ctx, qi, sessArg...).Scan(&d.IneffectiveCalls)
 
 	d.Recommendations = buildRecommendations(d)
@@ -267,7 +268,7 @@ func sessionCond(session string) (string, []any) {
 // Filter narrows usage queries by session, source, and/or model.
 type Filter struct {
 	Session string // session_name (tmux/project)
-	Source  string // "Claude Code" | "Makro" | "" (all)
+	Source  string // "Claude Code" | "ZCode" | "Makro" | "" (all)
 	Model   string // model_type
 }
 
@@ -282,8 +283,12 @@ func (f Filter) clause() (string, []any) {
 	switch f.Source {
 	case "Claude Code":
 		clauses = append(clauses, "call_function='claude_code'")
+	case "ZCode":
+		clauses = append(clauses, "call_function='zcode'")
 	case "Makro":
-		clauses = append(clauses, "call_function!='claude_code'")
+		// Makro = the orchestrator's own calls; everything ingested from an
+		// external source (claude_code, zcode) is excluded.
+		clauses = append(clauses, "call_function NOT IN ('claude_code','zcode')")
 	}
 	if f.Model != "" {
 		clauses = append(clauses, "model_type=?")
