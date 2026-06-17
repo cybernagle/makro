@@ -247,10 +247,17 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     // STT state
     private var recognizer: SPXSpeechRecognizer?
     private var isListening = false
+    /// Continuous mode (phone-call style): the recognizer keeps running across
+    /// turns. Each silence/recognized cycle delivers text via onRecognized but
+    /// does NOT stop the recognizer — only stopListening() does.
+    private var isContinuous = false
     private var recognitionStart: Date?
     private var silenceTimer: Timer?
     private let silenceInterval: TimeInterval = 2.5
     private var accumulatedText = ""
+    /// While speaking (TTS), we suspend listening to avoid the assistant's own
+    /// voice being captured as input. Resumed when playback ends.
+    private var isListeningSuspended = false
 
     // TTS state
     private var synthesizer: SPXSpeechSynthesizer?
@@ -270,8 +277,10 @@ final class AzureSpeechManager: NSObject, ObservableObject {
 
     // MARK: STT
 
-    /// Begin listening. Refuses if quota is exhausted or not configured.
-    func startListening() {
+    /// Begin listening. In `continuous` mode (phone-call style) the recognizer
+    /// keeps running across turns: each silence/recognized cycle delivers text
+    /// via onRecognized but does NOT stop the mic. Use stopListening() to end.
+    func startListening(continuous: Bool = false) {
         guard !isListening else { return }
         guard isConfigured else {
             listenState = .error("请先在设置里填写 Azure Speech key 和 region")
@@ -299,6 +308,7 @@ final class AzureSpeechManager: NSObject, ObservableObject {
                 audioConfiguration: audioCfg
             )
             self.recognizer = recognizer
+            self.isContinuous = continuous
             accumulatedText = ""
 
             // Partial results ("recognizing"): update the live display and
@@ -307,6 +317,8 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             recognizer.addRecognizingEventHandler { [weak self] _, evt in
                 guard let self else { return }
                 Task { @MainActor in
+                    // Ignore while suspended (TTS is playing in call mode).
+                    guard !self.isListeningSuspended else { return }
                     if let partial = evt.result.text, !partial.isEmpty {
                         self.listenState = .listening(partial: partial)
                         self.resetSilenceTimer()
@@ -321,6 +333,8 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             recognizer.addRecognizedEventHandler { [weak self] _, evt in
                 guard let self else { return }
                 Task { @MainActor in
+                    // Ignore while suspended (TTS is playing in call mode).
+                    guard !self.isListeningSuspended else { return }
                     if let text = evt.result.text, !text.isEmpty {
                         // Avoid duplicating when a final result overlaps the
                         // last accumulated text (Azure sometimes re-emits).
@@ -344,15 +358,15 @@ final class AzureSpeechManager: NSObject, ObservableObject {
                     if evt.reason == .error {
                         self.listenState = .error("语音识别出错：\(evt.errorDetails ?? "")")
                     }
-                    // Always finalize on cancel so we deliver whatever was
-                    // recognized so far.
-                    self.finishListening()
+                    // Always fully stop on cancel, even in continuous mode.
+                    self.stopListening()
                 }
             }
 
             recognitionStart = Date()
             try recognizer.startContinuousRecognition()
             isListening = true
+            isListeningSuspended = false
             listenState = .listening(partial: "")
             resetSilenceTimer()
         } catch {
@@ -360,25 +374,46 @@ final class AzureSpeechManager: NSObject, ObservableObject {
         }
     }
 
-    /// Stop listening and deliver whatever was recognized so far. If the final
-    /// `recognized` event hasn't fired yet, fall back to the last partial text
-    /// shown in the UI so a quick "tap-to-stop" doesn't drop the user's words.
+    /// Stop listening and deliver whatever was recognized so far. Fully ends
+    /// the recognizer regardless of continuous mode.
     func stopListening() {
         guard isListening else { return }
-        finishListening()
+        deliverCurrentTurn()
+        fullyStopRecognizer()
     }
 
-    private func finishListening() {
-        // Guard against double-finalize (silence timer + manual stop racing).
-        guard isListening else { return }
+    /// Deliver the current accumulated/partial transcript via onRecognized and
+    /// reset the buffers. In continuous mode the recognizer keeps running.
+    private func deliverCurrentTurn() {
         silenceTimer?.invalidate()
         silenceTimer = nil
-        isListening = false
 
-        // stopContinuousRecognition can block for several seconds on iOS; run
-        // it off the main thread so the UI doesn't freeze.
+        // Prefer accumulated final results; fall back to the last partial shown
+        // so a fast stop still sends what the user said.
+        var text = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty, let partial = currentPartialText() {
+            text = partial.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        accumulatedText = ""
+        if isContinuous {
+            // Keep the live partial display; a new turn will overwrite it.
+            listenState = .listening(partial: "")
+        }
+        if !text.isEmpty {
+            onRecognized?(text)
+        }
+    }
+
+    /// Tear down the recognizer and stop metering audio time.
+    private func fullyStopRecognizer() {
+        guard isListening else { return }
+        isListening = false
+        isContinuous = false
+
         let recognizer = self.recognizer
         self.recognizer = nil
+        // stopContinuousRecognition can block for several seconds on iOS; run
+        // it off the main thread so the UI doesn't freeze.
         DispatchQueue.global(qos: .userInitiated).async {
             try? recognizer?.stopContinuousRecognition()
         }
@@ -389,18 +424,7 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             quota.consumeSTT(seconds: max(1, seconds))
             recognitionStart = nil
         }
-
-        // Prefer accumulated final results; fall back to the last partial shown
-        // so a fast stop still sends what the user said.
-        var text = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.isEmpty, let partial = currentPartialText() {
-            text = partial.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        accumulatedText = ""
         listenState = .idle
-        if !text.isEmpty {
-            onRecognized?(text)
-        }
     }
 
     /// Pull the live partial transcript out of the current listen state.
@@ -415,10 +439,42 @@ final class AzureSpeechManager: NSObject, ObservableObject {
         silenceTimer?.invalidate()
         silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceInterval, repeats: false) { [weak self] _ in
             Task { @MainActor in
-                // Silence window elapsed with no new speech → end the turn.
-                self?.finishListening()
+                guard let self, self.isListening else { return }
+                // Silence window elapsed with no new speech → deliver the turn.
+                // In single-shot mode this also stops the recognizer; in
+                // continuous (call) mode it only flushes the current turn and
+                // keeps listening for the next one.
+                self.deliverCurrentTurn()
+                if !self.isContinuous {
+                    self.fullyStopRecognizer()
+                } else {
+                    // Restart the silence watch for the next turn.
+                    self.resetSilenceTimer()
+                }
             }
         }
+    }
+
+    // MARK: Call-mode mic suspension
+
+    /// Suspend listening while TTS plays (call mode), to avoid capturing the
+    /// assistant's own voice. No-op if not currently listening.
+    func suspendListening() {
+        guard isListening, !isListeningSuspended else { return }
+        isListeningSuspended = true
+        // Flush any in-flight turn, then pause without tearing down — the
+        // recognizer keeps running but we ignore further results until resumed.
+        silenceTimer?.invalidate()
+        silenceTimer = nil
+    }
+
+    /// Resume listening after TTS finishes (call mode).
+    func resumeListening() {
+        guard isListening, isListeningSuspended else { return }
+        isListeningSuspended = false
+        accumulatedText = ""
+        listenState = .listening(partial: "")
+        resetSilenceTimer()
     }
 
     // MARK: TTS

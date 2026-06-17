@@ -4,6 +4,7 @@ struct ChatView: View {
     @StateObject private var vm = ChatViewModel()
     @State private var inputText = ""
     @State private var showSettings = false
+    @State private var showCall = false
     @State private var appeared = false
     @FocusState private var inputFocused: Bool
 
@@ -69,15 +70,25 @@ struct ChatView: View {
                     ConnectionBadge(state: vm.connectionState)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { showSettings = true } label: {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(.primary)
+                    HStack(spacing: 4) {
+                        Button { showCall = true } label: {
+                            Image(systemName: "phone.fill")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(DS.Ink.mint)
+                        }
+                        Button { showSettings = true } label: {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(.primary)
+                        }
                     }
                 }
             }
             .sheet(isPresented: $showSettings) {
                 NavigationStack { SettingsView() }
+            }
+            .fullScreenCover(isPresented: $showCall) {
+                CallView(vm: vm)
             }
             .task {
                 await vm.loadHistory()
