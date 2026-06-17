@@ -33,6 +33,7 @@ type ChatService struct {
 	highCostModels    []string
 	usageQuota5h      int64
 	claudeProjectsDir string
+	zcodeDBPath       string
 	apns              *apns.Client
 	barkKey           string
 	barkURL           string
@@ -112,15 +113,20 @@ func (s *ChatService) UsageExport(session, source, model string, hours int) ([]u
 	return s.usageStore.Export(usage.Filter{Session: session, Source: source, Model: model}, hours)
 }
 
-// usageIngestLoop ingests Claude Code transcript usage immediately, then every
-// minute. Mapped sessions (SessionStart hook) are attributed to their tmux name;
-// the fallback project scan attributes already-running sessions by cwd basename.
-// Goroutine lives for the process lifetime.
+// usageIngestLoop ingests Claude Code transcript usage + ZCode's model_usage,
+// immediately then every minute. Mapped Claude sessions (SessionStart hook) are
+// attributed to their tmux name; the fallback project scan attributes
+// already-running sessions by cwd basename; ZCode calls are attributed by their
+// session's working-directory basename (same convention, so costs align by
+// project across sources). Goroutine lives for the process lifetime.
 func (s *ChatService) usageIngestLoop() {
 	ingest := func() {
 		s.usageStore.IngestTranscripts()
 		if s.claudeProjectsDir != "" {
 			s.usageStore.IngestProjectTranscripts(s.claudeProjectsDir)
+		}
+		if s.zcodeDBPath != "" {
+			s.usageStore.IngestZCode(s.zcodeDBPath)
 		}
 	}
 	ingest()
@@ -178,8 +184,14 @@ func (s *ChatService) init() {
 		return
 	}
 
-	socketPath := detectTmuxSocket()
-	tc := tmux.NewClient(socketPath, false)
+	// Use the user's DEFAULT tmux socket (no -S) — same socket the desktop
+	// session list (TmuxService / tmuxArgs) and the user's daily tmux server
+	// use. Previously this passed detectTmuxSocket() (~/.makro/tmux.sock),
+	// which made the agent's tools (list_sessions, send_to_session, etc.) query
+	// a different, empty socket than the one the desktop UI shows — so the
+	// agent would answer "no sessions" even while 7 were visible. An empty
+	// socketPath makes tmux.Client omit -S and hit the default socket.
+	tc := tmux.NewClient("", false)
 	if err := tc.Start(context.Background()); err != nil {
 		s.reportError("tmux: %v", err)
 		return
@@ -213,6 +225,10 @@ func (s *ChatService) init() {
 	// Claude Code transcript projects dir — fallback ingestion attributes
 	// already-running sessions by their cwd basename.
 	s.claudeProjectsDir = filepath.Join(cfg.ClaudeDir, "projects")
+	// ZCode's own usage DB — ingested alongside Claude Code transcripts.
+	// Resolved from the user home dir directly (ZCode doesn't share Claude's
+	// config root) so a custom claude_dir can't mis-resolve it.
+	s.zcodeDBPath = usage.ZCodeDBPath()
 
 	notifier.OnSession(func(session, content string) error {
 		return tools.DirectSend(tc, session, content)
@@ -597,13 +613,4 @@ func (s *ChatService) reportError(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	log.Printf("[chat_service] init error: %s", msg)
 	s.initErr = msg
-}
-
-func detectTmuxSocket() string {
-	home, _ := os.UserHomeDir()
-	sock := filepath.Join(home, ".makro", "tmux.sock")
-	if _, err := os.Stat(sock); err == nil {
-		return sock
-	}
-	return ""
 }
