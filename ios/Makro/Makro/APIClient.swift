@@ -104,12 +104,14 @@ final class APIClient: NSObject {
         return try JSONDecoder().decode([HistoryMessage].self, from: data)
     }
 
-    func sendChat(text: String) async throws {
+    func sendChat(text: String, voice: Bool = false) async throws {
         let url = config.httpBaseURL.appendingPathComponent("api/chat")
         var request = authedRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
+        var payload: [String: Any] = ["text": text]
+        if voice { payload["voice"] = true }
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         let (_, response) = try await urlSession.data(for: request)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             if let http = response as? HTTPURLResponse, http.statusCode == 401 {

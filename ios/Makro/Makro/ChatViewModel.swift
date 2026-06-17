@@ -49,7 +49,10 @@ final class ChatViewModel: NSObject, ObservableObject {
             self.partialTranscript = nil
             self.isListening = false
             self.expectSpokenReply = true
-            self.send(text: text)
+            // Voice turns tag the message so the server uses a spoken-friendly
+            // prompt (conversational, no tables/code). isInCall gates this so
+            // a one-shot voice send outside a call stays unstyled.
+            self.send(text: text, voice: self.isInCall)
         }
         // First partial of a new utterance → if the assistant is still
         // speaking, stop it. This is the interruption path: the user talks
@@ -138,14 +141,17 @@ final class ChatViewModel: NSObject, ObservableObject {
         } catch {}
     }
 
-    func send(text: String) {
+    /// Send a chat message. `voice` flags the message as coming from a voice
+    /// call so the server uses a spoken-friendly prompt (conversational, no
+    /// tables/code). STT turns set voice = isInCall; typed messages omit it.
+    func send(text: String, voice: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         messages.append(ChatMessage(role: .user, text: trimmed))
         isStreaming = true
         Task {
             do {
-                try await api.sendChat(text: trimmed)
+                try await api.sendChat(text: trimmed, voice: voice)
             } catch {
                 messages.append(ChatMessage(role: .system, text: "[error: \(error.localizedDescription)]"))
                 isStreaming = false

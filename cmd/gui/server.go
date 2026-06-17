@@ -429,7 +429,8 @@ func chatHandler(chatSvc *ChatService, hub *chatHub) http.HandlerFunc {
 			return
 		}
 		var body struct {
-			Text string `json:"text"`
+			Text  string `json:"text"`
+			Voice bool   `json:"voice"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid json", http.StatusBadRequest)
@@ -439,7 +440,7 @@ func chatHandler(chatSvc *ChatService, hub *chatHub) http.HandlerFunc {
 			http.Error(w, "empty text", http.StatusBadRequest)
 			return
 		}
-		go chatSvc.SendMessage(body.Text)
+		go chatSvc.SendMessage(body.Text, body.Voice)
 		w.WriteHeader(http.StatusAccepted)
 	}
 }

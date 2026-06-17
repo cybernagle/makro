@@ -364,7 +364,16 @@ func (s *ChatService) init() {
 	}
 }
 
-func (s *ChatService) SendMessage(input string) error {
+// voicePromptPrefix is prepended to user messages that arrive from a voice
+// call. It asks the model for a spoken-friendly style so TTS output is natural
+// (conversational, no tables/code blocks, concise — short bullet points OK).
+// Kept short to avoid inflating context; it only applies to voice turns.
+const voicePromptPrefix = "[你正在和用户语音通话，请用简洁口语回答：不要用表格、代码块或 markdown 符号；可以用简短的「第一、第二」式要点；回答尽量短以节省语音合成额度。]\n\n"
+
+func (s *ChatService) SendMessage(input string, voice bool) error {
+	if voice {
+		input = voicePromptPrefix + input
+	}
 	if s.orch == nil {
 		if s.initErr == "" {
 			s.init()
