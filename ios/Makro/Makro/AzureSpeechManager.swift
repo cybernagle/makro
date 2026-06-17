@@ -249,7 +249,7 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     private var isListening = false
     private var recognitionStart: Date?
     private var silenceTimer: Timer?
-    private let silenceInterval: TimeInterval = 1.5
+    private let silenceInterval: TimeInterval = 2.5
     private var accumulatedText = ""
 
     // TTS state
@@ -301,6 +301,9 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             self.recognizer = recognizer
             accumulatedText = ""
 
+            // Partial results ("recognizing"): update the live display and
+            // reset the silence timer. We do NOT stop here — a partial result
+            // is mid-phrase, not end-of-turn.
             recognizer.addRecognizingEventHandler { [weak self] _, evt in
                 guard let self else { return }
                 Task { @MainActor in
@@ -311,29 +314,38 @@ final class AzureSpeechManager: NSObject, ObservableObject {
                 }
             }
 
+            // Final per-sentence result ("recognized"): append to the
+            // accumulated transcript and reset the silence timer. A continuous
+            // recognizer fires this once PER SENTENCE, so we must keep
+            // listening — it is NOT an end-of-turn signal.
             recognizer.addRecognizedEventHandler { [weak self] _, evt in
                 guard let self else { return }
                 Task { @MainActor in
                     if let text = evt.result.text, !text.isEmpty {
+                        // Avoid duplicating when a final result overlaps the
+                        // last accumulated text (Azure sometimes re-emits).
+                        if !self.accumulatedText.isEmpty {
+                            self.accumulatedText += " "
+                        }
                         self.accumulatedText += text
                         self.listenState = .listening(partial: self.accumulatedText)
                     }
-                    // A final result is a strong "end of phrase" signal.
-                    self.fireTurnCompleteIfIdle()
+                    // Reset the silence window so a natural pause between
+                    // sentences doesn't cut the user off mid-thought.
+                    self.resetSilenceTimer()
                 }
             }
 
             recognizer.addCanceledEventHandler { [weak self] _, evt in
                 guard let self else { return }
                 Task { @MainActor in
-                    let reason = evt.reason.rawValue
-                    // Non-zero cancellation reason indicates an error boundary
-                    // (quota exhausted, auth failure, etc.).
-                    if reason != 0 {
-                        let msg = "语音识别被取消（可能额度已用尽）"
-                        self.listenState = .error(msg)
-                        self.onQuotaExhausted?(msg)
+                    // reason == .error means a genuine failure (auth, quota,
+                    // network, mic); .endOfStream is a normal session close.
+                    if evt.reason == .error {
+                        self.listenState = .error("语音识别出错：\(evt.errorDetails ?? "")")
                     }
+                    // Always finalize on cancel so we deliver whatever was
+                    // recognized so far.
                     self.finishListening()
                 }
             }
@@ -348,13 +360,17 @@ final class AzureSpeechManager: NSObject, ObservableObject {
         }
     }
 
-    /// Stop listening and deliver whatever was recognized so far.
+    /// Stop listening and deliver whatever was recognized so far. If the final
+    /// `recognized` event hasn't fired yet, fall back to the last partial text
+    /// shown in the UI so a quick "tap-to-stop" doesn't drop the user's words.
     func stopListening() {
         guard isListening else { return }
         finishListening()
     }
 
     private func finishListening() {
+        // Guard against double-finalize (silence timer + manual stop racing).
+        guard isListening else { return }
         silenceTimer?.invalidate()
         silenceTimer = nil
         isListening = false
@@ -374,7 +390,12 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             recognitionStart = nil
         }
 
-        let text = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Prefer accumulated final results; fall back to the last partial shown
+        // so a fast stop still sends what the user said.
+        var text = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty, let partial = currentPartialText() {
+            text = partial.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         accumulatedText = ""
         listenState = .idle
         if !text.isEmpty {
@@ -382,18 +403,22 @@ final class AzureSpeechManager: NSObject, ObservableObject {
         }
     }
 
+    /// Pull the live partial transcript out of the current listen state.
+    private func currentPartialText() -> String? {
+        if case .listening(let partial) = listenState, !partial.isEmpty {
+            return partial
+        }
+        return nil
+    }
+
     private func resetSilenceTimer() {
         silenceTimer?.invalidate()
         silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceInterval, repeats: false) { [weak self] _ in
-            Task { @MainActor in self?.fireTurnCompleteIfIdle() }
+            Task { @MainActor in
+                // Silence window elapsed with no new speech → end the turn.
+                self?.finishListening()
+            }
         }
-    }
-
-    /// If no more partial results arrive within the silence window, treat the
-    /// turn as complete. Recognized events short-circuit this immediately.
-    private func fireTurnCompleteIfIdle() {
-        guard isListening else { return }
-        finishListening()
     }
 
     // MARK: TTS
@@ -418,9 +443,11 @@ final class AzureSpeechManager: NSObject, ObservableObject {
                 region: config.azureRegion
             )
             speechCfg.speechSynthesisLanguage = "zh-CN"
-            // A natural Mandarin neural voice; falls back to service default if
-            // unavailable. xiaoxiaoMultilingual handles CN/EN code-switch well.
-            speechCfg.speechSynthesisVoiceName = "zh-CN-XiaoxiaoMultilingual"
+            // Deliberately do NOT pin a voice name — custom names like
+            // "zh-CN-XiaoxiaoMultilingual" may be unavailable in some regions
+            // and cause synthesis to fail on first use. Letting the service
+            // pick the default zh-CN voice is the reliable path; a specific
+            // voice can be re-added once the region's voice list is confirmed.
             // SPXSpeechSynthesizer requires an explicit audio configuration.
             let audioCfg = SPXAudioConfiguration()
             let synth = try SPXSpeechSynthesizer(
@@ -445,12 +472,35 @@ final class AzureSpeechManager: NSObject, ObservableObject {
                     self.onSpeakFinished?()
                 }
             }
-            synth.addSynthesisCanceledEventHandler { [weak self] (_: SPXSpeechSynthesizer, _: SPXSpeechSynthesisEventArgs) in
+            synth.addSynthesisCanceledEventHandler { [weak self] (_: SPXSpeechSynthesizer, evt: SPXSpeechSynthesisEventArgs) in
                 guard let self else { return }
                 Task { @MainActor in
-                    let msg = "语音合成被取消（可能额度已用尽）"
-                    self.speakState = .error(msg)
-                    self.onQuotaExhausted?(msg)
+                    // Extract error details via the cancellation helper — the
+                    // synthesis result itself only carries a `reason`, not an
+                    // error code/details. CancellationDetails decodes the cause.
+                    let details = try? SPXSpeechSynthesisCancellationDetails(
+                        fromCanceledSynthesisResult: evt.result
+                    )
+                    let reason = details?.reason
+                    let detail = details?.errorDetails ?? ""
+                    // .error = genuine failure (auth/quota/voice-not-found);
+                    // .endOfStream = intentional stop (user tapped stop, or a
+                    // new speak() interrupted this one) → stay silent.
+                    if reason == .error {
+                        let msg: String
+                        let code = details?.errorCode
+                        // Forbidden is the actual "F0 free quota exhausted"
+                        // signal; auth/connection/too-many-requests are related
+                        // access failures worth flagging the same way.
+                        if code == .forbidden || code == .authenticationFailure
+                            || code == .tooManyRequests || code == .connectionFailure {
+                            msg = "语音合成额度可能已用尽或鉴权失败（\(detail)）"
+                            self.onQuotaExhausted?(msg)
+                        } else {
+                            msg = "语音合成出错：\(detail)"
+                        }
+                        self.speakState = .error(msg)
+                    }
                     self.finishSpeaking()
                 }
             }
@@ -464,14 +514,27 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             let synthRef = synth
             let cleanedCount = cleaned.count
             DispatchQueue.global(qos: .userInitiated).async {
-                _ = try? synthRef.speakText(cleaned)
-                // If speakText returns without the Completed handler firing
-                // (e.g. extremely short text), still meter + finalize on main.
-                Task { @MainActor in
-                    guard self.isSpeaking else { return }
-                    self.quota.consumeTTS(chars: cleanedCount)
-                    self.finishSpeaking()
-                    self.onSpeakFinished?()
+                do {
+                    let result = try synthRef.speakText(cleaned)
+                    // speakText returns once synthesis is done. If no handler
+                    // already finalized, surface the outcome here.
+                    Task { @MainActor in
+                        guard self.isSpeaking else { return }
+                        // .synthesizingAudioCompleted = success → meter + finalize.
+                        // Anything else (canceled/error) → the Canceled handler
+                        // owns that path; only finalize here on clean success.
+                        if result.reason == .synthesizingAudioCompleted {
+                            self.quota.consumeTTS(chars: cleanedCount)
+                            self.finishSpeaking()
+                            self.onSpeakFinished?()
+                        }
+                    }
+                } catch {
+                    Task { @MainActor in
+                        guard self.isSpeaking else { return }
+                        self.speakState = .error("语音合成失败：\(error.localizedDescription)")
+                        self.finishSpeaking()
+                    }
                 }
             }
         } catch {
