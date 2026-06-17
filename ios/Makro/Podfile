@@ -1,0 +1,6 @@
+platform :ios, '26.0'
+
+target 'Makro' do
+  use_frameworks!
+  pod 'MicrosoftCognitiveServicesSpeech-iOS'
+end

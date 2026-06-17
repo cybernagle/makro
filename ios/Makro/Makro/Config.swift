@@ -6,20 +6,28 @@ class Config: ObservableObject {
     private enum Key {
         static let serverURL = "makro_server_url"
         static let password = "makro_password"
+        static let azureRegion = "azure_speech_region"
+        static let azureKey = "azure_speech_key"
     }
 
     @Published var serverURL: String
     @Published var password: String
+    @Published var azureRegion: String
+    @Published var azureKey: String
 
     private init() {
         serverURL = UserDefaults.standard.string(forKey: Key.serverURL)
             ?? "https://47.117.13.195:39222"
         password = UserDefaults.standard.string(forKey: Key.password) ?? ""
+        azureRegion = UserDefaults.standard.string(forKey: Key.azureRegion) ?? "eastasia"
+        azureKey = UserDefaults.standard.string(forKey: Key.azureKey) ?? ""
     }
 
     func save() {
         UserDefaults.standard.set(serverURL, forKey: Key.serverURL)
         UserDefaults.standard.set(password, forKey: Key.password)
+        UserDefaults.standard.set(azureRegion, forKey: Key.azureRegion)
+        UserDefaults.standard.set(azureKey, forKey: Key.azureKey)
     }
 
     var httpBaseURL: URL {

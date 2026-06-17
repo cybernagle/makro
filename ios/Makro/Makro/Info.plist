@@ -41,6 +41,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Makro needs microphone access for voice conversation with your AI agents.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Makro connects to your local server for AI chat, terminal, and task management.</string>
 	<key>NSBonjourServices</key>

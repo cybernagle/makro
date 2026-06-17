@@ -9,6 +9,14 @@ final class ChatViewModel: NSObject, ObservableObject {
     @Published private(set) var isStreaming = false
     @Published private(set) var thinkingText: String?
 
+    // Voice conversation state.
+    @Published var isVoiceMode = false
+    @Published private(set) var partialTranscript: String?
+    @Published private(set) var isListening = false
+    @Published private(set) var isSpeaking = false
+
+    private var cancellables: Set<AnyCancellable> = []
+
     private var task: URLSessionWebSocketTask?
     private var urlSession: URLSession?
     private var pingTimer: Timer?
@@ -16,11 +24,50 @@ final class ChatViewModel: NSObject, ObservableObject {
     private var reconnectDelay: TimeInterval = 1
     private let config: Config
     private let api: APIClient
+    private let speech: AzureSpeechManager
 
     init(config: Config = .shared, api: APIClient = .shared) {
         self.config = config
         self.api = api
+        self.speech = AzureSpeechManager(config: config)
         super.init()
+        wireSpeech()
+    }
+
+    private func wireSpeech() {
+        // STT result → send as a normal chat message (reuses existing path).
+        speech.onRecognized = { [weak self] text in
+            guard let self else { return }
+            self.partialTranscript = nil
+            self.isListening = false
+            self.send(text: text)
+        }
+        // Surface partial recognition so the UI can show "正在听…".
+        speech.$listenState.sink { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .listening(let partial):
+                self.partialTranscript = partial
+                self.isListening = true
+            case .error:
+                self.partialTranscript = nil
+                self.isListening = false
+            case .idle:
+                // Cleared by onRecognized; nothing to do here.
+                break
+            }
+        }.store(in: &cancellables)
+        // Speaking state → drives the waveform animation + button affordance.
+        speech.$speakState.sink { [weak self] state in
+            self?.isSpeaking = (state == .speaking)
+        }.store(in: &cancellables)
+        // Quota wall → tell the user and drop out of voice mode.
+        speech.onQuotaExhausted = { [weak self] msg in
+            self?.messages.append(ChatMessage(role: .system, text: msg))
+            self?.isVoiceMode = false
+            self?.stopListening()
+            self?.stopSpeaking()
+        }
     }
 
     func connect() {
@@ -80,6 +127,38 @@ final class ChatViewModel: NSObject, ObservableObject {
         Task { try? await api.cancelChat() }
     }
 
+    // MARK: - Voice conversation
+
+    /// Toggle mic listening. Tap to start, tap again (or trailing silence) to stop.
+    func toggleListening() {
+        if isListening {
+            stopListening()
+        } else {
+            // Stop any ongoing playback before listening.
+            stopSpeaking()
+            speech.startListening()
+        }
+    }
+
+    func stopListening() {
+        speech.stopListening()
+        isListening = false
+        partialTranscript = nil
+    }
+
+    func stopSpeaking() {
+        speech.stopSpeaking()
+        isSpeaking = false
+    }
+
+    func toggleVoiceMode() {
+        isVoiceMode.toggle()
+        if !isVoiceMode {
+            stopListening()
+            stopSpeaking()
+        }
+    }
+
     private func openConnection() {
         let url = config.chatWSURL
         urlSession = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
@@ -129,6 +208,13 @@ final class ChatViewModel: NSObject, ObservableObject {
         case "done":
             thinkingText = nil
             isStreaming = false
+            // Voice mode: read the completed assistant reply aloud.
+            if isVoiceMode,
+               let last = messages.last,
+               last.role == .assistant,
+               !last.text.isEmpty {
+                speech.speak(last.text)
+            }
         case "error":
             let msg = json["data"] as? String ?? "Unknown error"
             messages.append(ChatMessage(role: .system, text: "[error: \(msg)]"))

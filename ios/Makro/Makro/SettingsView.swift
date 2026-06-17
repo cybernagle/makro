@@ -2,9 +2,11 @@ import SwiftUI
 
 struct SettingsView: View {
     @StateObject private var config = Config.shared
+    @StateObject private var quotaTracker = SpeechQuotaTracker.shared
     @State private var testResult: TestResult?
     @State private var isTesting = false
     @State private var revealPassword = false
+    @State private var revealAzureKey = false
     @State private var copied = false
     @Environment(\.dismiss) private var dismiss
 
@@ -18,6 +20,8 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 18) {
                 serverCard
                 authCard
+                azureCard
+                quotaCard
                 testCard
                 infoCard
             }
@@ -31,12 +35,14 @@ struct SettingsView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("Save") {
                     config.save()
+                    quotaTracker.reload()
                     dismiss()
                 }
                 .font(DS.text(15, .semibold))
                 .foregroundStyle(DS.Ink.mint)
             }
         }
+        .onAppear { quotaTracker.reload() }
     }
 
     // MARK: - Server
@@ -124,6 +130,126 @@ struct SettingsView: View {
         .background(DS.Canvas.card)
         .clipShape(RoundedRectangle(cornerRadius: DS.R.lg, style: .continuous))
         .glassBorder(DS.R.lg)
+    }
+
+    // MARK: - Azure Speech
+
+    private var azureCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel("Azure Speech")
+            HStack(spacing: 10) {
+                Image(systemName: "globe")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                TextField("Region (e.g. eastasia)", text: $config.azureRegion)
+                    .font(DS.mono(13, .regular))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(DS.Canvas.inset)
+            .clipShape(RoundedRectangle(cornerRadius: DS.R.md, style: .continuous))
+            .glassBorder(DS.R.md)
+
+            HStack(spacing: 10) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                Group {
+                    if revealAzureKey {
+                        TextField("Subscription Key", text: $config.azureKey)
+                    } else {
+                        SecureField("Subscription Key", text: $config.azureKey)
+                    }
+                }
+                .font(DS.mono(13, .regular))
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+
+                Button {
+                    withAnimation(DS.snappy) { revealAzureKey.toggle() }
+                } label: {
+                    Image(systemName: revealAzureKey ? "eye.slash" : "eye")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(DS.Canvas.inset)
+            .clipShape(RoundedRectangle(cornerRadius: DS.R.md, style: .continuous))
+            .glassBorder(DS.R.md)
+        }
+        .padding(14)
+        .background(DS.Canvas.card)
+        .clipShape(RoundedRectangle(cornerRadius: DS.R.lg, style: .continuous))
+        .glassBorder(DS.R.lg)
+    }
+
+    // MARK: - Quota
+
+    private var quotaCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                sectionLabel("本月额度 (F0 免费层)")
+                Spacer()
+                Button {
+                    quotaTracker.reset()
+                } label: {
+                    Text("重置")
+                        .font(DS.micro(10, .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            quotaRow(
+                label: "语音合成 (TTS)",
+                used: "\(quotaTracker.quota.ttsCharsUsed)",
+                limit: "\(SpeechQuota.ttsCap) 字符",
+                ratio: quotaTracker.quota.ttsRatio
+            )
+            quotaRow(
+                label: "语音识别 (STT)",
+                used: String(format: "%.1f", Double(quotaTracker.quota.sttSecondsUsed) / 3600.0),
+                limit: String(format: "%.1f", Double(SpeechQuota.sttCapSeconds) / 3600.0) + " 小时",
+                ratio: quotaTracker.quota.sttRatio
+            )
+        }
+        .padding(14)
+        .background(DS.Canvas.card)
+        .clipShape(RoundedRectangle(cornerRadius: DS.R.lg, style: .continuous))
+        .glassBorder(DS.R.lg)
+    }
+
+    private func quotaRow(label: String, used: String, limit: String, ratio: Double) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(label)
+                    .font(DS.text(13, .medium))
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text("\(used) / \(limit)")
+                    .font(DS.mono(11, .regular))
+                    .foregroundStyle(.secondary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(DS.Ink.zinc.opacity(0.18))
+                    Capsule()
+                        .fill(barColor(ratio))
+                        .frame(width: geo.size.width * ratio)
+                }
+            }
+            .frame(height: 6)
+        }
+    }
+
+    private func barColor(_ ratio: Double) -> Color {
+        if ratio >= 0.9 { return DS.Ink.rose }
+        if ratio >= 0.7 { return DS.Ink.amber }
+        return DS.Ink.mint
     }
 
     // MARK: - Test

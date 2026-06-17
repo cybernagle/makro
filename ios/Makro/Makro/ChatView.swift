@@ -118,34 +118,129 @@ struct ChatView: View {
     }
 
     private var inputBar: some View {
-        HStack(spacing: 10) {
-            TextField("Message (@session &monitor)", text: $inputText)
-                .font(DS.mono(14, .regular))
+        VStack(spacing: 0) {
+            // Voice-mode status line: shows the live partial transcript while
+            // listening, or a "speaking…" hint while TTS plays.
+            if vm.isListening {
+                listeningBar
+            } else if vm.isSpeaking {
+                speakingBar
+            }
+
+            HStack(spacing: 10) {
+                micButton
+
+                Group {
+                    if vm.isListening, let partial = vm.partialTranscript, !partial.isEmpty {
+                        Text(partial)
+                            .font(DS.mono(14, .regular))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    } else {
+                        TextField("Message (@session &monitor)", text: $inputText)
+                            .font(DS.mono(14, .regular))
+                            .foregroundStyle(.primary)
+                            .focused($inputFocused)
+                            .onSubmit { send() }
+                    }
+                }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
-                .foregroundStyle(.primary)
                 .background(DS.Canvas.inset)
                 .clipShape(RoundedRectangle(cornerRadius: DS.R.md, style: .continuous))
                 .glassBorder(DS.R.md)
-                .focused($inputFocused)
-                .onSubmit { send() }
 
-            Button(action: { vm.isStreaming ? vm.cancel() : send() }) {
-                Image(systemName: vm.isStreaming ? "stop.fill" : "arrow.up")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(buttonColor)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+                Button(action: { vm.isStreaming ? vm.cancel() : send() }) {
+                    Image(systemName: vm.isStreaming ? "stop.fill" : "arrow.up")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .background(buttonColor)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 0.5))
+                }
+                .disabled(!vm.isStreaming && inputText.isEmpty)
+                .animation(DS.snappy, value: vm.isStreaming)
+                .animation(DS.snappy, value: inputText.isEmpty)
             }
-            .disabled(!vm.isStreaming && inputText.isEmpty)
-            .animation(DS.snappy, value: vm.isStreaming)
-            .animation(DS.snappy, value: inputText.isEmpty)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(.bar)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.bar)
+    }
+
+    private var micButton: some View {
+        Button {
+            vm.toggleVoiceMode()
+            if vm.isVoiceMode { vm.toggleListening() }
+        } label: {
+            Image(systemName: micIcon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(micColor)
+                .frame(width: 40, height: 40)
+                .background(micColor.opacity(0.14))
+                .clipShape(Circle())
+                .breathing(vm.isListening || vm.isSpeaking)
+        }
+        .animation(DS.snappy, value: vm.isVoiceMode)
+        .animation(DS.snappy, value: vm.isListening)
+    }
+
+    private var micIcon: String {
+        if vm.isListening { return "waveform" }
+        if vm.isSpeaking { return "speaker.wave.2.fill" }
+        if vm.isVoiceMode { return "mic.fill" }
+        return "mic"
+    }
+
+    private var micColor: Color {
+        if vm.isListening { return DS.Ink.rose }
+        if vm.isSpeaking { return DS.Ink.mint }
+        if vm.isVoiceMode { return DS.Ink.mint }
+        return DS.Ink.zinc
+    }
+
+    private var listeningBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "waveform")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(DS.Ink.rose)
+            Text(vm.partialTranscript?.isEmpty == false ? vm.partialTranscript! : "正在听…")
+                .font(DS.mono(12, .regular))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer()
+            Button { vm.stopListening() } label: {
+                Text("停止")
+                    .font(DS.micro(10, .semibold))
+                    .foregroundStyle(DS.Ink.rose)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(DS.Ink.rose.opacity(0.08))
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
+    private var speakingBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "speaker.wave.2.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(DS.Ink.mint)
+            Text("正在朗读…")
+                .font(DS.mono(12, .regular))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button { vm.stopSpeaking() } label: {
+                Text("停止")
+                    .font(DS.micro(10, .semibold))
+                    .foregroundStyle(DS.Ink.mint)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(DS.Ink.mint.opacity(0.08))
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private var buttonColor: Color {
