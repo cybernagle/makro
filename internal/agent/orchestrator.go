@@ -389,6 +389,7 @@ func (o *Orchestrator) handleLLM(ctx context.Context, ch chan<- OrchestratorEven
 	log.Printf("[orchestrator] handleLLM start inputLen=%d model=%s", len(input), opts.Model)
 
 	turn := 0
+	hadTools := false
 	for {
 		if ctx.Err() != nil {
 			log.Printf("[orchestrator] handleLLM cancelled")
@@ -464,11 +465,29 @@ func (o *Orchestrator) handleLLM(ctx context.Context, ch chan<- OrchestratorEven
 		})
 
 		if len(result.ToolCalls) == 0 {
+			// Some models (e.g. GLM-4.7) return empty content on the turn
+			// right after a tool call — they "consume" the tool result without
+			// producing a spoken summary. That leaves the user with no reply
+			// (especially bad in voice: nothing to read aloud). Recover by
+			// nudging the model to summarize the tool result, then loop again.
+			// Reset hadTools so we only nudge once (avoid looping on a model
+			// that keeps returning empty).
+			if hadTools && result.Content == "" {
+				hadTools = false
+				log.Printf("[orchestrator] empty content after tool use, nudging model to summarize")
+				o.appendMessage(llm.Message{
+					Role:    llm.RoleUser,
+					Content: "请根据上面的工具调用结果，用简短的自然语言回答我之前的问题。不要再次调用工具，直接给出总结。",
+				})
+				opts = o.buildOptions()
+				continue
+			}
 			log.Printf("[orchestrator] handleLLM done text_len=%d", len(result.Content))
 			ch <- OrchestratorEvent{Type: EventDone}
 			return
 		}
 
+		hadTools = true
 		var toolResults []llm.ToolResult
 		for _, tc := range result.ToolCalls {
 			if ctx.Err() != nil {
