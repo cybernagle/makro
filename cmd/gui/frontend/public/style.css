@@ -780,13 +780,18 @@ html, body { height: 100%; overflow: hidden; }
 
 #terminal-panel { position: relative; }
 #terminal-panel.dashboard-active #terminals,
-#terminal-panel.dashboard-active #empty-state { display: none; }
+#terminal-panel.dashboard-active #empty-state,
+#terminal-panel.cost-active #terminals,
+#terminal-panel.cost-active #empty-state { display: none; }
 #dashboard-view { display: none; height: 100%; }
+#cost-view { display: none; height: 100%; }
 #terminal-panel.dashboard-active #dashboard-view { display: flex; flex-direction: column; }
+#terminal-panel.cost-active #cost-view { display: flex; flex-direction: column; }
 
 /* ── Dashboard View ── */
 
-#dashboard-view {
+#dashboard-view,
+#cost-view {
   padding: 16px;
   padding-right: 36px;
   overflow-y: auto;

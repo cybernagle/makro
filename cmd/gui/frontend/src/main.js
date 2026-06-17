@@ -624,6 +624,11 @@ document.addEventListener("keydown", (e) => {
         if (currentView !== "dashboard") switchView("dashboard");
         return;
     }
+    if (e.key === "u") {
+        e.preventDefault();
+        if (currentView !== "cost") switchView("cost");
+        return;
+    }
     if (e.key === "b") {
         e.preventDefault();
         const collapsed = toggleChat();
@@ -680,21 +685,27 @@ const terminalPanel = document.getElementById("terminal-panel");
 const dashboardView = document.getElementById("dashboard-view");
 const btnViewTerminal = document.getElementById("btn-view-terminal");
 const btnViewDashboard = document.getElementById("btn-view-dashboard");
+const btnViewCost = document.getElementById("btn-view-cost");
 const dashboardSessions = document.getElementById("dashboard-sessions");
 const kanbanBoard = document.getElementById("kanban-board");
 const btnAddTask = document.getElementById("btn-add-task");
 
 btnViewTerminal.addEventListener("click", () => switchView("terminal"));
 btnViewDashboard.addEventListener("click", () => switchView("dashboard"));
+btnViewCost.addEventListener("click", () => switchView("cost"));
 
 function switchView(view) {
     currentView = view;
     btnViewTerminal.classList.toggle("active", view === "terminal");
     btnViewDashboard.classList.toggle("active", view === "dashboard");
+    btnViewCost.classList.toggle("active", view === "cost");
     terminalPanel.classList.toggle("dashboard-active", view === "dashboard");
-    tabsEl.style.display = view === "dashboard" ? "none" : "flex";
+    terminalPanel.classList.toggle("cost-active", view === "cost");
+    tabsEl.style.display = (view === "dashboard" || view === "cost") ? "none" : "flex";
     if (view === "dashboard") {
         renderDashboard();
+    } else if (view === "cost") {
+        renderCost();
     } else {
         refitAll();
     }
@@ -711,6 +722,9 @@ async function renderDashboard() {
     await loadTasks();
     renderSessionCards(sessions || []);
     renderKanbanBoard();
+}
+
+async function renderCost() {
     renderUsagePanel();
 }
 
@@ -865,7 +879,7 @@ function usagePanelHTML(stats, diag) {
     const models = stats.by_model ? Object.keys(stats.by_model) : [];
     html += `<div class="usage-filters">`;
     html += filterSelect("session", "All sessions", sessions, usageFilter.session);
-    html += filterSelect("source", "All sources", ["Claude Code", "Makro"], usageFilter.source);
+    html += filterSelect("source", "All sources", ["Claude Code", "ZCode", "Makro"], usageFilter.source);
     html += filterSelect("model", "All models", models, usageFilter.model);
     html += `</div>`;
 
