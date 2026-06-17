@@ -364,6 +364,10 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             }
 
             recognitionStart = Date()
+            // Configure the shared audio session BEFORE starting recognition so
+            // the mic runs under .playAndRecord/.voiceChat (echo cancellation +
+            // background survival). Must precede startContinuousRecognition().
+            try configureAudioSession()
             try recognizer.startContinuousRecognition()
             isListening = true
             isListeningSuspended = false
@@ -616,6 +620,17 @@ final class AzureSpeechManager: NSObject, ObservableObject {
 
     // MARK: Audio playback
 
+    /// Configure the shared AVAudioSession for simultaneous recording + playback.
+    /// `.playAndRecord` with `.voiceChat` mode enables the system's built-in
+    /// echo cancellation, so the assistant's TTS output isn't picked back up by
+    /// the mic. The `.audio` background mode (declared in Info.plist) + this
+    /// category keeps the session alive when the screen locks.
+    func configureAudioSession() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+        try session.setActive(true, options: [])
+    }
+
     /// Lazily set up the AVAudioEngine once per speaking session.
     private func startAudioEngine() throws {
         if audioEngine == nil {
@@ -629,8 +644,10 @@ final class AzureSpeechManager: NSObject, ObservableObject {
         // Azure sends 16-bit PCM by default; build the format lazily on the
         // first chunk so we match whatever sample rate arrives.
         audioFormat = nil
-        try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try AVAudioSession.sharedInstance().setActive(true)
+        // Use the shared playAndRecord/voiceChat session — required for the
+        // .audio background mode to keep the mic alive when locked, and for
+        // system echo cancellation between TTS output and STT input.
+        try configureAudioSession()
         if !(audioEngine?.isRunning ?? false) {
             try audioEngine?.start()
         }
