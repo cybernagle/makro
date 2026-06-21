@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		04CE88BE0C73102C401150DA /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBE95557715F0222A9A2D898 /* Models.swift */; };
 		08E7AC9097713671B80AEF25 /* AzureSpeechManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70034F1AACF0415FC0A7B401 /* AzureSpeechManager.swift */; };
+		9B1F5D6CCBE150002B3D4E5F /* VoiceActivityDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C0D4E2BBAD040001A2C3D4E /* VoiceActivityDetector.swift */; };
 		13A63DF6D5D49C1AE27F45EC /* SessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F32FE4F7A4421F150EB56D6 /* SessionsView.swift */; };
 		171212789B4479A6FADC345D /* TerminalViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7606DB674BC71275A25D1B50 /* TerminalViewModel.swift */; };
 		32CB6BF8B03DEEA91B213188 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF4E0E4B479FA41D70865DD8 /* Theme.swift */; };
@@ -39,6 +40,7 @@
 		457FDB72D58643BBFC1E7A9E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		62DA63C8C7F48649AC028A2E /* KanbanViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KanbanViewModel.swift; sourceTree = "<group>"; };
 		70034F1AACF0415FC0A7B401 /* AzureSpeechManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AzureSpeechManager.swift; sourceTree = "<group>"; };
+		7C0D4E2BBAD040001A2C3D4E /* VoiceActivityDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceActivityDetector.swift; sourceTree = "<group>"; };
 		7606DB674BC71275A25D1B50 /* TerminalViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalViewModel.swift; sourceTree = "<group>"; };
 		783498E9FFBDCC956156CD6E /* CallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallView.swift; sourceTree = "<group>"; };
 		791D50F6D3288C4934C2006A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -95,6 +97,7 @@
 				791D50F6D3288C4934C2006A /* AppDelegate.swift */,
 				2F4D53CAEC92B38B12F3EA9E /* Assets.xcassets */,
 				70034F1AACF0415FC0A7B401 /* AzureSpeechManager.swift */,
+				7C0D4E2BBAD040001A2C3D4E /* VoiceActivityDetector.swift */,
 				783498E9FFBDCC956156CD6E /* CallView.swift */,
 				B845DA418647EA128499AB3A /* ChatView.swift */,
 				2AFE09E16F77FB3DF26DD049 /* ChatViewModel.swift */,
@@ -251,6 +254,7 @@
 				9680A9D36267A514B9281C89 /* APIClient.swift in Sources */,
 				82D0067DFF4CF9B075296805 /* AppDelegate.swift in Sources */,
 				08E7AC9097713671B80AEF25 /* AzureSpeechManager.swift in Sources */,
+				9B1F5D6CCBE150002B3D4E5F /* VoiceActivityDetector.swift in Sources */,
 				C6CDDA92EA8534AEEAAFCF65 /* CallView.swift in Sources */,
 				795F31AB0261DA93684F542A /* ChatView.swift in Sources */,
 				3542036E248FEB97136E3E85 /* ChatViewModel.swift in Sources */,

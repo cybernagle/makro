@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import AudioToolbox
 import MicrosoftCognitiveServicesSpeech
 import Combine
 
@@ -243,6 +244,9 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     var onSpeakFinished: (() -> Void)?
     /// Delivered when a quota wall is hit; the message is user-facing.
     var onQuotaExhausted: ((String) -> Void)?
+    /// Delivered (call/commit mode) when the hard max-duration window elapses
+    /// without a commit phrase, so the UI can nudge the user. Never auto-sends.
+    var onMaxDurationHint: (() -> Void)?
 
     private let quota = SpeechQuotaTracker.shared
     private let config: Config
@@ -261,6 +265,18 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     /// While speaking (TTS), we suspend listening to avoid the assistant's own
     /// voice being captured as input. Resumed when playback ends.
     private var isListeningSuspended = false
+
+    // VAD-gated push-stream STT state (call / commit mode). The recognizer pulls
+    // PCM from the push stream; only bytes the local VAD emits (real speech +
+    // pre-roll + trailing hangover) ever reach it, so silence costs no quota.
+    private var sttAudioEngine: AVAudioEngine?
+    private var vad: VoiceActivityDetector?
+    private var pushStream: SPXPushAudioInputStream?
+    private var pushedByteCount: Int64 = 0
+    private var commitMode = false
+    private var commitDetector: CommitPhraseDetector?
+    private var maxDurationTimer: Timer?
+    private let maxDuration: TimeInterval = 60
 
     // TTS state
     private var synthesizer: SPXSpeechSynthesizer?
@@ -283,12 +299,13 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     /// Begin listening. In `continuous` mode (phone-call style) the recognizer
     /// keeps running across turns: each silence/recognized cycle delivers text
     /// via onRecognized but does NOT stop the mic. Use stopListening() to end.
-    func startListening(continuous: Bool = false) {
+    func startListening(continuous: Bool = false, commit: Bool = false) {
         guard !isListening else { return }
         guard isConfigured else {
             listenState = .error("请先在设置里填写 Azure Speech key 和 region")
             return
         }
+        self.commitMode = commit
         // Best-effort reserve check: assume a turn is ~30s. If even that can't
         // fit, refuse up front rather than cutting off mid-sentence.
         guard quota.canConsumeSTT(seconds: 30) else {
@@ -305,7 +322,17 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             )
             // zh-CN favours Mandarin input, which matches the app's audience.
             speechCfg.speechRecognitionLanguage = "zh-CN"
-            let audioCfg = SPXAudioConfiguration()
+            // Activate the session early so commit mode can read the real
+            // hardware sample rate when it builds the push stream.
+            try configureAudioSession()
+            let audioCfg: SPXAudioConfiguration
+            if commit {
+                // Push-stream path: the recognizer reads PCM we push (gated by
+                // the VAD) instead of the default mic.
+                audioCfg = try setupPushStreamSTT()
+            } else {
+                audioCfg = SPXAudioConfiguration()
+            }
             let recognizer = try SPXSpeechRecognizer(
                 speechConfiguration: speechCfg,
                 audioConfiguration: audioCfg
@@ -346,18 +373,38 @@ final class AzureSpeechManager: NSObject, ObservableObject {
                 Task { @MainActor in
                     // Ignore while suspended (TTS is playing in call mode).
                     guard !self.isListeningSuspended else { return }
-                    if let text = evt.result.text, !text.isEmpty {
-                        // Avoid duplicating when a final result overlaps the
-                        // last accumulated text (Azure sometimes re-emits).
+                    guard let text = evt.result.text, !text.isEmpty else {
+                        // Empty final result — nothing to accumulate. In commit
+                        // mode silence never sends, so there's nothing else to do.
+                        return
+                    }
+                    if self.commitMode, let detector = self.commitDetector {
+                        // Commit mode: the commit phrase (not silence) ends a turn.
+                        switch detector.ingest(text) {
+                        case .accumulate(let transcript):
+                            self.accumulatedText = transcript
+                            self.listenState = .listening(partial: transcript)
+                        case .commit(let payload):
+                            self.accumulatedText = ""
+                            if payload.isEmpty {
+                                // User said only the phrase with nothing before
+                                // it — nothing to send, keep listening.
+                                self.listenState = .listening(partial: "")
+                            } else {
+                                self.listenState = .idle
+                                self.deliverCommit(payload)
+                            }
+                        }
+                    } else {
+                        // Legacy (non-commit) path: accumulate and let the
+                        // trailing-silence timer deliver the turn.
                         if !self.accumulatedText.isEmpty {
                             self.accumulatedText += " "
                         }
                         self.accumulatedText += text
                         self.listenState = .listening(partial: self.accumulatedText)
+                        self.resetSilenceTimer()
                     }
-                    // Reset the silence window so a natural pause between
-                    // sentences doesn't cut the user off mid-thought.
-                    self.resetSilenceTimer()
                 }
             }
 
@@ -379,6 +426,15 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             // the mic runs under .playAndRecord/.voiceChat (echo cancellation +
             // background survival). Must precede startContinuousRecognition().
             try configureAudioSession()
+            if commit {
+                // Commit mode: arm the commit-phrase detector, start OUR mic
+                // engine (which feeds the VAD + push stream), and arm the hard
+                // max-duration nudge. The recognizer pulls speech bytes from the
+                // push stream — silence never reaches it, so it isn't billed.
+                commitDetector = CommitPhraseDetector(phrases: config.commitPhraseList)
+                try startMicTap()
+                startMaxDurationTimer()
+            }
             try recognizer.startContinuousRecognition()
             isListening = true
             isListeningSuspended = false
@@ -414,9 +470,20 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             // Keep the live partial display; a new turn will overwrite it.
             listenState = .listening(partial: "")
         }
-        if !text.isEmpty {
+        // In commit mode the commit phrase is the ONLY send trigger — a manual
+        // stop or trailing silence must not send un-committed text.
+        if !commitMode, !text.isEmpty {
             onRecognized?(text)
         }
+    }
+
+    /// Deliver a committed (phrase-stripped) payload: play the ack, then fire
+    /// onRecognized. Used only in commit mode, from the recognized handler.
+    private func deliverCommit(_ payload: String) {
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        playCommitAck()
+        onRecognized?(trimmed)
     }
 
     /// Tear down the recognizer and stop metering audio time.
@@ -433,8 +500,20 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             try? recognizer?.stopContinuousRecognition()
         }
 
-        // Meter the actual audio duration consumed.
-        if let start = recognitionStart {
+        // Metering. Commit (push-stream) mode bills ONLY the speech bytes we
+        // actually pushed — silence costs nothing — so convert the byte count to
+        // seconds at 16kHz/16-bit/mono. Legacy mode keeps the wall-clock meter.
+        if commitMode {
+            let seconds = Int(Double(pushedByteCount) / (16000.0 * 2.0))
+            if seconds > 0 { quota.consumeSTT(seconds: seconds) }
+            pushedByteCount = 0
+            stopMicTap()
+            vad = nil
+            commitDetector = nil
+            maxDurationTimer?.invalidate()
+            maxDurationTimer = nil
+            commitMode = false
+        } else if let start = recognitionStart {
             let seconds = Int(Date().timeIntervalSince(start))
             quota.consumeSTT(seconds: max(1, seconds))
             recognitionStart = nil
@@ -451,6 +530,8 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     }
 
     private func resetSilenceTimer() {
+        // Commit mode drives sends off the commit phrase, not trailing silence.
+        if commitMode { return }
         silenceTimer?.invalidate()
         silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceInterval, repeats: false) { [weak self] _ in
             Task { @MainActor in
@@ -468,6 +549,130 @@ final class AzureSpeechManager: NSObject, ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: VAD-gated push-stream STT (commit mode)
+
+    /// Build a push-stream-backed audio config: the recognizer reads PCM we push
+    /// (gated by the VAD) instead of the default mic. Also constructs the VAD and
+    /// stores the target format used by the mic tap's converter.
+    private func setupPushStreamSTT() throws -> SPXAudioConfiguration {
+        // The input tap MUST run at the hardware sample rate (iOS will not
+        // resample an input tap — requesting a different rate crashes the tap).
+        // So we match the push stream to the mic's actual rate and only convert
+        // Float32→Int16 ourselves (same rate, no resampler). This avoids both
+        // the tap-format crash and the per-frame resampler starvation.
+        let hwRate = max(8000, Int(AVAudioSession.sharedInstance().sampleRate))
+        guard let fmt = SPXAudioStreamFormat(
+            usingPCMWithSampleRate: UInt(hwRate),
+            bitsPerSample: 16,
+            channels: 1
+        ) else {
+            throw NSError(
+                domain: "AzureSpeechManager",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "无法创建音频流格式"]
+            )
+        }
+        guard let stream = SPXPushAudioInputStream(audioFormat: fmt) else {
+            throw NSError(
+                domain: "AzureSpeechManager",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "无法创建 push-stream"]
+            )
+        }
+        pushStream = stream
+        vad = VoiceActivityDetector(
+            config: .init(
+                threshold: config.vadThreshold,
+                preRollFrames: 30,
+                minActiveFrames: 3,
+                hangoverFrames: 40
+            ),
+            onAudio: { [weak self] data in
+                // Called on the VAD's serial queue, in frame order. Push ONLY the
+                // speech bytes the VAD chose to emit; silence never reaches here,
+                // so it isn't metered or billed.
+                guard let self, let stream = self.pushStream else { return }
+                stream.write(data)
+                self.pushedByteCount += Int64(data.count)
+            }
+        )
+        vad?.delegate = self
+        // initWithStreamInput: imports as a failable initializer.
+        guard let cfg = SPXAudioConfiguration(streamInput: stream) else {
+            throw NSError(
+                domain: "AzureSpeechManager",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "无法创建 push-stream 音频配置"]
+            )
+        }
+        return cfg
+    }
+
+    /// Install a mic input tap on a dedicated engine at the hardware format
+    /// (format: nil — iOS won't resample an input tap), convert Float32→Int16
+    /// ourselves at the SAME rate, and feed the VAD (which decides what reaches
+    /// the push stream). Diagnostics log the first few frames so we can confirm
+    /// speech-level audio is actually reaching the VAD.
+    private func startMicTap() throws {
+        let engine = AVAudioEngine()
+        sttAudioEngine = engine
+        let input = engine.inputNode
+        input.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
+            guard let self else { return }
+            let n = Int(buffer.frameLength)
+            guard n > 0, let src = buffer.floatChannelData?[0] else { return }
+            // Float32 → Int16 at the same sample rate (no resampling). Clamp.
+            var samples = [Int16](repeating: 0, count: n)
+            for i in 0..<n {
+                var v = Double(src[i])
+                if v > 1 { v = 1 } else if v < -1 { v = -1 }
+                samples[i] = Int16(v * 32767.0)
+            }
+            let data = Data(bytes: samples, count: n * MemoryLayout<Int16>.size)
+            self.vad?.process(data)
+        }
+
+        try engine.start()
+    }
+
+    /// Remove the tap, stop the engine, and close the push stream so the
+    /// recognizer stops receiving audio. Idempotent.
+    private func stopMicTap() {
+        if let engine = sttAudioEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
+        sttAudioEngine = nil
+        // Nil before close so the onAudio closure can no longer touch a
+        // closed stream.
+        let stream = pushStream
+        pushStream = nil
+        stream?.close()
+    }
+
+    /// Arm the hard max-duration nudge. Never auto-sends (that would reintroduce
+    /// the mid-thought misfire this whole refactor exists to fix); only nudges.
+    private func startMaxDurationTimer() {
+        maxDurationTimer?.invalidate()
+        maxDurationTimer = Timer.scheduledTimer(withTimeInterval: maxDuration, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.onMaxDurationHint?()
+                if !self.accumulatedText.isEmpty {
+                    self.listenState = .listening(partial: self.accumulatedText + "\n(说『请发送』结束)")
+                }
+            }
+        }
+    }
+
+    /// Short acknowledgement sound at the commit moment so the user hears that
+    /// their voice turn is being processed. v1 uses a system sound (no bundled
+    /// asset, no Xcode build-phase change). Swap for a bundled .caf +
+    /// AVAudioPlayer if Bluetooth routing proves unreliable.
+    func playCommitAck() {
+        AudioServicesPlaySystemSound(1057)  // "Tink" — short, unobtrusive blip
     }
 
     // MARK: Call-mode mic suspension
@@ -697,5 +902,17 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             }
         }
         node.scheduleBuffer(buffer, completionHandler: nil)
+    }
+}
+
+extension AzureSpeechManager: VoiceActivityDetectorDelegate {
+    func vadSpeechStarted() {
+        // Real mic energy just appeared — treat it like the old "first partial"
+        // signal so call mode can interrupt any TTS still playing.
+        onPartialSpeech?()
+    }
+
+    func vadSpeechEnded() {
+        // No-op for v1: Azure's Recognized event + the commit phrase drive turns.
     }
 }

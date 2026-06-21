@@ -101,6 +101,11 @@ final class ChatViewModel: NSObject, ObservableObject {
             self.stopListening()
             self.stopSpeaking()
         }
+        // Commit-mode nudge when the user has spoken a long time without a
+        // commit phrase. Surfaces on the lock-screen Now Playing card.
+        speech.onMaxDurationHint = {
+            NowPlayingManager.shared.updatePhase("说话有点久 — 说『请发送』结束")
+        }
     }
 
     func connect() {
@@ -210,7 +215,9 @@ final class ChatViewModel: NSObject, ObservableObject {
         isMuted = false
         // Arm spoken replies for the whole call; the done→TTS path checks isInCall.
         stopSpeaking()
-        speech.startListening(continuous: true)
+        // Commit mode (VAD-gated push stream) is gated by the VAD setting; when
+        // off, call mode falls back to the legacy always-on recognizer.
+        speech.startListening(continuous: true, commit: config.vadEnabled)
         // Wire lock-screen controls.
         NowPlayingManager.shared.onHangUp = { [weak self] in
             Task { @MainActor in self?.endCall() }

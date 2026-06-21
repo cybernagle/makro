@@ -8,12 +8,24 @@ class Config: ObservableObject {
         static let password = "makro_password"
         static let azureRegion = "azure_speech_region"
         static let azureKey = "azure_speech_key"
+        static let commitPhrases = "makro_commit_phrases"
+        static let vadEnabled = "makro_vad_enabled"
+        static let vadThreshold = "makro_vad_threshold"
     }
 
     @Published var serverURL: String
     @Published var password: String
     @Published var azureRegion: String
     @Published var azureKey: String
+    /// Comma-separated结束语 the user says to submit a voice turn, e.g. "请发送".
+    /// Matched at the trailing edge of a recognized segment in call mode.
+    @Published var commitPhrases: String
+    /// When true, call mode uses local VAD + a push-stream recognizer that only
+    /// consumes cloud STT quota while real speech is detected. When false, call
+    /// mode falls back to the legacy always-on recognizer (silence-based send).
+    @Published var vadEnabled: Bool
+    /// Normalized RMS energy 0...1 above which a mic frame counts as speech.
+    @Published var vadThreshold: Double
 
     private init() {
         serverURL = UserDefaults.standard.string(forKey: Key.serverURL)
@@ -21,6 +33,12 @@ class Config: ObservableObject {
         password = UserDefaults.standard.string(forKey: Key.password) ?? ""
         azureRegion = UserDefaults.standard.string(forKey: Key.azureRegion) ?? "eastasia"
         azureKey = UserDefaults.standard.string(forKey: Key.azureKey) ?? ""
+        commitPhrases = UserDefaults.standard.string(forKey: Key.commitPhrases)
+            ?? "请发送,我说完了,OK,好,就这样,可以了"
+        // object(forKey:) so the first-launch default is `true`; bool(forKey:)
+        // returns false for an unset key, which would wrongly disable VAD.
+        vadEnabled = (UserDefaults.standard.object(forKey: Key.vadEnabled) as? Bool) ?? true
+        vadThreshold = (UserDefaults.standard.object(forKey: Key.vadThreshold) as? Double) ?? 0.02
     }
 
     func save() {
@@ -28,6 +46,19 @@ class Config: ObservableObject {
         UserDefaults.standard.set(password, forKey: Key.password)
         UserDefaults.standard.set(azureRegion, forKey: Key.azureRegion)
         UserDefaults.standard.set(azureKey, forKey: Key.azureKey)
+        UserDefaults.standard.set(commitPhrases, forKey: Key.commitPhrases)
+        UserDefaults.standard.set(vadEnabled, forKey: Key.vadEnabled)
+        UserDefaults.standard.set(vadThreshold, forKey: Key.vadThreshold)
+    }
+
+    /// Normalized list of结束语句 parsed from `commitPhrases`. Whitespace trimmed,
+    /// empties dropped. Case-folding is left to the CommitPhraseDetector so callers
+    /// always see the phrases as the user typed them.
+    var commitPhraseList: [String] {
+        commitPhrases
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
     var httpBaseURL: URL {

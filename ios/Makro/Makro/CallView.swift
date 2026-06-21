@@ -165,7 +165,7 @@ struct CallView: View {
 
     private func phaseLabel(for p: Phase) -> String {
         switch p {
-        case .listening: return vm.isListening ? "正在聆听…" : "准备中…"
+        case .listening: return vm.isListening ? "正在聆听… 说『请发送』结束" : "准备中…"
         case .thinking: return "思考中…"
         case .speaking: return "正在回答…"
         }

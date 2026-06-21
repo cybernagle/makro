@@ -21,6 +21,7 @@ struct SettingsView: View {
                 serverCard
                 authCard
                 azureCard
+                voiceCard
                 quotaCard
                 testCard
                 infoCard
@@ -180,6 +181,54 @@ struct SettingsView: View {
             .background(DS.Canvas.inset)
             .clipShape(RoundedRectangle(cornerRadius: DS.R.md, style: .continuous))
             .glassBorder(DS.R.md)
+        }
+        .padding(14)
+        .background(DS.Canvas.card)
+        .clipShape(RoundedRectangle(cornerRadius: DS.R.lg, style: .continuous))
+        .glassBorder(DS.R.lg)
+    }
+
+    // MARK: - Voice (commit phrases + VAD)
+
+    private var voiceCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel("语音交互")
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark.message")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                TextField("请发送,我说完了,OK,好", text: $config.commitPhrases)
+                    .font(DS.mono(13, .regular))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(DS.Canvas.inset)
+            .clipShape(RoundedRectangle(cornerRadius: DS.R.md, style: .continuous))
+            .glassBorder(DS.R.md)
+
+            HStack {
+                Image(systemName: "waveform.badge.checkmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                Text("VAD 智能降噪（省额度）")
+                    .font(DS.text(13, .regular))
+                    .foregroundStyle(.primary)
+                Spacer()
+                Toggle("", isOn: $config.vadEnabled)
+                    .labelsHidden()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(DS.Canvas.inset)
+            .clipShape(RoundedRectangle(cornerRadius: DS.R.md, style: .continuous))
+            .glassBorder(DS.R.md)
+
+            Text("开启后：只有检测到说话时才消耗语音识别额度；说完结束语（如「请发送」）才发送。")
+                .font(DS.text(11, .regular))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(14)
         .background(DS.Canvas.card)
