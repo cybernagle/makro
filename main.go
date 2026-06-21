@@ -20,6 +20,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/naglezhang/makro/internal/agent"
 	"github.com/naglezhang/makro/internal/agent/tools"
+	"github.com/naglezhang/makro/internal/brain"
 	"github.com/naglezhang/makro/internal/config"
 	"github.com/naglezhang/makro/internal/llm"
 	"github.com/naglezhang/makro/internal/notify"
@@ -52,6 +53,14 @@ func main() {
 			return
 		case "permission":
 			runSocketCommand("permission")
+			return
+		case "capture":
+			// K3: forward a captured user message to the running makro instance.
+			// Invoked by the Claude UserPromptSubmit hook (K4) with the tmux
+			// session name as argv[2] and the hook's stdin JSON ({"prompt",
+			// "cwd"}) piped in. Reads stdin here so the socket payload carries
+			// the full prompt; the server (AgentNotifier) parses it.
+			runCaptureCommand()
 			return
 		}
 	}
@@ -140,7 +149,8 @@ func main() {
 	notifier := agent.NewAgentNotifier()
 
 	orch := agent.NewOrchestrator(provider, tc, hm, tools.AllTools(tc, assessor, cwd, notifier))
-	orch.SetCommandRegistry(agent.NewCommandRegistry(tc))
+	cmdRegistry := agent.NewCommandRegistry(tc)
+	orch.SetCommandRegistry(cmdRegistry)
 	homeDir, _ := os.UserHomeDir()
 	skillDirs := []string{
 		filepath.Join(homeDir, ".makro", "skills"),
@@ -221,6 +231,62 @@ func main() {
 		})
 	}
 
+	// Brain capture sink (P0). The sink is async (internal channel) so it can
+	// never block chat. The OnCapture callback handles messages forwarded by
+	// the Claude UserPromptSubmit hook (makro capture); the TUI's own chat
+	// input is captured via app.SetCaptureFn (processOrchestratorInput).
+	// Disabled entirely when cfg.Brain.CaptureEnabled is false.
+	memClient := brain.NewClient(cfg.Brain.MemoryEndpoint, cfg.Brain.MemoryAPIKey, cfg.Brain.MemoryCLIPath, cfg.DataDir)
+	captureSink := brain.NewCaptureSink(cfg.Brain, memClient)
+	defer captureSink.Stop()
+	if notifier != nil {
+		notifier.OnCapture(func(session, prompt, cwd string) {
+			// source=claude: arrived via the Claude UserPromptSubmit hook.
+			captureSink.Capture(brain.SourceClaude, session, prompt, cwd)
+		})
+	}
+	app.SetCaptureFn(func(source, session, prompt, cwd string) {
+		captureSink.Capture(source, session, prompt, cwd)
+	})
+
+	// Inject the UserPromptSubmit capture hook (idempotent). Points at this
+	// executable so `makro capture` forwards to the socket.
+	if executablePath, err := os.Executable(); err == nil {
+		if err := agent.EnsureUserPromptCaptureHook(cfg.ClaudeDir, executablePath); err != nil {
+			log.Printf("[main] warning: could not configure Claude capture hook: %v", err)
+		}
+	}
+
+	// programSendReady is called after programSend is assigned (post-NewProgram),
+	// so the brain pusher can capture the real send fn targeting the running
+	// program. Both vars declared here (before the brain block) so the brain
+	// closure can reference programSend; programSend is assigned below.
+	var programSend func(tea.Msg)
+	var programSendReady func()
+
+	// Brain (P1): the proactive half. Reuses the memory client from capture
+	// (same endpoint/key), opens an inbox cache, and runs a cron wake loop
+	// in-process. The pusher's sendMsg captures programSend by reference (set
+	// below after tea.NewProgram), so it targets the running program.
+	if cfg.Brain.Enabled {
+		inbox, err := brain.Open(filepath.Join(cfg.DataDir, "brain", "inbox.db"))
+		if err != nil {
+			log.Printf("[main] warning: brain inbox open failed: %v", err)
+		} else {
+			defer inbox.Close()
+			proposer := brain.NewProposer(provider, cfg.LLMModel, "")
+			pusher := &tuiBrainPusher{barkKey: cfg.BarkKey, barkURL: cfg.BarkURL}
+			br := brain.NewBrain(cfg.Brain, memClient, proposer, inbox, pusher)
+			brain.RegisterCommands(cmdRegistry, br)
+			// Defer sendMsg wiring — programSend isn't set until after NewProgram.
+			// The closure captures pusher by pointer so the late assignment sticks.
+			programSendReady = func() { pusher.sendMsg = programSend }
+			go br.Run(ctx)
+			defer br.Stop()
+			log.Printf("[main] brain started (cron=%s, model=%s)", cfg.Brain.CronTime, cfg.LLMModel)
+		}
+	}
+
 	// Set up chat history persistence.
 	if cfg.ChatHistoryPath != "" {
 		history, err := tui.NewChatHistory(cfg.ChatHistoryPath)
@@ -234,11 +300,16 @@ func main() {
 
 	// Set sendFn before NewProgram — the closure captures programSend by
 	// reference so the copy inside Bubbletea will see the real send fn.
-	var programSend func(tea.Msg)
+	// (programSend is declared above, before the brain block.)
 	app.SetSendFn(func(msg tea.Msg) { programSend(msg) })
 
+	// programSendReady was declared above (before the brain block). Call it now
+	// so the brain pusher captures the real send fn targeting the running program.
 	p := tea.NewProgram(app)
 	programSend = func(msg tea.Msg) { p.Send(msg) }
+	if programSendReady != nil {
+		programSendReady()
+	}
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
@@ -457,6 +528,104 @@ func runSocketCommand(msgType string) {
 		fmt.Fprintf(os.Stderr, "%s\n", resp)
 		os.Exit(1)
 	}
+}
+
+// runCaptureCommand forwards a captured user message to the running makro
+// instance. Invoked as: makro capture <session>  (with the UserPromptSubmit
+// hook stdin JSON piped to this process's stdin). Silently exits if makro
+// isn't running — capture is best-effort and must never block the agent.
+func runCaptureCommand() {
+	if len(os.Args) < 3 {
+		// No session arg — nothing to forward. Don't fail the hook.
+		return
+	}
+	session := os.Args[2]
+
+	// Read the hook's stdin (Claude sends {"prompt":..., "cwd":...}).
+	stdinBytes, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "/tmp"
+	}
+	sockPath := filepath.Join(home, ".makro", "hooks.sock")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", sockPath)
+	if err != nil {
+		// Makro not running — capture is silently dropped. The message is still
+		// in the agent's own transcript, so stop-hook.sh's batch path (when
+		// enabled) is the backstop.
+		return
+	}
+	defer conn.Close()
+
+	payload := map[string]string{
+		"type":    "capture",
+		"session": session,
+		"payload": string(stdinBytes),
+	}
+	msg, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return
+	}
+	if _, err := conn.Write(msg); err != nil {
+		return
+	}
+	if uc, ok := conn.(*net.UnixConn); ok {
+		_ = uc.CloseWrite()
+	}
+	// Read+discard the ack. We don't act on it — the hook must return fast.
+	buf := make([]byte, 64)
+	_, _ = conn.Read(buf)
+}
+
+// tuiBrainPusher implements brain.Pusher for the TUI. It delivers a proposal as
+// a chat system message via the sendMsg callback (which posts an
+// ExternalChatMsg into the Bubbletea program — the side channel that does NOT
+// pollute the orchestrator's messages[]) plus a Bark push to the phone.
+//
+// sendMsg is set AFTER tea.NewProgram copies the model, so it targets the
+// running program (same pattern as SetSendFn). For "skip" notices (no proposal
+// this wake) it sends only the chat message — no phone buzz for "nothing happened".
+type tuiBrainPusher struct {
+	sendMsg func(tea.Msg)
+	barkKey string
+	barkURL string
+}
+
+func (p *tuiBrainPusher) Push(localID int64, prop brain.InboxProposal) {
+	text := brain.FormatProposalForChat(prop)
+	if p.sendMsg != nil {
+		p.sendMsg(tui.ExternalChatMsg{Role: "system", Content: text})
+	}
+	// Skip notices (status="skip") are chat-only — no phone buzz for "nothing happened".
+	if prop.Status == "skip" {
+		return
+	}
+	if p.barkKey == "" {
+		return
+	}
+	go func() {
+		barkURL := p.barkURL
+		if barkURL == "" {
+			barkURL = "https://api.day.app"
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		title := fmt.Sprintf("🧠 proposal [#%d] %s", localID, prop.Title)
+		if err := notify.BarkPush(ctx, barkURL, p.barkKey, title, "brain", prop.Body); err != nil {
+			log.Printf("[main] brain bark push failed: %v", err)
+		}
+	}()
 }
 
 func buildSocketPayload(msgType string) map[string]string {

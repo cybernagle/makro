@@ -288,3 +288,104 @@ func TestEnsureStartHookDistinctFromStop(t *testing.T) {
 	assert.Equal(t, 1, stopCount, "exactly one stop hook")
 	assert.Equal(t, 1, startCount, "exactly one start hook")
 }
+
+// ── UserPromptSubmit capture hook (K4) ──
+
+func TestEnsureUserPromptCaptureHookAdds(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	execPath := filepath.Join(dir, "bin", "makro")
+
+	initial := map[string]any{"env": map[string]string{}}
+	data, _ := json.MarshalIndent(initial, "", "  ")
+	require.NoError(t, os.WriteFile(settingsPath, data, 0o644))
+
+	require.NoError(t, EnsureUserPromptCaptureHook(dir, execPath))
+
+	result, err := os.ReadFile(settingsPath)
+	require.NoError(t, err)
+	var settings claudeSettings
+	require.NoError(t, json.Unmarshal(result, &settings))
+
+	found := false
+	for _, group := range settings.Hooks["UserPromptSubmit"] {
+		for _, h := range group.Hooks {
+			if h.Command == buildCaptureHookCommand(execPath) {
+				found = true
+			}
+		}
+	}
+	assert.True(t, found, "should contain makro capture hook")
+}
+
+func TestEnsureUserPromptCaptureHookIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	execPath := filepath.Join(dir, "Finger Saver", "makro") // path with a space
+
+	initial := map[string]any{"env": map[string]string{}}
+	data, _ := json.MarshalIndent(initial, "", "  ")
+	require.NoError(t, os.WriteFile(settingsPath, data, 0o644))
+
+	require.NoError(t, EnsureUserPromptCaptureHook(dir, execPath))
+	require.NoError(t, EnsureUserPromptCaptureHook(dir, execPath))
+	require.NoError(t, EnsureUserPromptCaptureHook(dir, execPath))
+
+	result, err := os.ReadFile(settingsPath)
+	require.NoError(t, err)
+	var settings claudeSettings
+	require.NoError(t, json.Unmarshal(result, &settings))
+
+	count := 0
+	for _, group := range settings.Hooks["UserPromptSubmit"] {
+		for _, h := range group.Hooks {
+			if isMakroCaptureHook(h.Command) {
+				count++
+			}
+		}
+	}
+	assert.Equal(t, 1, count, "capture hook must not duplicate across runs")
+}
+
+// TestEnsureUserPromptCaptureHookPreservesExistingStartHook is the critical
+// coexistence test: the live settings.json already has a `notify ... start`
+// UserPromptSubmit entry. Adding the capture hook must NOT remove it and must
+// NOT collide with it (both share the "makro" command prefix).
+func TestEnsureUserPromptCaptureHookPreservesExistingStartHook(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	execPath := filepath.Join(dir, "bin", "makro")
+
+	// Seed with a start hook already present (mirrors the real ~/.claude/settings.json).
+	startCmd := buildStartHookCommand(execPath)
+	initial := map[string]any{
+		"hooks": map[string]any{
+			"UserPromptSubmit": []any{
+				map[string]any{"hooks": []any{map[string]any{"type": "command", "command": startCmd, "timeout": 10}}},
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(initial, "", "  ")
+	require.NoError(t, os.WriteFile(settingsPath, data, 0o644))
+
+	require.NoError(t, EnsureUserPromptCaptureHook(dir, execPath))
+
+	result, err := os.ReadFile(settingsPath)
+	require.NoError(t, err)
+	var settings claudeSettings
+	require.NoError(t, json.Unmarshal(result, &settings))
+
+	startCount, captureCount := 0, 0
+	for _, group := range settings.Hooks["UserPromptSubmit"] {
+		for _, h := range group.Hooks {
+			if isMakroStartHook(h.Command) {
+				startCount++
+			}
+			if isMakroCaptureHook(h.Command) {
+				captureCount++
+			}
+		}
+	}
+	assert.Equal(t, 1, startCount, "existing start hook must be preserved")
+	assert.Equal(t, 1, captureCount, "capture hook must be added")
+}

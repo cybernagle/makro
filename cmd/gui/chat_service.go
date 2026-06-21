@@ -14,6 +14,7 @@ import (
 	"github.com/naglezhang/makro/internal/agent"
 	"github.com/naglezhang/makro/internal/agent/tools"
 	"github.com/naglezhang/makro/internal/apns"
+	"github.com/naglezhang/makro/internal/brain"
 	"github.com/naglezhang/makro/internal/config"
 	"github.com/naglezhang/makro/internal/llm"
 	"github.com/naglezhang/makro/internal/notify"
@@ -40,6 +41,15 @@ type ChatService struct {
 	monitors          map[string]context.CancelFunc
 	mu                sync.Mutex
 	initErr           string
+
+	// capture is the brain capture sink. nil until init() runs (and stays nil
+	// when cfg.Brain.CaptureEnabled is false). SendMessage and the OnCapture
+	// notifier callback both route through it.
+	capture *brain.CaptureSink
+	// brain is the proactive brain instance (P1). nil when cfg.Brain.Enabled
+	// is false or inbox open failed. Powers /brain wake + /inbox commands.
+	brain      *brain.Brain
+	brainInbox *brain.InboxStore
 }
 
 func NewChatService() *ChatService {
@@ -203,7 +213,8 @@ func (s *ChatService) init() {
 	notifier := agent.NewAgentNotifier()
 
 	orch := agent.NewOrchestrator(provider, tc, hm, tools.AllTools(tc, assessor, cwd, notifier))
-	orch.SetCommandRegistry(agent.NewCommandRegistry(tc))
+	cmdRegistry := agent.NewCommandRegistry(tc)
+	orch.SetCommandRegistry(cmdRegistry)
 	homeDir, _ := os.UserHomeDir()
 	skillDirs := []string{
 		filepath.Join(homeDir, ".makro", "skills"),
@@ -307,7 +318,40 @@ func (s *ChatService) init() {
 		}
 	})
 
+	// Brain capture sink (P0). Wires the memory-client-backed sink and registers
+	// OnCapture so messages forwarded by the UserPromptSubmit hook (makro
+	// capture) reach memory-cli. The sink is async and never blocks the socket
+	// handler. Disabled entirely when cfg.Brain.CaptureEnabled is false.
+	memClient := brain.NewClient(cfg.Brain.MemoryEndpoint, cfg.Brain.MemoryAPIKey, cfg.Brain.MemoryCLIPath, cfg.DataDir)
+	s.capture = brain.NewCaptureSink(cfg.Brain, memClient)
+	notifier.OnCapture(func(session, prompt, cwd string) {
+		// source=claude: the message arrived via the Claude UserPromptSubmit
+		// hook (not typed in makro's own chat pane).
+		s.capture.Capture(brain.SourceClaude, session, prompt, cwd)
+	})
+
 	go notifier.Start(context.Background())
+
+	// Brain (P1): build it over the same memory client as capture, open the
+	// inbox, register /brain wake + /inbox commands, run the cron loop. The
+	// pusher delivers proposals via the chat WS hub (chat:system) + Bark push.
+	if cfg.Brain.Enabled {
+		inbox, berr := brain.Open(filepath.Join(cfg.DataDir, "brain", "inbox.db"))
+		if berr != nil {
+			log.Printf("[chat_service] brain inbox open failed: %v", berr)
+		} else {
+			s.brainInbox = inbox
+			proposer := brain.NewProposer(provider, cfg.LLMModel, "")
+			s.brain = brain.NewBrain(cfg.Brain, memClient, proposer, inbox, &guiBrainPusher{
+				emit:    s.emit,
+				barkKey: cfg.BarkKey,
+				barkURL: cfg.BarkURL,
+			})
+			brain.RegisterCommands(cmdRegistry, s.brain)
+			go s.brain.Run(context.Background())
+			log.Printf("[chat_service] brain started (cron=%s)", cfg.Brain.CronTime)
+		}
+	}
 
 	// Periodic Claude Code transcript ingestion (token usage) — immediate
 	// backfill, then every minute. Zero API cost: reads local transcript files.
@@ -337,6 +381,9 @@ func (s *ChatService) init() {
 		}
 		if err := agent.EnsurePermissionHook(cfg.ClaudeDir, exePath); err != nil {
 			log.Printf("[chat_service] claude permission hook: %v", err)
+		}
+		if err := agent.EnsureUserPromptCaptureHook(cfg.ClaudeDir, exePath); err != nil {
+			log.Printf("[chat_service] claude capture hook: %v", err)
 		}
 	}
 
@@ -371,6 +418,13 @@ func (s *ChatService) init() {
 const voicePromptPrefix = "[你正在和用户语音通话，请用简洁口语回答：不要用表格、代码块或 markdown 符号；可以用简短的「第一、第二」式要点；回答尽量短以节省语音合成额度。]\n\n"
 
 func (s *ChatService) SendMessage(input string, voice bool) error {
+	// Capture the user's raw message before voice-prefixing and orchestrator
+	// routing. The sink never blocks (async channel) and is nil-safe. We capture
+	// the original text, not the voice-prefixed variant — the prefix is a TTS
+	// instruction, not user intent.
+	if s.capture != nil && strings.TrimSpace(input) != "" {
+		s.capture.Capture(brain.SourceMakro, "", input, "")
+	}
 	if voice {
 		input = voicePromptPrefix + input
 	}
@@ -622,4 +676,45 @@ func (s *ChatService) reportError(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	log.Printf("[chat_service] init error: %s", msg)
 	s.initErr = msg
+}
+
+// CloseBrain stops the brain loop and closes the inbox, called on shutdown.
+func (s *ChatService) CloseBrain() {
+	if s.brain != nil {
+		s.brain.Stop()
+	}
+	if s.brainInbox != nil {
+		s.brainInbox.Close()
+	}
+}
+
+// guiBrainPusher implements brain.Pusher for the GUI. Delivers a proposal via
+// the chat WS hub (chat:system event → frontend renders it) + Bark push.
+// Skip notices are chat-only (no phone buzz for "nothing happened").
+type guiBrainPusher struct {
+	emit    func(event string, data string)
+	barkKey string
+	barkURL string
+}
+
+func (p *guiBrainPusher) Push(localID int64, prop brain.InboxProposal) {
+	text := brain.FormatProposalForChat(prop)
+	if p.emit != nil {
+		p.emit("chat:system", text)
+	}
+	if prop.Status == "skip" || p.barkKey == "" {
+		return
+	}
+	go func() {
+		barkURL := p.barkURL
+		if barkURL == "" {
+			barkURL = "https://api.day.app"
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		title := fmt.Sprintf("🧠 proposal [#%d] %s", localID, prop.Title)
+		if err := notify.BarkPush(ctx, barkURL, p.barkKey, title, "brain", prop.Body); err != nil {
+			log.Printf("[chat_service] brain bark push failed: %v", err)
+		}
+	}()
 }

@@ -44,6 +44,53 @@ type Config struct {
 	// (prefix match); UsageQuota5h = window prompt quota (0 = unknown/hidden).
 	HighCostModels []string `json:"high_cost_models,omitempty"`
 	UsageQuota5h   int64    `json:"usage_quota_5h,omitempty"`
+
+	// Brain (proactive second-brain). Brain.Enabled toggles capture + the
+	// future brain daemon. The capture pipeline runs whenever Enabled is true,
+	// even if the TUI/GUI is the only makro instance — capture is the shared
+	// foundation both the reactive orchestrator and the proactive brain build on.
+	Brain BrainConfig `json:"brain,omitempty"`
+}
+
+// BrainConfig configures the proactive brain. All knobs are advisory defaults;
+// the self-tuning layer (P3) may adjust caps/threshold at runtime and persist
+// the adjusted values back here.
+type BrainConfig struct {
+	Enabled bool `json:"enabled"`
+
+	// Memory REST endpoint + auth. Endpoint must be the :8765 REST API
+	// (RECONCILE §1), NOT :8090 (that's stop-hook.sh's transport). APIKey is the
+	// Bearer token; the placeholder "mk-car-agent-abc123" MUST be replaced at
+	// deploy time once memory-cli's :8765 auth lands (M3).
+	MemoryEndpoint string `json:"memory_endpoint,omitempty"`
+	MemoryAPIKey   string `json:"memory_api_key,omitempty"`
+	MemoryCLIPath  string `json:"memory_cli_path,omitempty"` // ~/bin/memory fallback
+
+	// Proactive push limits (§7). Caps gate how many proposals reach the inbox.
+	DailyProposalCap    int     `json:"daily_proposal_cap,omitempty"`
+	WeeklyProposalCap   int     `json:"weekly_proposal_cap,omitempty"`
+	ConfidenceThreshold float64 `json:"confidence_threshold,omitempty"`
+	CronTime            string  `json:"cron_time,omitempty"` // "HH:MM" daily wake
+
+	// Capture control. When false the capture pipeline is a no-op (useful to
+	// A/B whether capture slows chat down).
+	CaptureEnabled bool `json:"capture_enabled,omitempty"`
+}
+
+// DefaultBrainConfig returns sensible defaults. Enabled defaults to true so a
+// fresh install captures from day one (the brain itself is inert until P1).
+func DefaultBrainConfig() BrainConfig {
+	return BrainConfig{
+		Enabled:             true,
+		CaptureEnabled:      true,
+		MemoryEndpoint:      "http://127.0.0.1:8765",
+		MemoryAPIKey:        "mk-car-agent-abc123", // placeholder — replace at deploy
+		MemoryCLIPath:       "~/bin/memory",
+		DailyProposalCap:    2,
+		WeeklyProposalCap:   8,
+		ConfidenceThreshold: 0.6,
+		CronTime:            "08:00",
+	}
 }
 
 func homeDir() string {
@@ -65,6 +112,7 @@ func DefaultConfig() *Config {
 		ChatHistoryPath:    filepath.Join(dataDir, "chat.md"),
 		ClaudeDir:          filepath.Join(home, ".claude"),
 		MaxContextMessages: 40,
+		Brain:              DefaultBrainConfig(),
 	}
 }
 
@@ -84,6 +132,8 @@ func Load() (*Config, error) {
 	}
 
 	cfg.loadClaudeDefaults()
+
+	cfg.normalizeBrain()
 
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -198,6 +248,41 @@ func (c *Config) applyEnvOverrides() {
 			c.UsageQuota5h = n
 		}
 	}
+
+	// Brain overrides.
+	if v := os.Getenv("MAKRO_BRAIN_ENABLED"); v != "" {
+		c.Brain.Enabled = v == "true" || v == "1"
+	}
+	if v := os.Getenv("MAKRO_BRAIN_CAPTURE_ENABLED"); v != "" {
+		c.Brain.CaptureEnabled = v == "true" || v == "1"
+	}
+	if v := os.Getenv("MAKRO_BRAIN_MEMORY_ENDPOINT"); v != "" {
+		c.Brain.MemoryEndpoint = v
+	}
+	if v := os.Getenv("MAKRO_BRAIN_MEMORY_API_KEY"); v != "" {
+		c.Brain.MemoryAPIKey = v
+	}
+	if v := os.Getenv("MAKRO_BRAIN_MEMORY_CLI"); v != "" {
+		c.Brain.MemoryCLIPath = v
+	}
+	if v := os.Getenv("MAKRO_BRAIN_DAILY_CAP"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Brain.DailyProposalCap = n
+		}
+	}
+	if v := os.Getenv("MAKRO_BRAIN_WEEKLY_CAP"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Brain.WeeklyProposalCap = n
+		}
+	}
+	if v := os.Getenv("MAKRO_BRAIN_CONFIDENCE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			c.Brain.ConfidenceThreshold = f
+		}
+	}
+	if v := os.Getenv("MAKRO_BRAIN_CRON"); v != "" {
+		c.Brain.CronTime = v
+	}
 }
 
 func (c *Config) loadClaudeDefaults() {
@@ -277,6 +362,43 @@ func (c *Config) loadClaudeDefaults() {
 			}
 		}
 	}
+}
+
+// normalizeBrain fills zero-value Brain fields from defaults. A partial "brain"
+// object in config.json would otherwise wipe the defaults we set in
+// DefaultConfig (json.Unmarshal populates only present keys, but nested struct
+// fields not in the JSON stay zero). Merge so an omitted knob keeps its default.
+func (c *Config) normalizeBrain() {
+	def := DefaultBrainConfig()
+	if c.Brain.MemoryEndpoint == "" {
+		c.Brain.MemoryEndpoint = def.MemoryEndpoint
+	}
+	if c.Brain.MemoryAPIKey == "" {
+		c.Brain.MemoryAPIKey = def.MemoryAPIKey
+	}
+	if c.Brain.MemoryCLIPath == "" {
+		c.Brain.MemoryCLIPath = def.MemoryCLIPath
+	}
+	if c.Brain.DailyProposalCap == 0 {
+		c.Brain.DailyProposalCap = def.DailyProposalCap
+	}
+	if c.Brain.WeeklyProposalCap == 0 {
+		c.Brain.WeeklyProposalCap = def.WeeklyProposalCap
+	}
+	if c.Brain.ConfidenceThreshold == 0 {
+		c.Brain.ConfidenceThreshold = def.ConfidenceThreshold
+	}
+	if c.Brain.CronTime == "" {
+		c.Brain.CronTime = def.CronTime
+	}
+	// Note: Enabled and CaptureEnabled default to false from struct literals,
+	// NOT DefaultConfig (which sets them true). To honor "enabled by default on
+	// fresh install", a *missing* brain key must mean true — but an *explicit*
+	// `{"brain":{"enabled":false}}` must mean false. We can't distinguish those
+	// two after unmarshal. Resolution: DefaultConfig sets them true, and
+	// normalizeBrain does NOT touch them (explicit zero stays zero). The only
+	// edge case: a config.json with `"brain": {}` (present but empty) disables.
+	// That's acceptable and documented — opt-out is explicit.
 }
 
 func (c *Config) validate() error {

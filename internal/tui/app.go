@@ -51,6 +51,11 @@ type AppModel struct {
 	notifier tools.Notifier
 	assessor tools.Assessor
 	monitors map[string]context.CancelFunc // active monitors: session → cancel
+
+	// captureFn is invoked at the chat input entry point to feed user messages
+	// to the brain's capture sink. nil when capture is disabled. Set via
+	// SetCaptureFn before the program runs (main.go injects the sink).
+	captureFn func(source, session, prompt, cwd string)
 }
 
 type tmuxClient interface {
@@ -377,6 +382,13 @@ func (a *AppModel) processOrchestratorInput(text string) {
 	if name, _ := agent.ExtractMention(text); name != "" {
 		source = name
 	}
+	// Capture the user's message before routing. This is the entry point, not
+	// handleLLM, so we get the raw text (pre skill-expansion, pre mention-strip)
+	// for all three input paths (CLI/TUI/GUI). Never blocks: the sink enqueues
+	// onto an internal channel (BRAIN_DESIGN §3.6).
+	if a.captureFn != nil && strings.TrimSpace(text) != "" {
+		a.captureFn("makro", "", text, "")
+	}
 	events, err := a.orchestrator.ProcessInput(a.ctx, text)
 	if err != nil {
 		log.Printf("[tui] ProcessInput error: %v", err)
@@ -482,6 +494,12 @@ func sessionsChanged(a, b []string) bool {
 
 func (a *AppModel) SetSendFn(fn func(tea.Msg)) {
 	a.sendFn = fn
+}
+
+// SetCaptureFn wires the brain capture sink. Called once from main.go before
+// the program runs. nil disables capture.
+func (a *AppModel) SetCaptureFn(fn func(source, session, prompt, cwd string)) {
+	a.captureFn = fn
 }
 
 func (a *AppModel) SendChatMessage(role, content string) {

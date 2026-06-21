@@ -36,6 +36,27 @@ func main() {
 		}
 		_ = notify.SendHook(map[string]string{"type": "permission", "session": os.Args[2]})
 		return
+	case "capture":
+		// Brain capture entry point. Invoked by Claude Code's UserPromptSubmit
+		// hook: argv[2] = tmux session name (from the hook command's
+		// $(tmux display-message)); stdin = the hook JSON {"prompt","cwd"}.
+		// Forward to the running Makro instance; the notifier's OnCapture
+		// callback routes it to the brain capture sink → memory-cli.
+		// Best-effort: never error into the hook (would slow the agent). If makro
+		// isn't running, silently exit.
+		session := ""
+		if len(os.Args) > 2 {
+			session = os.Args[2]
+		}
+		payload := ""
+		if body, rerr := io.ReadAll(os.Stdin); rerr == nil {
+			payload = string(body)
+		}
+		if payload == "" && session == "" {
+			return
+		}
+		_ = notify.SendHook(map[string]string{"type": "capture", "session": session, "payload": payload})
+		return
 	case "claude-start":
 		// Called by Claude Code's SessionStart hook. argv[2] = tmux session name
 		// (from the hook command's $(tmux display-message)); stdin = the hook

@@ -13,6 +13,12 @@ const (
 	fsStartHookSuffix       = ` notify "$(tmux display-message -p '#{session_name}')" start`
 	fsPermissionHookSuffix  = ` permission "$(tmux display-message -p '#{session_name}')"`
 	fsClaudeStartHookSuffix = ` claude-start "$(tmux display-message -p '#{session_name}')"`
+	// fsCaptureHookSuffix pipes the UserPromptSubmit stdin (the user's prompt
+	// JSON) into `makro capture <session>`. The hook fires ONLY on user
+	// submits — agent replies never trigger it, so this is the precise split
+	// point between user-side (captured) and agent-side (ignored) messages
+	// (BRAIN_DESIGN §3.2).
+	fsCaptureHookSuffix = ` capture "$(tmux display-message -p '#{session_name}')"`
 )
 
 // claudeSettings represents the relevant parts of ~/.claude/settings.json.
@@ -142,6 +148,66 @@ func EnsureStartHook(claudeDir, executablePath string) error {
 		}},
 	})
 	hooks["UserPromptSubmit"] = startHooks
+
+	updated, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal settings: %w", err)
+	}
+	updated = append(updated, '\n')
+	return os.WriteFile(settingsPath, updated, info.Mode().Perm())
+}
+
+// EnsureUserPromptCaptureHook adds a makro capture UserPromptSubmit hook to
+// Claude Code settings if one does not already exist. This is the brain's
+// capture entry point: every user prompt is piped (via `makro capture`) to the
+// running makro, which writes it to memory-cli as a category=capture record.
+// Idempotent. Coexists with any existing UserPromptSubmit hooks (appended as a
+// new group, never removes the existing `notify ... start` entry).
+func EnsureUserPromptCaptureHook(claudeDir, executablePath string) error {
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	info, err := os.Stat(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat settings: %w", err)
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return fmt.Errorf("read settings: %w", err)
+	}
+
+	var settings any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+	root, ok := settings.(map[string]any)
+	if !ok {
+		return fmt.Errorf("parse settings: root must be an object")
+	}
+
+	hooks, err := ensureJSONObject(root, "hooks")
+	if err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+	submitHooks, err := ensureJSONArray(hooks, "UserPromptSubmit")
+	if err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+
+	if captureHookExists(submitHooks) {
+		return nil
+	}
+
+	submitHooks = append(submitHooks, map[string]any{
+		"hooks": []any{map[string]any{
+			"type":    "command",
+			"command": buildCaptureHookCommand(executablePath),
+			"timeout": 10,
+		}},
+	})
+	hooks["UserPromptSubmit"] = submitHooks
 
 	updated, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
@@ -387,6 +453,44 @@ func isMakroPermissionHook(command string) bool {
 
 func isMakroStartHook(command string) bool {
 	return strings.Contains(command, "makro") && strings.Contains(command, fsStartHookSuffix)
+}
+
+// captureHookExists reports whether any UserPromptSubmit group already contains
+// a makro capture hook. Used for idempotent injection.
+func captureHookExists(submitGroups []any) bool {
+	for _, groupValue := range submitGroups {
+		group, ok := groupValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		hookValues, ok := group["hooks"]
+		if !ok {
+			continue
+		}
+		hooks, ok := hookValues.([]any)
+		if !ok {
+			continue
+		}
+		for _, hookValue := range hooks {
+			hook, ok := hookValue.(map[string]any)
+			if !ok {
+				continue
+			}
+			command, _ := hook["command"].(string)
+			if isMakroCaptureHook(command) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isMakroCaptureHook(command string) bool {
+	return strings.Contains(command, "makro") && strings.Contains(command, fsCaptureHookSuffix)
+}
+
+func buildCaptureHookCommand(executablePath string) string {
+	return shellQuote(executablePath) + fsCaptureHookSuffix
 }
 
 func claudeStartHookExists(groups []any) (bool, error) {

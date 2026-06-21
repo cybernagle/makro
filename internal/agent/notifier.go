@@ -8,20 +8,22 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
 
 // hookPayload is the JSON message sent to the socket.
 type hookPayload struct {
-	Type            string `json:"type"` // "agent_stop", "chat", "session", "claude_session_start"
+	Type            string `json:"type"` // "agent_stop", "chat", "session", "claude_session_start", "capture", "proposal"
 	Session         string `json:"session,omitempty"`
 	Status          string `json:"status,omitempty"`
 	Role            string `json:"role,omitempty"`              // for chat: "assistant", "system"
 	Content         string `json:"content,omitempty"`           // for chat/session: message text
 	ClaudeSessionID string `json:"claude_session_id,omitempty"` // for claude_session_start
 	TranscriptPath  string `json:"transcript_path,omitempty"`   // for claude_session_start
-	Cwd             string `json:"cwd,omitempty"`               // for claude_session_start
+	Cwd             string `json:"cwd,omitempty"`               // for claude_session_start / capture
+	Payload         string `json:"payload,omitempty"`           // for capture: stdin JSON ({"prompt","cwd"})
 }
 
 // AgentNotifier tracks stop notifications from coding agents and dispatches
@@ -44,6 +46,10 @@ type AgentNotifier struct {
 	onAgentStart    func(session string)
 	onPermission    func(session string)
 	onClaudeSession func(claudeSessionID, tmuxSession, transcriptPath, cwd string)
+	// onCapture fires when a captured user message arrives (from the
+	// UserPromptSubmit hook → makro capture subcommand → this socket). The
+	// prompt is the user's raw input; cwd is the originating project dir.
+	onCapture func(session, prompt, cwd string)
 }
 
 func NewAgentNotifier() *AgentNotifier {
@@ -224,6 +230,16 @@ func (n *AgentNotifier) OnPermission(fn func(session string)) {
 	n.mu.Unlock()
 }
 
+// OnCapture sets the callback for captured user messages. Fired when the
+// "capture" socket message arrives (from the Claude UserPromptSubmit hook via
+// the makro capture subcommand). The hook forwards the hook's stdin JSON in
+// msg.Payload; we parse out the prompt and cwd here so callers get clean values.
+func (n *AgentNotifier) OnCapture(fn func(session, prompt, cwd string)) {
+	n.mu.Lock()
+	n.onCapture = fn
+	n.mu.Unlock()
+}
+
 func (n *AgentNotifier) acceptLoop(ctx context.Context) {
 	backoff := 100 * time.Millisecond
 	for {
@@ -272,6 +288,7 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 	onAgentStart := n.onAgentStart
 	onPermission := n.onPermission
 	onClaudeSession := n.onClaudeSession
+	onCapture := n.onCapture
 	n.mu.Unlock()
 
 	switch msg.Type {
@@ -282,6 +299,23 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 				role = "system"
 			}
 			onChat(role, msg.Content)
+		}
+	case "capture":
+		// A captured user message. msg.Payload is the forwarded UserPromptSubmit
+		// hook stdin JSON ({"prompt":..., "cwd":...}). Parse it; fall back to
+		// msg.Content as a raw prompt if Payload isn't JSON. cwd may also arrive
+		// top-level in msg.Cwd (makro's own chat capture path sets that).
+		if onCapture != nil {
+			prompt, cwd := parseCapturePayload(msg.Payload)
+			if prompt == "" {
+				prompt = msg.Content // makro chat path sends the raw text in Content
+			}
+			if cwd == "" {
+				cwd = msg.Cwd
+			}
+			if prompt != "" {
+				onCapture(msg.Session, prompt, cwd)
+			}
 		}
 	case "session":
 		if onSession != nil && msg.Session != "" && msg.Content != "" {
@@ -334,4 +368,23 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 	if _, err := conn.Write([]byte("ok\n")); err != nil {
 		log.Printf("[notifier] write ack: %v", err)
 	}
+}
+
+// parseCapturePayload decodes a forwarded UserPromptSubmit hook stdin JSON.
+// Claude Code sends {"prompt": "...", "cwd": "..."} (and other fields we
+// ignore). Returns ("","") if payload is empty or unparseable — the caller
+// then falls back to top-level msg.Content / msg.Cwd.
+func parseCapturePayload(payload string) (prompt, cwd string) {
+	payload = strings.TrimSpace(payload)
+	if payload == "" {
+		return "", ""
+	}
+	var p struct {
+		Prompt string `json:"prompt"`
+		Cwd    string `json:"cwd"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		return "", ""
+	}
+	return p.Prompt, p.Cwd
 }
