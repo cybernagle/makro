@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -128,13 +129,24 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		if origin == "" {
-			return true // non-browser clients (iOS app, curl)
+			// Non-browser client (iOS app, curl) — browsers always send Origin.
+			// Require evidence of auth here as defense-in-depth; the auth
+			// middleware already gated /ws/ routes on a token, so a request that
+			// reaches the upgrade with no Origin AND no token is suspicious.
+			return r.Header.Get("Authorization") != "" || r.URL.Query().Get("token") != ""
 		}
 		return isLocalOrigin(origin)
 	},
 }
 
 func serve(addr string, tlsCert, tlsKey, password string) error {
+	// Refuse to run unauthenticated on a publicly-reachable bind address —
+	// without a password every route (incl. tmux keystroke injection via
+	// /api/sessions/<n>/send) would be open to anyone who can reach the host.
+	if password == "" && !isLoopbackAddr(addr) {
+		return fmt.Errorf("refusing to start: --password required when bound to non-loopback address %q", addr)
+	}
+
 	hub := newChatHub()
 	chatSvc := NewChatService()
 	chatSvc.hub = hub
@@ -251,26 +263,57 @@ func isLocalOrigin(origin string) bool {
 	return ip.IsPrivate() || ip.IsLoopback()
 }
 
+// isLoopbackAddr reports whether addr binds only to the loopback interface
+// (e.g. "127.0.0.1:39222", "localhost:port"). An empty host (":port") or
+// "0.0.0.0"/"::" binds all interfaces and is NOT loopback.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return host == "localhost"
+}
+
 func authMiddleware(next http.Handler, password string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Allow static files without auth
-		if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/") || strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".css") || strings.HasSuffix(r.URL.Path, ".html") || strings.HasSuffix(r.URL.Path, ".ico") {
+		// Allow the SPA shell ("/" + bundled assets under "/assets/") without
+		// auth. Asset suffixes (.js/.css/.html/.ico) are also allowed, but ONLY
+		// off /api/ and /ws/ — otherwise a future API route ending in one of
+		// those suffixes would silently inherit the bypass.
+		if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/ws/") &&
+			(strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".css") ||
+				strings.HasSuffix(r.URL.Path, ".html") || strings.HasSuffix(r.URL.Path, ".ico")) {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// Check Authorization: Bearer <password>
-		auth := r.Header.Get("Authorization")
-		if strings.HasPrefix(auth, "Bearer ") && strings.TrimPrefix(auth, "Bearer ") == password {
-			next.ServeHTTP(w, r)
-			return
+		// Check Authorization: Bearer <password>. Constant-time compare avoids a
+		// timing side-channel that would leak the password byte-by-byte.
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			got := strings.TrimPrefix(auth, "Bearer ")
+			if subtle.ConstantTimeCompare([]byte(got), []byte(password)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
 		}
 
-		// WebSocket connections cannot set headers during handshake;
-		// accept token via query param on /ws/ paths only.
-		if strings.HasPrefix(r.URL.Path, "/ws/") && r.URL.Query().Get("token") == password {
-			next.ServeHTTP(w, r)
-			return
+		// WebSocket handshake can't set headers on iOS; accept a token via query
+		// on /ws/ paths only. Constant-time compare here too.
+		if strings.HasPrefix(r.URL.Path, "/ws/") {
+			if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(password)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
 		}
 
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
