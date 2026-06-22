@@ -21,6 +21,15 @@ final class TerminalViewModel: NSObject, ObservableObject {
     private var didExplicitlyDisconnect = false
     private var reconnectObserver: NSObjectProtocol?
 
+    /// HTTP session that shares the app's TLS trust delegate (TOFU cert
+    /// pinning). refresh()/send() must NOT use URLSession.shared — that
+    /// bypasses handleTLSChallenge and would either reject the self-signed
+    /// server cert (once ATS is re-enabled) or send the bearer password over
+    /// an unpinned channel.
+    private lazy var httpSession: URLSession = {
+        URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+    }()
+
     init(config: Config = .shared) {
         self.config = config
         super.init()
@@ -68,7 +77,7 @@ final class TerminalViewModel: NSObject, ObservableObject {
         var request = URLRequest(url: config.sessionCaptureURL(for: sessionName))
         request.setValue(config.bearerToken, forHTTPHeaderField: "Authorization")
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await httpSession.data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 lastError = "capture failed"
                 return
@@ -94,7 +103,7 @@ final class TerminalViewModel: NSObject, ObservableObject {
         request.setValue(config.bearerToken, forHTTPHeaderField: "Authorization")
         let body = try? JSONSerialization.data(withJSONObject: ["text": text])
         request.httpBody = body
-        URLSession.shared.dataTask(with: request).resume()
+        httpSession.dataTask(with: request).resume()
     }
 
     /// No-op in snapshot mode. The server controls pane size via tmux config

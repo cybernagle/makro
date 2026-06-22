@@ -9,12 +9,14 @@
 /* Begin PBXBuildFile section */
 		04CE88BE0C73102C401150DA /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBE95557715F0222A9A2D898 /* Models.swift */; };
 		08E7AC9097713671B80AEF25 /* AzureSpeechManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70034F1AACF0415FC0A7B401 /* AzureSpeechManager.swift */; };
-		9B1F5D6CCBE150002B3D4E5F /* VoiceActivityDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C0D4E2BBAD040001A2C3D4E /* VoiceActivityDetector.swift */; };
+		0CD9657B9D1DC17A09AAA750 /* idle-notif-cooldown.json in Resources */ = {isa = PBXBuildFile; fileRef = 2B0CBF32FF351C2EE04DA78C /* idle-notif-cooldown.json */; };
 		13A63DF6D5D49C1AE27F45EC /* SessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F32FE4F7A4421F150EB56D6 /* SessionsView.swift */; };
+		16F8CB946BF0FE980759999A /* last-tool-error-state.json in Resources */ = {isa = PBXBuildFile; fileRef = 8DB4A2D852448FCA829E6C76 /* last-tool-error-state.json */; };
 		171212789B4479A6FADC345D /* TerminalViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7606DB674BC71275A25D1B50 /* TerminalViewModel.swift */; };
 		32CB6BF8B03DEEA91B213188 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF4E0E4B479FA41D70865DD8 /* Theme.swift */; };
 		3542036E248FEB97136E3E85 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AFE09E16F77FB3DF26DD049 /* ChatViewModel.swift */; };
 		4D15D15B0428A5E9654B0172 /* SessionsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D8533CA7E26A870B431E644 /* SessionsViewModel.swift */; };
+		56482AAE9D6DAA69EDDAAAFE /* StartCallIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88D8320BDE02BEA38279406C /* StartCallIntent.swift */; };
 		649C3CBD0C16454577837CDC /* MakroApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7115624D08EB3EC3D45859F /* MakroApp.swift */; };
 		745ADAA73FAD5DA0053D141F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2F4D53CAEC92B38B12F3EA9E /* Assets.xcassets */; };
 		795F31AB0261DA93684F542A /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B845DA418647EA128499AB3A /* ChatView.swift */; };
@@ -22,71 +24,103 @@
 		82D0067DFF4CF9B075296805 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 791D50F6D3288C4934C2006A /* AppDelegate.swift */; };
 		9680A9D36267A514B9281C89 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5771BD2F137609458953553 /* APIClient.swift */; };
 		99BB950716C1F19A97E632A6 /* KanbanViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62DA63C8C7F48649AC028A2E /* KanbanViewModel.swift */; };
-		9AE1CF3C714C34A02E827EEB /* Pods_Makro.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0D055BC1A0B6F479CFFF89B8 /* Pods_Makro.framework */; };
+		9DCB1ABABC0E2E8104DADF95 /* pre-tool-advisory-throttle.json in Resources */ = {isa = PBXBuildFile; fileRef = C947FD829DFC302DE5E7427A /* pre-tool-advisory-throttle.json */; };
+		A6A443B32C1D67771B87516F /* pre-tool-advisory-throttle.json in Resources */ = {isa = PBXBuildFile; fileRef = 3EF2DC4F4B76AEFE31F7BE00 /* pre-tool-advisory-throttle.json */; };
 		AB8246F1BEF0BA659B3D046C /* ANSI.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA9859C06BC6CD8E48858057 /* ANSI.swift */; };
 		B6B835DDF321ECDBF47E6894 /* NowPlayingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80C150376C27220D3A78BDDD /* NowPlayingManager.swift */; };
 		C6CDDA92EA8534AEEAAFCF65 /* CallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 783498E9FFBDCC956156CD6E /* CallView.swift */; };
+		C7BD761AED7781511568B0D2 /* VoiceActivityDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F90DDFCA6FCD9A481FAFB663 /* VoiceActivityDetector.swift */; };
 		CF6DA06ADF699F440BEEE89F /* KanbanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93807192D2A1EEB3BDB83074 /* KanbanView.swift */; };
 		DB07A8E1A37C8EBD9ED78419 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84743919C8053EAACF231B37 /* Config.swift */; };
+		E0202F6E36ED1CD4E829DF71 /* agent-replay-7195fe19-7bd2-48c0-95d0-d37876c351b4.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 076BB69B0A3E65F5C97B0317 /* agent-replay-7195fe19-7bd2-48c0-95d0-d37876c351b4.jsonl */; };
+		EE5A5728A192F2E79518023A /* Pods_Makro.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C1675FB9F035AF7BBDB10E37 /* Pods_Makro.framework */; };
+		F84B26217CD7CA000E196A87 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14AB04D879470901F9383022 /* KeychainHelper.swift */; };
+		FDD3FAF1AC8504644835EE17 /* subagent-tracking-state.json in Resources */ = {isa = PBXBuildFile; fileRef = 302E8A4AEB4BF4E6EF91EDBC /* subagent-tracking-state.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		07256E45F5130600B29B76D3 /* Makro.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Makro.entitlements; sourceTree = "<group>"; };
 		073F7A972B71A581504EC2F4 /* Makro.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Makro.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		0D055BC1A0B6F479CFFF89B8 /* Pods_Makro.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Makro.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		076BB69B0A3E65F5C97B0317 /* agent-replay-7195fe19-7bd2-48c0-95d0-d37876c351b4.jsonl */ = {isa = PBXFileReference; path = "agent-replay-7195fe19-7bd2-48c0-95d0-d37876c351b4.jsonl"; sourceTree = "<group>"; };
+		14AB04D879470901F9383022 /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
 		2AFE09E16F77FB3DF26DD049 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
+		2B0CBF32FF351C2EE04DA78C /* idle-notif-cooldown.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "idle-notif-cooldown.json"; sourceTree = "<group>"; };
 		2F32FE4F7A4421F150EB56D6 /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
 		2F4D53CAEC92B38B12F3EA9E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		302E8A4AEB4BF4E6EF91EDBC /* subagent-tracking-state.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "subagent-tracking-state.json"; sourceTree = "<group>"; };
+		3EF2DC4F4B76AEFE31F7BE00 /* pre-tool-advisory-throttle.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "pre-tool-advisory-throttle.json"; sourceTree = "<group>"; };
 		457FDB72D58643BBFC1E7A9E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		5EDDD47F6AEEB009AF7DA914 /* Pods-Makro.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Makro.debug.xcconfig"; path = "Target Support Files/Pods-Makro/Pods-Makro.debug.xcconfig"; sourceTree = "<group>"; };
 		62DA63C8C7F48649AC028A2E /* KanbanViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KanbanViewModel.swift; sourceTree = "<group>"; };
 		70034F1AACF0415FC0A7B401 /* AzureSpeechManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AzureSpeechManager.swift; sourceTree = "<group>"; };
-		7C0D4E2BBAD040001A2C3D4E /* VoiceActivityDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceActivityDetector.swift; sourceTree = "<group>"; };
 		7606DB674BC71275A25D1B50 /* TerminalViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalViewModel.swift; sourceTree = "<group>"; };
 		783498E9FFBDCC956156CD6E /* CallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallView.swift; sourceTree = "<group>"; };
 		791D50F6D3288C4934C2006A /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		80C150376C27220D3A78BDDD /* NowPlayingManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingManager.swift; sourceTree = "<group>"; };
 		84743919C8053EAACF231B37 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
+		88D8320BDE02BEA38279406C /* StartCallIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartCallIntent.swift; sourceTree = "<group>"; };
 		8D8533CA7E26A870B431E644 /* SessionsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsViewModel.swift; sourceTree = "<group>"; };
-		90CE04779A4EBA89355EF379 /* Pods-Makro.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Makro.debug.xcconfig"; path = "Target Support Files/Pods-Makro/Pods-Makro.debug.xcconfig"; sourceTree = "<group>"; };
+		8DB4A2D852448FCA829E6C76 /* last-tool-error-state.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "last-tool-error-state.json"; sourceTree = "<group>"; };
 		93807192D2A1EEB3BDB83074 /* KanbanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KanbanView.swift; sourceTree = "<group>"; };
+		A0A9DEF585B2A24A89174DAF /* Pods-Makro.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Makro.release.xcconfig"; path = "Target Support Files/Pods-Makro/Pods-Makro.release.xcconfig"; sourceTree = "<group>"; };
 		B845DA418647EA128499AB3A /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		C1675FB9F035AF7BBDB10E37 /* Pods_Makro.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Makro.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		C947FD829DFC302DE5E7427A /* pre-tool-advisory-throttle.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "pre-tool-advisory-throttle.json"; sourceTree = "<group>"; };
 		D33487D9063356B4947134C2 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		DA9859C06BC6CD8E48858057 /* ANSI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ANSI.swift; sourceTree = "<group>"; };
 		E5771BD2F137609458953553 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		E7115624D08EB3EC3D45859F /* MakroApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MakroApp.swift; sourceTree = "<group>"; };
 		EF4E0E4B479FA41D70865DD8 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
-		F5E6B67923EEF26C0C9C361B /* Pods-Makro.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Makro.release.xcconfig"; path = "Target Support Files/Pods-Makro/Pods-Makro.release.xcconfig"; sourceTree = "<group>"; };
+		F90DDFCA6FCD9A481FAFB663 /* VoiceActivityDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceActivityDetector.swift; sourceTree = "<group>"; };
 		FBE95557715F0222A9A2D898 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		B5115F05F64D1C2A4315F1BE /* Frameworks */ = {
+		BFC779FE7715BFCD857D678C /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				9AE1CF3C714C34A02E827EEB /* Pods_Makro.framework in Frameworks */,
+				EE5A5728A192F2E79518023A /* Pods_Makro.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		05BBE59AA2D8B71E2C10170F /* Pods */ = {
+		22B49AC2A9554FC628B22D4C /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				90CE04779A4EBA89355EF379 /* Pods-Makro.debug.xcconfig */,
-				F5E6B67923EEF26C0C9C361B /* Pods-Makro.release.xcconfig */,
+				C1675FB9F035AF7BBDB10E37 /* Pods_Makro.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		5E1BE169DA7D2AAC56D42C09 /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				5EDDD47F6AEEB009AF7DA914 /* Pods-Makro.debug.xcconfig */,
+				A0A9DEF585B2A24A89174DAF /* Pods-Makro.release.xcconfig */,
 			);
 			name = Pods;
 			path = Pods;
 			sourceTree = "<group>";
 		};
-		498E47ADD394B467D1965BC1 /* Frameworks */ = {
+		73D8CEB1F5AC061AC00F646A /* b71dadd8-2ea5-4c3b-971c-889500661463 */ = {
 			isa = PBXGroup;
 			children = (
-				0D055BC1A0B6F479CFFF89B8 /* Pods_Makro.framework */,
+				3EF2DC4F4B76AEFE31F7BE00 /* pre-tool-advisory-throttle.json */,
 			);
-			name = Frameworks;
+			path = "b71dadd8-2ea5-4c3b-971c-889500661463";
+			sourceTree = "<group>";
+		};
+		91F767B9C039562503C81CF6 /* 7195fe19-7bd2-48c0-95d0-d37876c351b4 */ = {
+			isa = PBXGroup;
+			children = (
+				8DB4A2D852448FCA829E6C76 /* last-tool-error-state.json */,
+				C947FD829DFC302DE5E7427A /* pre-tool-advisory-throttle.json */,
+				302E8A4AEB4BF4E6EF91EDBC /* subagent-tracking-state.json */,
+			);
+			path = "7195fe19-7bd2-48c0-95d0-d37876c351b4";
 			sourceTree = "<group>";
 		};
 		9A7AD897179BC4C3348928D1 /* Makro */ = {
@@ -97,7 +131,6 @@
 				791D50F6D3288C4934C2006A /* AppDelegate.swift */,
 				2F4D53CAEC92B38B12F3EA9E /* Assets.xcassets */,
 				70034F1AACF0415FC0A7B401 /* AzureSpeechManager.swift */,
-				7C0D4E2BBAD040001A2C3D4E /* VoiceActivityDetector.swift */,
 				783498E9FFBDCC956156CD6E /* CallView.swift */,
 				B845DA418647EA128499AB3A /* ChatView.swift */,
 				2AFE09E16F77FB3DF26DD049 /* ChatViewModel.swift */,
@@ -105,6 +138,7 @@
 				457FDB72D58643BBFC1E7A9E /* Info.plist */,
 				93807192D2A1EEB3BDB83074 /* KanbanView.swift */,
 				62DA63C8C7F48649AC028A2E /* KanbanViewModel.swift */,
+				14AB04D879470901F9383022 /* KeychainHelper.swift */,
 				07256E45F5130600B29B76D3 /* Makro.entitlements */,
 				E7115624D08EB3EC3D45859F /* MakroApp.swift */,
 				FBE95557715F0222A9A2D898 /* Models.swift */,
@@ -112,8 +146,11 @@
 				2F32FE4F7A4421F150EB56D6 /* SessionsView.swift */,
 				8D8533CA7E26A870B431E644 /* SessionsViewModel.swift */,
 				D33487D9063356B4947134C2 /* SettingsView.swift */,
+				88D8320BDE02BEA38279406C /* StartCallIntent.swift */,
 				7606DB674BC71275A25D1B50 /* TerminalViewModel.swift */,
 				EF4E0E4B479FA41D70865DD8 /* Theme.swift */,
+				F90DDFCA6FCD9A481FAFB663 /* VoiceActivityDetector.swift */,
+				E9E75C6883702063C50E5CEE /* .omc */,
 			);
 			path = Makro;
 			sourceTree = "<group>";
@@ -126,13 +163,40 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		D6A1B9BCF2AF3627B495A3EE /* sessions */ = {
+			isa = PBXGroup;
+			children = (
+				91F767B9C039562503C81CF6 /* 7195fe19-7bd2-48c0-95d0-d37876c351b4 */,
+				73D8CEB1F5AC061AC00F646A /* b71dadd8-2ea5-4c3b-971c-889500661463 */,
+			);
+			path = sessions;
+			sourceTree = "<group>";
+		};
+		E8C26A715F104CAA3C9923A7 /* state */ = {
+			isa = PBXGroup;
+			children = (
+				076BB69B0A3E65F5C97B0317 /* agent-replay-7195fe19-7bd2-48c0-95d0-d37876c351b4.jsonl */,
+				2B0CBF32FF351C2EE04DA78C /* idle-notif-cooldown.json */,
+				D6A1B9BCF2AF3627B495A3EE /* sessions */,
+			);
+			path = state;
+			sourceTree = "<group>";
+		};
+		E9E75C6883702063C50E5CEE /* .omc */ = {
+			isa = PBXGroup;
+			children = (
+				E8C26A715F104CAA3C9923A7 /* state */,
+			);
+			path = .omc;
+			sourceTree = "<group>";
+		};
 		F57C61FD7099E8A002C0A625 = {
 			isa = PBXGroup;
 			children = (
 				9A7AD897179BC4C3348928D1 /* Makro */,
 				B78F8B751FC8816D0CFBC7E1 /* Products */,
-				05BBE59AA2D8B71E2C10170F /* Pods */,
-				498E47ADD394B467D1965BC1 /* Frameworks */,
+				5E1BE169DA7D2AAC56D42C09 /* Pods */,
+				22B49AC2A9554FC628B22D4C /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -143,11 +207,11 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 76C359406432363A739394C4 /* Build configuration list for PBXNativeTarget "Makro" */;
 			buildPhases = (
-				F4080DC31349E83F5835C8FB /* [CP] Check Pods Manifest.lock */,
+				BDFEC23417851CA3D03D2231 /* [CP] Check Pods Manifest.lock */,
 				6CD5296BD50C56EAE2061F3E /* Sources */,
 				269CF20ABFBAC842C6927048 /* Resources */,
-				B5115F05F64D1C2A4315F1BE /* Frameworks */,
-				7D83E3EB0F7D489B0B88A651 /* [CP] Embed Pods Frameworks */,
+				BFC779FE7715BFCD857D678C /* Frameworks */,
+				A151FE7DA992FEB7771ECCD3 /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
 			);
@@ -198,13 +262,19 @@
 			buildActionMask = 2147483647;
 			files = (
 				745ADAA73FAD5DA0053D141F /* Assets.xcassets in Resources */,
+				E0202F6E36ED1CD4E829DF71 /* agent-replay-7195fe19-7bd2-48c0-95d0-d37876c351b4.jsonl in Resources */,
+				0CD9657B9D1DC17A09AAA750 /* idle-notif-cooldown.json in Resources */,
+				16F8CB946BF0FE980759999A /* last-tool-error-state.json in Resources */,
+				9DCB1ABABC0E2E8104DADF95 /* pre-tool-advisory-throttle.json in Resources */,
+				A6A443B32C1D67771B87516F /* pre-tool-advisory-throttle.json in Resources */,
+				FDD3FAF1AC8504644835EE17 /* subagent-tracking-state.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		7D83E3EB0F7D489B0B88A651 /* [CP] Embed Pods Frameworks */ = {
+		A151FE7DA992FEB7771ECCD3 /* [CP] Embed Pods Frameworks */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -221,7 +291,7 @@
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Makro/Pods-Makro-frameworks.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
-		F4080DC31349E83F5835C8FB /* [CP] Check Pods Manifest.lock */ = {
+		BDFEC23417851CA3D03D2231 /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -254,21 +324,23 @@
 				9680A9D36267A514B9281C89 /* APIClient.swift in Sources */,
 				82D0067DFF4CF9B075296805 /* AppDelegate.swift in Sources */,
 				08E7AC9097713671B80AEF25 /* AzureSpeechManager.swift in Sources */,
-				9B1F5D6CCBE150002B3D4E5F /* VoiceActivityDetector.swift in Sources */,
 				C6CDDA92EA8534AEEAAFCF65 /* CallView.swift in Sources */,
 				795F31AB0261DA93684F542A /* ChatView.swift in Sources */,
 				3542036E248FEB97136E3E85 /* ChatViewModel.swift in Sources */,
 				DB07A8E1A37C8EBD9ED78419 /* Config.swift in Sources */,
 				CF6DA06ADF699F440BEEE89F /* KanbanView.swift in Sources */,
 				99BB950716C1F19A97E632A6 /* KanbanViewModel.swift in Sources */,
+				F84B26217CD7CA000E196A87 /* KeychainHelper.swift in Sources */,
 				649C3CBD0C16454577837CDC /* MakroApp.swift in Sources */,
 				04CE88BE0C73102C401150DA /* Models.swift in Sources */,
 				B6B835DDF321ECDBF47E6894 /* NowPlayingManager.swift in Sources */,
 				13A63DF6D5D49C1AE27F45EC /* SessionsView.swift in Sources */,
 				4D15D15B0428A5E9654B0172 /* SessionsViewModel.swift in Sources */,
 				7FDD68202EF81E94CE31A6D6 /* SettingsView.swift in Sources */,
+				56482AAE9D6DAA69EDDAAAFE /* StartCallIntent.swift in Sources */,
 				171212789B4479A6FADC345D /* TerminalViewModel.swift in Sources */,
 				32CB6BF8B03DEEA91B213188 /* Theme.swift in Sources */,
+				C7BD761AED7781511568B0D2 /* VoiceActivityDetector.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -396,7 +468,7 @@
 		};
 		CA121894D8B46B6B5E24A589 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 90CE04779A4EBA89355EF379 /* Pods-Makro.debug.xcconfig */;
+			baseConfigurationReference = 5EDDD47F6AEEB009AF7DA914 /* Pods-Makro.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Makro/Makro.entitlements;
@@ -420,7 +492,7 @@
 		};
 		FC9D9B58664D93AB17F2570E /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = F5E6B67923EEF26C0C9C361B /* Pods-Makro.release.xcconfig */;
+			baseConfigurationReference = A0A9DEF585B2A24A89174DAF /* Pods-Makro.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Makro/Makro.entitlements;

@@ -1,4 +1,6 @@
 import Foundation
+import CryptoKit
+import Security
 
 class Config: ObservableObject {
     static let shared = Config()
@@ -30,7 +32,18 @@ class Config: ObservableObject {
     private init() {
         serverURL = UserDefaults.standard.string(forKey: Key.serverURL)
             ?? "https://47.117.13.195:39222"
-        password = UserDefaults.standard.string(forKey: Key.password) ?? ""
+        // Password lives in the Keychain (encrypted, excluded from backups),
+        // not UserDefaults. Migrate once from the legacy UserDefaults value so
+        // existing installs keep working without re-entering it.
+        if let stored = KeychainHelper.get(Key.password) {
+            password = stored
+        } else if let legacy = UserDefaults.standard.string(forKey: Key.password), !legacy.isEmpty {
+            KeychainHelper.set(legacy, for: Key.password)
+            UserDefaults.standard.removeObject(forKey: Key.password)
+            password = legacy
+        } else {
+            password = ""
+        }
         azureRegion = UserDefaults.standard.string(forKey: Key.azureRegion) ?? "eastasia"
         azureKey = UserDefaults.standard.string(forKey: Key.azureKey) ?? ""
         commitPhrases = UserDefaults.standard.string(forKey: Key.commitPhrases)
@@ -43,7 +56,11 @@ class Config: ObservableObject {
 
     func save() {
         UserDefaults.standard.set(serverURL, forKey: Key.serverURL)
-        UserDefaults.standard.set(password, forKey: Key.password)
+        if password.isEmpty {
+            KeychainHelper.remove(Key.password)
+        } else {
+            KeychainHelper.set(password, for: Key.password)
+        }
         UserDefaults.standard.set(azureRegion, forKey: Key.azureRegion)
         UserDefaults.standard.set(azureKey, forKey: Key.azureKey)
         UserDefaults.standard.set(commitPhrases, forKey: Key.commitPhrases)
@@ -124,17 +141,75 @@ class Config: ObservableObject {
         _ challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-           let serverTrust = challenge.protectionSpace.serverTrust {
-            let host = challenge.protectionSpace.host
-            let expected = URL(string: shared.serverURL)?.host ?? ""
-            if host == expected || host == "127.0.0.1" || host == "localhost" {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let serverTrust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        let host = challenge.protectionSpace.host
+        let expected = URL(string: shared.serverURL)?.host ?? ""
+        // Apply the trust override ONLY for the configured server host or
+        // loopback. Every other host gets the system default evaluation — no
+        // blanket "trust any cert" anymore.
+        guard host == expected || host == "127.0.0.1" || host == "localhost" else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        // TOFU pinning: the server uses a self-signed cert, so chain validation
+        // can't distinguish it from an attacker's cert. Instead we pin the
+        // SHA-256 of the leaf cert's public key on first connect and require a
+        // match thereafter — a MITM presenting a different key is rejected.
+        // (The very first connection is trusted; if you rotate the server
+        // certificate, call resetServerTrustPin(forHost:).)
+        if let pin = pinnedPubKeyHex(forHost: host) {
+            if let leaf = leafPubKeyHex(serverTrust), leaf == pin {
                 completionHandler(.useCredential, URLCredential(trust: serverTrust))
             } else {
                 completionHandler(.cancelAuthenticationChallenge, nil)
             }
+            return
+        }
+        if let leaf = leafPubKeyHex(serverTrust) {
+            setPinnedPubKeyHex(leaf, forHost: host)
+            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+            return
+        }
+        completionHandler(.cancelAuthenticationChallenge, nil)
+    }
+
+    // MARK: - TLS pinning (TOFU)
+
+    private static let pinDefaultsKey = "makro_tls_pin_"
+
+    /// SHA-256 (hex) of the leaf certificate's public key, or nil if it can't
+    /// be extracted.
+    private static func leafPubKeyHex(_ trust: SecTrust) -> String? {
+        guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+              let leaf = chain.first,
+              let key = SecCertificateCopyKey(leaf),
+              let keyData = SecKeyCopyExternalRepresentation(key, nil) as Data? else { return nil }
+        return SHA256.hash(data: keyData).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func pinnedPubKeyHex(forHost host: String) -> String? {
+        UserDefaults.standard.string(forKey: pinDefaultsKey + host)
+    }
+
+    private static func setPinnedPubKeyHex(_ hex: String, forHost host: String) {
+        UserDefaults.standard.set(hex, forKey: pinDefaultsKey + host)
+    }
+
+    /// Clear the pinned server cert key. Call after rotating the server's
+    /// self-signed certificate, otherwise TOFU will reject the new key as a
+    /// presumed MITM. Pass nil to clear pins for all hosts.
+    static func resetServerTrustPin(forHost host: String? = nil) {
+        if let host = host {
+            UserDefaults.standard.removeObject(forKey: pinDefaultsKey + host)
         } else {
-            completionHandler(.performDefaultHandling, nil)
+            for key in UserDefaults.standard.dictionaryRepresentation().keys
+            where key.hasPrefix(pinDefaultsKey) {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
         }
     }
 }
