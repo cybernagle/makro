@@ -46,6 +46,7 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message, opts Ge
 		textCount := 0
 		var usage Usage
 		var stopReason string
+		var activeToolID string // OpenAI only sends ID on a tool call's first fragment
 
 		for stream.Next() {
 			evt := stream.Current()
@@ -94,7 +95,16 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message, opts Ge
 			}
 
 			for _, tc := range delta.ToolCalls {
+				// OpenAI streams a tool call across many fragments: only the
+				// FIRST fragment carries tc.ID (+ name); subsequent argument
+				// fragments carry an empty ID. Track the active ID so argument
+				// deltas stay associated with the right call. (Single/sequential
+				// tool calls are fully correct; truly-parallel tool calls would
+				// need Index-based tracking — the orchestrator uses the
+				// non-streaming Complete path for tools, so this path is
+				// currently unused for tool calls.)
 				if tc.ID != "" {
+					activeToolID = tc.ID
 					select {
 					case ch <- StreamEvent{
 						Type:         EventToolCallStart,
@@ -106,10 +116,14 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message, opts Ge
 					}
 				}
 				if tc.Function.Arguments != "" {
+					id := tc.ID
+					if id == "" {
+						id = activeToolID
+					}
 					select {
 					case ch <- StreamEvent{
 						Type:           EventToolCallDelta,
-						ToolCallID:     tc.ID,
+						ToolCallID:     id,
 						ArgumentsDelta: tc.Function.Arguments,
 					}:
 					case <-ctx.Done():

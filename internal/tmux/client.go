@@ -162,7 +162,14 @@ func (c *Client) Exec(cmd string) (string, error) {
 	args = append(args, parseTmuxArgs(cmd)...)
 	out, err := exec.CommandContext(ctx, c.bin(), args...).CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("tmux %s: %w (%s)", cmd, err, strings.TrimSpace(string(out)))
+		// CombinedOutput may include pane content / user input for some tmux
+		// subcommands; truncate before surfacing in an error (which may be
+		// logged) so we never leak unbounded terminal output.
+		trimmed := strings.TrimSpace(string(out))
+		if len(trimmed) > 200 {
+			trimmed = trimmed[:200] + "..."
+		}
+		return "", fmt.Errorf("tmux %s: %w (%s)", cmd, err, trimmed)
 	}
 
 	c.parseAndSendOutput(out)
@@ -227,10 +234,23 @@ func (c *Client) parseAndSendOutput(data []byte) {
 			continue
 		}
 		c.state.Apply(n)
-		select {
-		case c.notifs <- n:
-		default:
-		}
+		c.sendNotif(n)
+	}
+}
+
+// sendNotif delivers a notification without blocking, safe against Stop()
+// closing the channel: it holds mu, so it runs either entirely before Stop
+// (running==true → safe send) or entirely after (running==false → skip).
+// Without this guard, a send racing Stop's close(c.notifs) would panic.
+func (c *Client) sendNotif(n Notification) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.running {
+		return
+	}
+	select {
+	case c.notifs <- n:
+	default:
 	}
 }
 
@@ -279,10 +299,7 @@ func (c *Client) pollSessions(ctx context.Context, knownSessions map[string]stri
 				SessionName: name,
 			}
 			c.state.Apply(n)
-			select {
-			case c.notifs <- n:
-			default:
-			}
+			c.sendNotif(n)
 		}
 
 		if c.keepAlive != nil {

@@ -159,9 +159,16 @@ func (p *AnthropicProvider) Complete(ctx context.Context, messages []Message, op
 	return result, nil
 }
 func (p *AnthropicProvider) buildParams(messages []Message, opts GenerateOptions) (anthropic.MessageNewParams, error) {
+	// MaxTokens is required by the Anthropic API and must be > 0; forwarding a
+	// zero value verbatim causes the API to reject the request. OpenAI-side
+	// guards this too (see openai.go); mirror the guard here for parity.
+	maxTokens := int64(opts.MaxTokens)
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
 	params := anthropic.MessageNewParams{
 		Model:     opts.Model,
-		MaxTokens: int64(opts.MaxTokens),
+		MaxTokens: maxTokens,
 	}
 
 	if opts.Temperature > 0 {
@@ -174,6 +181,12 @@ func (p *AnthropicProvider) buildParams(messages []Message, opts GenerateOptions
 
 	for _, msg := range messages {
 		switch msg.Role {
+		case RoleSystem:
+			// Anthropic models system content as a top-level param, not as a
+			// message in the turn list. Fold any RoleSystem entries into
+			// params.System alongside opts.SystemPrompt (the OpenAI provider
+			// handles RoleSystem inline; this keeps the two consistent).
+			params.System = append(params.System, anthropic.TextBlockParam{Text: msg.Content})
 		case RoleUser:
 			params.Messages = append(params.Messages, anthropic.NewUserMessage(
 				anthropic.NewTextBlock(msg.Content),

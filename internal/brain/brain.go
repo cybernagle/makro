@@ -35,14 +35,17 @@ type Brain struct {
 	feedback *FeedbackHandler
 	pusher   Pusher
 
-	wakeMu sync.Mutex // serialize wakes — never run two concurrently
-	stop   chan struct{}
+	wakeMu    sync.Mutex // serialize wakes — never run two concurrently
+	stop      chan struct{}
+	wg        sync.WaitGroup  // tracks in-flight runWake goroutines
+	runCtx    context.Context // cancelled by Stop; used by all runWake calls
+	runCancel context.CancelFunc
 }
 
 // NewBrain assembles a Brain from its dependencies. All must be non-nil except
 // pusher (a nil pusher = brain runs but never pushes; useful for tests/dry runs).
 func NewBrain(cfg config.BrainConfig, client *Client, proposer *Proposer, inbox *InboxStore, pusher Pusher) *Brain {
-	return &Brain{
+	b := &Brain{
 		cfg:      cfg,
 		client:   client,
 		reader:   NewReader(client),
@@ -52,6 +55,21 @@ func NewBrain(cfg config.BrainConfig, client *Client, proposer *Proposer, inbox 
 		pusher:   pusher,
 		stop:     make(chan struct{}),
 	}
+	// runCtx is cancelled by Stop so in-flight runWake goroutines exit promptly.
+	// It deliberately does NOT inherit a caller ctx: a request-scoped ctx would
+	// cancel every memory read inside runWake and yield empty snapshots.
+	b.runCtx, b.runCancel = context.WithCancel(context.Background())
+	return b
+}
+
+// goWake launches one runWake on the brain-scoped runCtx, tracked on wg so Stop
+// can wait for it. runWake's internal TryLock drops concurrent wakes.
+func (b *Brain) goWake(trigger string) {
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		b.runWake(b.runCtx, trigger)
+	}()
 }
 
 // Feedback exposes the feedback handler for /inbox commands to call.
@@ -84,36 +102,34 @@ func (b *Brain) Run(ctx context.Context) {
 			log.Printf("[brain] wake loop stopped")
 			return
 		case <-ticker.C:
-			go b.runWake(ctx, "cron")
+			b.goWake("cron")
 		}
 	}
 }
 
-// Stop signals the wake loop to exit. Safe to call multiple times.
+// Stop signals the wake loop to exit and waits for any in-flight wake to
+// finish. Safe to call multiple times.
 func (b *Brain) Stop() {
 	select {
 	case <-b.stop:
 	default:
 		close(b.stop)
 	}
+	// Cancel in-flight wakes (their provider/memory calls honor ctx) and join
+	// them so a process exit can't truncate a proposal write mid-flight.
+	if b.runCancel != nil {
+		b.runCancel()
+	}
+	b.wg.Wait()
 }
 
 // WakeNow triggers an immediate wake in a goroutine and returns instantly. Used
 // by the /brain wake command so the chat reply doesn't block on the LLM call
 // (which can take 10-60s). The proposal, if any, arrives as a push later.
 func (b *Brain) WakeNow(_ context.Context) {
-	// Deliberately do NOT inherit caller ctx: the /brain wake command runs
-	// under a request-scoped ctx cancelled when the command goroutine returns.
-	// Inheriting it cancels every memory read in runWake -> empty snapshot.
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		<-b.stop
-		cancel()
-	}()
-	go func() {
-		defer cancel()
-		b.runWake(ctx, "manual")
-	}()
+	// Runs on b.runCtx (cancelled by Stop) rather than a per-call background
+	// ctx + watcher goroutine. goWake tracks it on wg so Stop can join it.
+	b.goWake("manual")
 }
 
 // runWake is one full brain cycle. Serialized by wakeMu so cron + manual can't
@@ -280,8 +296,13 @@ func (b *Brain) newCronTicker(hhmm string) *time.Ticker {
 	// first tick. Simplest: just use 24h and accept up to 24h drift is wrong —
 	// instead we fire at the computed delay then swap to 24h via a reset goroutine.
 	go func() {
-		<-t.C
-		t.Reset(24 * time.Hour)
+		select {
+		case <-t.C:
+			t.Reset(24 * time.Hour)
+		case <-b.stop:
+			// Run is exiting (its defer will ticker.Stop) — exit so this
+			// goroutine doesn't block forever on a never-firing channel.
+		}
 	}()
 	return t
 }

@@ -303,6 +303,15 @@ func (o *Orchestrator) CrossAgentRelay(ctx context.Context, sourceSession, targe
 }
 
 func (o *Orchestrator) ProcessInput(ctx context.Context, input string) (<-chan OrchestratorEvent, error) {
+	// Supersede any in-flight request: a new input cancels the previous turn
+	// (single-user model). This also guarantees o.cancelFn always points at the
+	// latest request, so Cancel() acts on the right context.
+	o.cancelMu.Lock()
+	if o.cancelFn != nil {
+		o.cancelFn()
+	}
+	o.cancelMu.Unlock()
+
 	// Create a cancellable context for this request so Cancel() can stop it.
 	ctx, cancel := context.WithCancel(ctx)
 	o.cancelMu.Lock()
@@ -363,11 +372,6 @@ func (o *Orchestrator) ProcessInput(ctx context.Context, input string) (<-chan O
 	go func() {
 		defer close(ch)
 		defer cancel()
-		defer func() {
-			o.cancelMu.Lock()
-			o.cancelFn = nil
-			o.cancelMu.Unlock()
-		}()
 		o.handleLLM(ctx, ch, input)
 	}()
 

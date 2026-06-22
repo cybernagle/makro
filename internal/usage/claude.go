@@ -111,6 +111,15 @@ func (s *Store) ingestFile(ctx context.Context, claudeID, transcriptPath string,
 	_ = s.db.QueryRowContext(ctx,
 		`SELECT byte_offset FROM claude_ingest_offset WHERE claude_session_id=?`, claudeID).Scan(&offset)
 	if offset > 0 {
+		// If the transcript was truncated/rotated below the stored offset
+		// (Claude rotates transcripts), seeking past EOF yields an empty read
+		// and we'd be stuck forever — every later tick re-reads nothing and
+		// the offset never advances. Detect the shrink and re-ingest from 0.
+		if fi, err := f.Stat(); err == nil && fi.Size() < offset {
+			log.Printf("[usage] transcript %s shrunk below stored offset (%d < %d), re-ingesting from start",
+				claudeID, fi.Size(), offset)
+			offset = 0
+		}
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
 			return
 		}

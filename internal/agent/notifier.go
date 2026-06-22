@@ -40,6 +40,7 @@ type AgentNotifier struct {
 	listener        net.Listener
 	done            chan struct{}
 	stopOnce        sync.Once
+	wg              sync.WaitGroup // tracks in-flight handleConn goroutines
 	onChat          func(role, content string)
 	onSession       func(session, content string) error
 	onAgentStop     func(session, status string)
@@ -171,6 +172,13 @@ func (n *AgentNotifier) Start(ctx context.Context) error {
 	}
 	n.listener = ln
 
+	// Restrict the socket to the owner only. The default umask often leaves a
+	// Unix listening socket group/world-accessible, letting any local user
+	// connect and inject hook messages (fake agent_stop / captured prompts).
+	if err := os.Chmod(n.sockPath, 0o600); err != nil {
+		log.Printf("[notifier] chmod socket %s: %v", n.sockPath, err)
+	}
+
 	go n.acceptLoop(ctx)
 	return nil
 }
@@ -183,6 +191,9 @@ func (n *AgentNotifier) Stop() {
 		if n.listener != nil {
 			n.listener.Close()
 		}
+		// Wait for in-flight handleConn goroutines (and their callbacks, e.g.
+		// APNs pushes) to finish so a process exit can't truncate them.
+		n.wg.Wait()
 		os.Remove(n.sockPath)
 	})
 }
@@ -266,7 +277,11 @@ func (n *AgentNotifier) acceptLoop(ctx context.Context) {
 			}
 		}
 		backoff = 100 * time.Millisecond
-		go n.handleConn(conn)
+		n.wg.Add(1)
+		go func() {
+			defer n.wg.Done()
+			n.handleConn(conn)
+		}()
 	}
 }
 
