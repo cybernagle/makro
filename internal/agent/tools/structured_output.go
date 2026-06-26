@@ -28,6 +28,12 @@ var (
 	userMsgRe      = regexp.MustCompile(`^>\s+(.+)`)
 	assistantMsgRe = regexp.MustCompile(`⏺\s+(.+)`)
 	selectionRe    = regexp.MustCompile(`❯\s*\d+\.\s*(.+)`)
+	// trustDialogRe matches Claude Code's startup trust/onboarding screen by
+	// distinctive phrasing. Rendering varies by version (sometimes a numbered
+	// ❯ selector caught by selectionRe above, sometimes a plain selector), so
+	// match on words rather than cursor glyphs. Phrases are kept specific to
+	// avoid false-positives on ordinary agent output.
+	trustDialogRe = regexp.MustCompile(`(?i)(trust the files in this folder|yes, i trust the files|leave and come back|do you trust the files)`)
 )
 
 // ReadStructuredOutput captures and parses the full pane output from a session.
@@ -90,6 +96,41 @@ func detectStatus(lines []string) string {
 		}
 	}
 	return "working"
+}
+
+// agentReadyToSend reports whether the coding agent in a pane is at its input
+// prompt (ready to receive a task) versus showing an interactive Yes/No
+// selection (startup trust dialog, in-turn permission prompt, model picker, …).
+//
+// Why this exists alongside checkAgentAlive: checkAgentAlive only confirms the
+// agent PROCESS exists. Right after `claude` launches — before its input box
+// is ready, or while the trust dialog is still up — the process is alive but
+// the pane is showing a selection. Sending a task then answers the selection
+// instead of becoming a prompt (the "raw natural language into a Yes/No" bug),
+// so the caller refuses when this returns false.
+//
+// Discriminator: any numbered "❯ N." selection (selectionRe) or trust-screen
+// phrasing (trustDialogRe) in the recent pane tail means "asking", not "ready".
+// We only need to detect the negative — the absence of both means ready. A bare
+// "❯ " input cursor has no digit and no trust phrase, so it correctly reads as
+// ready. If the pane can't be read (just created, nothing rendered yet), we do
+// not block — agent-alive already passed — and let the send through.
+func agentReadyToSend(tc TmuxClient, sessionName string) (bool, string) {
+	raw, err := tc.Exec(tmux.CapturePaneRangeCmd(sessionName, 40, 0))
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return true, ""
+	}
+	lines := strings.Split(raw, "\n")
+	start := len(lines) - 30
+	if start < 0 {
+		start = 0
+	}
+	for _, line := range lines[start:] {
+		if selectionRe.MatchString(line) || trustDialogRe.MatchString(line) {
+			return false, "agent is showing a Yes/No selection (trust/permission); resolve it in that pane, then resend"
+		}
+	}
+	return true, ""
 }
 
 func extractLastUserMessage(lines []string) string {

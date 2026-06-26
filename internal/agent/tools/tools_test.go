@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/naglezhang/makro/internal/tmux"
 	"github.com/naglezhang/makro/internal/util"
@@ -55,6 +56,16 @@ func (m *mockTmuxClient) lastCmd() string {
 		return ""
 	}
 	return m.executed[len(m.executed)-1]
+}
+
+// executedCmds returns a copy of every tmux command the client ran, for
+// asserting that a code path did (or did not) emit a given command.
+func (m *mockTmuxClient) executedCmds() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.executed))
+	copy(out, m.executed)
+	return out
 }
 
 func TestListSessionsTool(t *testing.T) {
@@ -124,7 +135,7 @@ func TestSendToSessionTool(t *testing.T) {
 	mc := newMockTmuxClient()
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "target")] = "claude"
 
-	tool := NewSendToSessionTool(mc)
+	tool := NewSendToSessionTool(mc, nil)
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"name":    "target",
 		"message": "echo hello",
@@ -133,9 +144,184 @@ func TestSendToSessionTool(t *testing.T) {
 	assert.Contains(t, result, "Sent to")
 }
 
+// TestSendToSessionRefusesBareShell reproduces the bug where send_to_session
+// dumped natural-language text into a freshly-created session whose pane was
+// still a bare shell (no coding agent running). The tool must refuse AND must
+// not emit any send-keys — otherwise the raw text lands in the shell.
+func TestSendToSessionRefusesBareShell(t *testing.T) {
+	mc := newMockTmuxClient()
+	// Foreground process is a shell: agent never started, or has exited.
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "fresh")] = "zsh"
+
+	tool := NewSendToSessionTool(mc, nil)
+	_, err := tool.Execute(context.Background(), map[string]any{
+		"name":    "fresh",
+		"message": "please refactor the auth module and add tests",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no coding agent")
+
+	// The decisive assertion: nothing was sent to the pane, so the shell never
+	// receives the natural-language text.
+	for _, c := range mc.executedCmds() {
+		assert.NotContains(t, c, "send-keys", "send-keys must not fire when no agent is alive")
+	}
+}
+
+// TestSendToSessionNotFound verifies the session-missing case is still refused
+// (checkAgentAlive surfaces it via the pane-lookup error).
+func TestSendToSessionNotFound(t *testing.T) {
+	mc := newMockTmuxClient()
+	mc.errors[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "ghost")] = fmt.Errorf("can't find session: ghost")
+
+	tool := NewSendToSessionTool(mc, nil)
+	_, err := tool.Execute(context.Background(), map[string]any{
+		"name":    "ghost",
+		"message": "hi",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+// TestSendToSessionReadyGate covers the readiness check that prevents sending a
+// task while claude is showing a Yes/No selection (startup trust dialog or
+// in-turn permission) — the screen where task text would otherwise be eaten as
+// an answer instead of becoming a prompt.
+func TestSendToSessionReadyGate(t *testing.T) {
+	tests := []struct {
+		name    string
+		paneCmd string // #{pane_current_command}: the agent process
+		pane    string // captured pane tail (empty = capture returns nothing)
+		wantErr bool
+		wantSub string
+	}{
+		{
+			name:    "ready_bare_input_prompt",
+			paneCmd: "claude",
+			pane:    "✻ Welcome to Claude Code!\n\n❯ ",
+			wantErr: false,
+			wantSub: "Sent to",
+		},
+		{
+			name:    "asking_numbered_permission_prompt",
+			paneCmd: "claude",
+			pane:    "Do you want to proceed?\n❯ 1. Yes\n❯ 2. No",
+			wantErr: true,
+			wantSub: "Yes/No",
+		},
+		{
+			name:    "asking_startup_trust_dialog",
+			paneCmd: "claude",
+			pane:    "  Yes, I trust the files in this folder and want to proceed\n❯ No, I will leave and come back later",
+			wantErr: true,
+			wantSub: "Yes/No",
+		},
+		{
+			name:    "pane_unreadable_falls_back_to_send",
+			paneCmd: "claude",
+			pane:    "",
+			wantErr: false,
+			wantSub: "Sent to",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mc := newMockTmuxClient()
+			mc.results[tmux.PaneCurrentCommandCmd("s")] = tt.paneCmd
+			if tt.pane != "" {
+				mc.results[tmux.CapturePaneRangeCmd("s", 40, 0)] = tt.pane
+			}
+			tool := NewSendToSessionTool(mc, nil)
+			res, err := tool.Execute(context.Background(), map[string]any{
+				"name": "s", "message": "do the thing",
+			})
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantSub)
+				// And nothing was sent into the dialog.
+				for _, c := range mc.executedCmds() {
+					assert.NotContains(t, c, "send-keys", "send-keys must not fire while a Yes/No selection is shown")
+				}
+				return
+			}
+			require.NoError(t, err)
+			assert.Contains(t, res, tt.wantSub)
+		})
+	}
+}
+
+// TestSendTextShortIsAtomic locks in the race fix: a short message must type its
+// text AND press Enter in a single tmux invocation, not two. Two calls can drop
+// the Enter and leave the text sitting in the agent's input box unsubmitted.
+func TestSendTextShortIsAtomic(t *testing.T) {
+	mc := newMockTmuxClient()
+	require.NoError(t, sendText(mc, "s", "hi"))
+	cmds := mc.executedCmds()
+	require.Len(t, cmds, 1, "short text + Enter must be one atomic tmux call, not two")
+	assert.Contains(t, cmds[0], "hi")
+	assert.Contains(t, cmds[0], "Enter")
+	assert.Contains(t, cmds[0], ";")
+}
+
+func TestConfirmAgentStarted(t *testing.T) {
+	n := newMockNotifier()
+	before := n.Snapshot("s")
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		n.Notify("agent_start")
+	}()
+	assert.True(t, confirmAgentStarted(context.Background(), n, "s", before, time.Second))
+}
+
+func TestConfirmAgentStartedTimeout(t *testing.T) {
+	n := newMockNotifier()
+	before := n.Snapshot("s")
+	assert.False(t, confirmAgentStarted(context.Background(), n, "s", before, 50*time.Millisecond))
+}
+
+// TestSendToSessionConfirmsSubmitted: a normal send where the agent starts the
+// turn (UserPromptSubmit hook fires) returns success.
+func TestSendToSessionConfirmsSubmitted(t *testing.T) {
+	mc := newMockTmuxClient()
+	mc.results[tmux.PaneCurrentCommandCmd("s")] = "claude"
+	mc.results[tmux.CapturePaneRangeCmd("s", 40, 0)] = "✻ Welcome to Claude Code!\n\n❯ "
+	n := newMockNotifier()
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		n.Notify("agent_start")
+	}()
+	tool := NewSendToSessionTool(mc, n)
+	res, err := tool.Execute(context.Background(), map[string]any{
+		"name": "s", "message": "do the thing",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, res, "Sent to")
+}
+
+// TestSendToSessionDetectsUnsubmittedHang: text is delivered but the agent never
+// starts a turn (Enter lost / prompt not submitted). The tool must fail fast
+// instead of letting the caller hang on wait_until_idle for the full timeout.
+func TestSendToSessionDetectsUnsubmittedHang(t *testing.T) {
+	orig := submitConfirmGrace
+	submitConfirmGrace = 60 * time.Millisecond
+	defer func() { submitConfirmGrace = orig }()
+
+	mc := newMockTmuxClient()
+	mc.results[tmux.PaneCurrentCommandCmd("s")] = "claude"
+	mc.results[tmux.CapturePaneRangeCmd("s", 40, 0)] = "✻ Welcome to Claude Code!\n\n❯ "
+	n := newMockNotifier() // never fires agent_start
+
+	tool := NewSendToSessionTool(mc, n)
+	_, err := tool.Execute(context.Background(), map[string]any{
+		"name": "s", "message": "do the thing",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not start")
+}
+
 func TestSendToSessionMissingArgs(t *testing.T) {
 	mc := newMockTmuxClient()
-	tool := NewSendToSessionTool(mc)
+	tool := NewSendToSessionTool(mc, nil)
 	_, err := tool.Execute(context.Background(), map[string]any{"name": "x"})
 	assert.Error(t, err)
 }

@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/naglezhang/makro/internal/tmux"
 	"github.com/naglezhang/makro/internal/util"
 )
 
-func NewSendToSessionTool(tc TmuxClient) Tool {
+func NewSendToSessionTool(tc TmuxClient, notifier Notifier) Tool {
 	return Tool{
 		Name:        "send_to_session",
 		Description: "Send a command or message to a tmux session. Only works when a known coding agent (claude, copilot, codex) is alive. Destructive shell commands (rm -rf, curl|sh, etc.) are blocked. Follow with wait_until_idle to handle any confirmation prompts.",
@@ -25,9 +26,22 @@ func NewSendToSessionTool(tc TmuxClient) Tool {
 				return "", fmt.Errorf("name and message are required")
 			}
 
-			// Check session exists.
-			if !IsSessionAlive(tc, name) {
-				return "", fmt.Errorf("session %q not found", name)
+			// Require a known coding agent to actually be running in the pane.
+			// Without this gate the tool's own contract ("only works when a
+			// known coding agent is alive") is a lie: sending into a
+			// freshly-created session whose pane is still a bare shell dumps
+			// raw natural-language text into the shell. checkAgentAlive also
+			// covers the session-not-found case (the pane lookup errors).
+			status := checkAgentAlive(tc, name)
+			if !status.Alive {
+				return "", fmt.Errorf("cannot send to %q: no coding agent (claude/copilot/codex) is running (%s); start the agent in that pane first", name, status.Reason)
+			}
+
+			// Don't send while the agent is showing an interactive Yes/No
+			// selection (startup trust dialog or in-turn permission). The task
+			// text would answer that selection instead of becoming a prompt.
+			if ready, reason := agentReadyToSend(tc, name); !ready {
+				return "", fmt.Errorf("cannot send to %q: %s", name, reason)
 			}
 
 			// Blocklist check.
@@ -35,12 +49,57 @@ func NewSendToSessionTool(tc TmuxClient) Tool {
 				return "", fmt.Errorf("command blocked by safety policy: matched pattern %q", pattern)
 			}
 
+			// Snapshot notification state BEFORE sending so the confirmation
+			// below only reacts to this send.
+			before := uint64(0)
+			if notifier != nil {
+				before = notifier.Snapshot(name)
+			}
+
 			if err := sendText(tc, name, message); err != nil {
 				return "", err
 			}
 
+			// Confirm the agent actually picked up the prompt (UserPromptSubmit
+			// hook → agent_start notification). Catches the failure mode where
+			// text reaches the input box but is never submitted: without this
+			// the orchestrator would wait_until_idle for the full timeout on a
+			// turn that never starts. Surface an error instead of hanging.
+			if !confirmAgentStarted(ctx, notifier, name, before, submitConfirmGrace) {
+				return "", fmt.Errorf("cannot send to %q: text was delivered but the agent did not start a turn within %s — the prompt may not have been submitted; check the pane and resend", name, submitConfirmGrace)
+			}
+
 			return fmt.Sprintf("Sent to %q: %s", name, util.Truncate(message, 50)), nil
 		},
+	}
+}
+
+// submitConfirmGrace is how long send_to_session waits after sending for the
+// agent to begin the turn (UserPromptSubmit hook → agent_start). If no reaction
+// arrives in this window the prompt likely never submitted, and we return an
+// error instead of letting the caller hang on wait_until_idle for the full
+// timeout. Overridable in tests to keep the "never started" path fast.
+var submitConfirmGrace = 10 * time.Second
+
+// confirmAgentStarted reports whether the agent reacted to a just-sent prompt
+// within grace — signalled by any hook notification newer than `before`
+// (typically agent_start from Claude Code's UserPromptSubmit hook). It detects
+// text that reached the input box but was never submitted, so the caller can
+// fail fast instead of hanging on the idle wait. A nil notifier (e.g. manual
+// @mention mode without hooks) short-circuits to true.
+func confirmAgentStarted(ctx context.Context, notifier Notifier, session string, before uint64, grace time.Duration) bool {
+	if notifier == nil {
+		return true
+	}
+	ch, cancel := notifier.WaitAfter(session, before)
+	defer cancel()
+	select {
+	case <-ch:
+		return true
+	case <-time.After(grace):
+		return false
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -119,12 +178,6 @@ func DirectSend(tc TmuxClient, sessionName, text string) error {
 		return fmt.Errorf("session %q not found", sessionName)
 	}
 	return sendText(tc, sessionName, text)
-}
-
-// IsSessionAlive checks if a session exists. Exported for orchestrator use.
-func IsSessionAlive(tc TmuxClient, sessionName string) bool {
-	_, err := tc.Exec(tmux.HasSessionCmd(sessionName))
-	return err == nil
 }
 
 // Ensure unused import is not needed.
