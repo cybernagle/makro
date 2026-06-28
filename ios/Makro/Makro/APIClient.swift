@@ -143,6 +143,31 @@ final class APIClient: NSObject {
         try checkAuth(response)
     }
 
+    // MARK: - Artifacts
+
+    /// Lists HTML/video artifacts discovered under a session's working directory.
+    func fetchArtifacts(session: String) async throws -> [Artifact] {
+        let encoded = session.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? session
+        let url = URL(string: "\(config.httpBaseURL.absoluteString)/api/artifacts?session=\(encoded)")!
+        var request = authedRequest(url: url)
+        let (data, response) = try await urlSession.data(for: request)
+        try checkAuth(response)
+        return try JSONDecoder().decode([Artifact].self, from: data)
+    }
+
+    /// Downloads the raw bytes of an artifact (HTML content for local WKWebView
+    /// loading, or a video for local AVPlayer playback). Loading locally avoids
+    /// the self-signed TLS problem that WKWebView/AVPlayer hit on remote fetch.
+    func fetchArtifactContent(session: String, path: String) async throws -> Data {
+        let encSession = session.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? session
+        let encPath = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+        let url = URL(string: "\(config.httpBaseURL.absoluteString)/api/artifact?session=\(encSession)&path=\(encPath)")!
+        var request = authedRequest(url: url)
+        let (data, response) = try await urlSession.data(for: request)
+        try checkAuth(response)
+        return data
+    }
+
     private func checkAuth(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else { return }
         if http.statusCode == 401 {

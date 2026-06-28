@@ -21,6 +21,10 @@ struct MakroApp: App {
                 KanbanView()
                     .tabItem { Label("Tasks", systemImage: "checklist") }
                     .tag(2)
+
+                ArtifactsView()
+                    .tabItem { Label("Artifacts", systemImage: "doc.richtext") }
+                    .tag(3)
             }
             .onReceive(NotificationCenter.default.publisher(for: .makroOpenSession)) { note in
                 // Push tap → jump to the Terminal tab. The tapped session name is
@@ -33,6 +37,12 @@ struct MakroApp: App {
                         userInfo: ["session": session]
                     )
                 }
+            }
+            .onReceive(CallRouter.shared.$pendingStart) { wantsCall in
+                // Siri/Shortcuts "Start a Makro call" → make sure the Chat
+                // tab (which owns CallView presentation) is active before
+                // ChatView reacts.
+                if wantsCall { selectedTab = 0 }
             }
         }
         .onChange(of: scenePhase) { newPhase in
@@ -59,4 +69,8 @@ extension Notification.Name {
     static let makroReconnect = Notification.Name("makroReconnect")
     static let makroOpenSession = Notification.Name("makroOpenSession")
     static let makroSelectSession = Notification.Name("makroSelectSession")
+    /// Posted by `CallRouter.requestEnd()` so `ChatViewModel` can stop STT /
+    /// TTS / audio at the model layer even when `CallView` isn't presenting
+    /// or its `.onReceive` is suspended (app backgrounded, etc.).
+    static let makroEndCall = Notification.Name("makroEndCall")
 }
