@@ -6,24 +6,20 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/naglezhang/makro/internal/tmux"
 )
 
 var tmuxBin string
 var tmuxOnce sync.Once
 
+// getTmuxBin resolves the tmux binary. Delegates to tmux.FindTmuxBin so the GUI
+// shares one lookup implementation with *tmux.Client instead of maintaining a
+// second copy. The sync.Once memoization is kept because FindTmuxBin does disk
+// stats on every call and the GUI hits it on the hot capture/render path.
 func getTmuxBin() string {
 	tmuxOnce.Do(func() {
-		if p, err := exec.LookPath("tmux"); err == nil {
-			tmuxBin = p
-			return
-		}
-		for _, p := range []string{"/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"} {
-			if _, err := os.Stat(p); err == nil {
-				tmuxBin = p
-				return
-			}
-		}
-		tmuxBin = "tmux"
+		tmuxBin = tmux.FindTmuxBin()
 	})
 	return tmuxBin
 }
@@ -37,11 +33,11 @@ type Session struct {
 	Unread  int    `json:"unread,omitempty"`
 }
 
+// tmuxArgs builds command-line args for the user's default tmux socket. Delegates
+// to tmux.DefaultArgs so the socket convention (no -S flag → daily server) lives
+// in one place, shared with *tmux.Client's socketPath == "" branch.
 func tmuxArgs(extra ...string) []string {
-	// Use the user's default tmux socket (no -S flag) so makro integrates with
-	// their daily tmux server rather than running an isolated one. The user
-	// expects to see and manage their daily sessions through makro.
-	return extra
+	return tmux.DefaultArgs(extra...)
 }
 
 // tmuxSocketPath is kept for snapshot/recovery to detect if tmux has crashed.

@@ -61,6 +61,10 @@ type AppModel struct {
 type tmuxClient interface {
 	Exec(cmd string) (string, error)
 	State() *tmux.StateMirror
+	// HasSession satisfies tools.TmuxClient so this interface can be passed to
+	// tools that need only existence checks (wait_until_idle, etc.). State() is
+	// kept because the TUI viewer itself enumerates sessions to render.
+	HasSession(name string) bool
 }
 
 func NewAppModel(orch *agent.Orchestrator, tc tmuxClient, notifier tools.Notifier, assessor tools.Assessor) AppModel {

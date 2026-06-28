@@ -2,8 +2,6 @@ package agent
 
 import (
 	"sync"
-
-	"github.com/naglezhang/makro/internal/tmux"
 )
 
 // mockTmuxClient implements tools.TmuxClient for agent package tests.
@@ -12,15 +10,14 @@ type mockTmuxClient struct {
 	executed []string
 	results  map[string]string
 	errors   map[string]error
-	state    *tmux.StateMirror
+	sessions map[string]bool // names reported as existing by HasSession
 }
 
 func newMockTmuxClient() *mockTmuxClient {
-	sm := tmux.NewStateMirror()
 	return &mockTmuxClient{
-		results: make(map[string]string),
-		errors:  make(map[string]error),
-		state:   sm,
+		results:  make(map[string]string),
+		errors:   make(map[string]error),
+		sessions: make(map[string]bool),
 	}
 }
 
@@ -37,8 +34,10 @@ func (m *mockTmuxClient) Exec(cmd string) (string, error) {
 	return "", nil
 }
 
-func (m *mockTmuxClient) State() *tmux.StateMirror {
-	return m.state
+func (m *mockTmuxClient) HasSession(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions[name]
 }
 
 func (m *mockTmuxClient) lastCmd() string {

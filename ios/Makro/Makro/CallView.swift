@@ -30,6 +30,13 @@ struct CallView: View {
         .preferredColorScheme(.dark)
         .onAppear { vm.startCall() }
         .onDisappear { vm.endCall() }
+        .onReceive(CallRouter.shared.$pendingEnd) { wantsEnd in
+            // Siri/Shortcuts "hang up" → dismiss; onDisappear ends the call
+            // (stops STT/TTS, clears Now Playing).
+            guard wantsEnd else { return }
+            CallRouter.shared.pendingEnd = false
+            dismiss()
+        }
         .onChange(of: phase) { newPhase in
             // Keep the lock-screen card in sync with the call phase.
             if vm.isMuted {

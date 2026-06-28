@@ -11,6 +11,27 @@ import (
 	"github.com/naglezhang/makro/internal/util"
 )
 
+// validateSendTarget runs the pre-send gates shared by every autonomous send
+// path (send_to_session, relay_message, restore_context): the agent must be
+// alive and not showing a Yes/No dialog. It returns the detected agent name
+// (e.g. "claude") so the caller can wait for a turn-start signal only for
+// agents whose hooks can emit one.
+//
+// The pane-prompt fallback (paneEndsAtAgentPrompt) rescues the case where
+// checkAgentAlive's process-tree scan false-negatives because the agent PID is
+// invisible to ps (macOS SIP, nvm/asdf/launchd wrappers): if the pane shows the
+// agent at its input prompt, trust the pane over the process scan.
+func validateSendTarget(tc TmuxClient, session string) (string, error) {
+	status := checkAgentAlive(tc, session)
+	if !status.Alive && !paneEndsAtAgentPrompt(tc, session) {
+		return "", fmt.Errorf("cannot send to %q: no coding agent (claude/copilot/codex) is running (%s); start the agent in that pane first", session, status.Reason)
+	}
+	if ready, reason := agentReadyToSend(tc, session); !ready {
+		return status.Agent, fmt.Errorf("cannot send to %q: %s", session, reason)
+	}
+	return status.Agent, nil
+}
+
 func NewSendToSessionTool(tc TmuxClient, notifier Notifier) Tool {
 	return Tool{
 		Name:        "send_to_session",
@@ -26,22 +47,13 @@ func NewSendToSessionTool(tc TmuxClient, notifier Notifier) Tool {
 				return "", fmt.Errorf("name and message are required")
 			}
 
-			// Require a known coding agent to actually be running in the pane.
-			// Without this gate the tool's own contract ("only works when a
-			// known coding agent is alive") is a lie: sending into a
-			// freshly-created session whose pane is still a bare shell dumps
-			// raw natural-language text into the shell. checkAgentAlive also
-			// covers the session-not-found case (the pane lookup errors).
-			status := checkAgentAlive(tc, name)
-			if !status.Alive {
-				return "", fmt.Errorf("cannot send to %q: no coding agent (claude/copilot/codex) is running (%s); start the agent in that pane first", name, status.Reason)
-			}
-
-			// Don't send while the agent is showing an interactive Yes/No
-			// selection (startup trust dialog or in-turn permission). The task
-			// text would answer that selection instead of becoming a prompt.
-			if ready, reason := agentReadyToSend(tc, name); !ready {
-				return "", fmt.Errorf("cannot send to %q: %s", name, reason)
+			// Pre-send gates: agent alive (or at its input prompt) and not
+			// showing a Yes/No dialog. Shared with relay_message and
+			// restore_context via validateSendTarget so every autonomous send
+			// path gets the same protection.
+			agent, err := validateSendTarget(tc, name)
+			if err != nil {
+				return "", err
 			}
 
 			// Blocklist check.
@@ -60,13 +72,12 @@ func NewSendToSessionTool(tc TmuxClient, notifier Notifier) Tool {
 				return "", err
 			}
 
-			// Confirm the agent actually picked up the prompt (UserPromptSubmit
-			// hook → agent_start notification). Catches the failure mode where
-			// text reaches the input box but is never submitted: without this
-			// the orchestrator would wait_until_idle for the full timeout on a
-			// turn that never starts. Surface an error instead of hanging.
-			if !confirmAgentStarted(ctx, notifier, name, before, submitConfirmGrace) {
-				return "", fmt.Errorf("cannot send to %q: text was delivered but the agent did not start a turn within %s — the prompt may not have been submitted; check the pane and resend", name, submitConfirmGrace)
+			// Confirm the agent picked up the prompt — but only for agents we
+			// can observe. Claude Code's UserPromptSubmit hook feeds
+			// agent_start; copilot/codex have no such hook, so waiting would
+			// always time out and falsely report failure for them.
+			if agent == "claude" && !confirmAgentStarted(ctx, notifier, name, before, submitConfirmGrace) {
+				return "", fmt.Errorf("cannot send to %q: text was delivered but claude did not start a turn within %s — the prompt may not have been submitted; check the pane and resend", name, submitConfirmGrace)
 			}
 
 			return fmt.Sprintf("Sent to %q: %s", name, util.Truncate(message, 50)), nil
@@ -93,10 +104,15 @@ func confirmAgentStarted(ctx context.Context, notifier Notifier, session string,
 	}
 	ch, cancel := notifier.WaitAfter(session, before)
 	defer cancel()
+	// NewTimer (+ Stop) rather than time.After: time.After's timer is not
+	// collected until it fires, so a burst of sends would leave one leaked
+	// timer per send on the happy path for the whole grace window.
+	t := time.NewTimer(grace)
+	defer t.Stop()
 	select {
 	case <-ch:
 		return true
-	case <-time.After(grace):
+	case <-t.C:
 		return false
 	case <-ctx.Done():
 		return false

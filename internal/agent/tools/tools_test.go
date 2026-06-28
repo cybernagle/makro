@@ -20,15 +20,14 @@ type mockTmuxClient struct {
 	executed []string
 	results  map[string]string
 	errors   map[string]error
-	state    *tmux.StateMirror
+	sessions map[string]bool // session names reported as existing by HasSession
 }
 
 func newMockTmuxClient() *mockTmuxClient {
-	sm := tmux.NewStateMirror()
 	return &mockTmuxClient{
-		results: make(map[string]string),
-		errors:  make(map[string]error),
-		state:   sm,
+		results:  make(map[string]string),
+		errors:   make(map[string]error),
+		sessions: make(map[string]bool),
 	}
 }
 
@@ -45,8 +44,10 @@ func (m *mockTmuxClient) Exec(cmd string) (string, error) {
 	return "", nil
 }
 
-func (m *mockTmuxClient) State() *tmux.StateMirror {
-	return m.state
+func (m *mockTmuxClient) HasSession(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessions[name]
 }
 
 func (m *mockTmuxClient) lastCmd() string {
@@ -111,7 +112,7 @@ func TestCreateSessionMissingName(t *testing.T) {
 
 func TestSwitchSessionTool(t *testing.T) {
 	mc := newMockTmuxClient()
-	mc.state.Apply(tmux.Notification{Type: tmux.NotifSessionChanged, SessionID: "$0", SessionName: "target"})
+	mc.sessions["target"] = true
 
 	tool := NewSwitchSessionTool(mc)
 	result, err := tool.Execute(context.Background(), map[string]any{
@@ -217,6 +218,15 @@ func TestSendToSessionReadyGate(t *testing.T) {
 			wantSub: "Yes/No",
 		},
 		{
+			name:    "stale_selection_above_bare_prompt_still_ready",
+			paneCmd: "claude",
+			// A previously-answered permission prompt lingers in scrollback,
+			// but the agent is back at its bare input prompt ⇒ ready.
+			pane:    "❯ 1. Yes\n❯ 2. No\n\nagent continued working here\n❯ ",
+			wantErr: false,
+			wantSub: "Sent to",
+		},
+		{
 			name:    "pane_unreadable_falls_back_to_send",
 			paneCmd: "claude",
 			pane:    "",
@@ -229,7 +239,7 @@ func TestSendToSessionReadyGate(t *testing.T) {
 			mc := newMockTmuxClient()
 			mc.results[tmux.PaneCurrentCommandCmd("s")] = tt.paneCmd
 			if tt.pane != "" {
-				mc.results[tmux.CapturePaneRangeCmd("s", 40, 0)] = tt.pane
+				mc.results[tmux.CapturePaneRangeCmd("s", 30, 0)] = tt.pane
 			}
 			tool := NewSendToSessionTool(mc, nil)
 			res, err := tool.Execute(context.Background(), map[string]any{
@@ -284,7 +294,7 @@ func TestConfirmAgentStartedTimeout(t *testing.T) {
 func TestSendToSessionConfirmsSubmitted(t *testing.T) {
 	mc := newMockTmuxClient()
 	mc.results[tmux.PaneCurrentCommandCmd("s")] = "claude"
-	mc.results[tmux.CapturePaneRangeCmd("s", 40, 0)] = "✻ Welcome to Claude Code!\n\n❯ "
+	mc.results[tmux.CapturePaneRangeCmd("s", 30, 0)] = "✻ Welcome to Claude Code!\n\n❯ "
 	n := newMockNotifier()
 	go func() {
 		time.Sleep(20 * time.Millisecond)
@@ -308,7 +318,7 @@ func TestSendToSessionDetectsUnsubmittedHang(t *testing.T) {
 
 	mc := newMockTmuxClient()
 	mc.results[tmux.PaneCurrentCommandCmd("s")] = "claude"
-	mc.results[tmux.CapturePaneRangeCmd("s", 40, 0)] = "✻ Welcome to Claude Code!\n\n❯ "
+	mc.results[tmux.CapturePaneRangeCmd("s", 30, 0)] = "✻ Welcome to Claude Code!\n\n❯ "
 	n := newMockNotifier() // never fires agent_start
 
 	tool := NewSendToSessionTool(mc, n)
@@ -317,6 +327,50 @@ func TestSendToSessionDetectsUnsubmittedHang(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "did not start")
+}
+
+// TestSendToSessionCopilotSkipsConfirm: non-Claude agents never emit agent_start
+// (the UserPromptSubmit hook is Claude-only), so the submit confirmation must
+// be skipped for them — not block 10s and false-error.
+func TestSendToSessionCopilotSkipsConfirm(t *testing.T) {
+	mc := newMockTmuxClient()
+	mc.results[tmux.PaneCurrentCommandCmd("cop")] = "copilot"
+	mc.results[tmux.CapturePaneRangeCmd("cop", 30, 0)] = "✻ Copilot\n\n❯ "
+	n := newMockNotifier() // never fires — copilot has no hook
+	tool := NewSendToSessionTool(mc, n)
+	res, err := tool.Execute(context.Background(), map[string]any{
+		"name": "cop", "message": "do the thing",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, res, "Sent to")
+}
+
+// TestSendToSessionInvisibleAgentFallback: checkAgentAlive false-negatives when
+// the agent PID is invisible to ps (shell foreground), but the pane shows the
+// agent at its input prompt ⇒ the pane-prompt fallback lets the send through.
+func TestSendToSessionInvisibleAgentFallback(t *testing.T) {
+	mc := newMockTmuxClient()
+	mc.results[tmux.PaneCurrentCommandCmd("inv")] = "zsh"                                  // process scan won't find claude
+	mc.results[tmux.CapturePaneRangeCmd("inv", 5, 0)] = "✻ Welcome to Claude Code!\n\n❯ "  // paneEndsAtAgentPrompt
+	mc.results[tmux.CapturePaneRangeCmd("inv", 30, 0)] = "✻ Welcome to Claude Code!\n\n❯ " // agentReadyToSend
+	tool := NewSendToSessionTool(mc, nil)
+	res, err := tool.Execute(context.Background(), map[string]any{
+		"name": "inv", "message": "do the thing",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, res, "Sent to")
+}
+
+// TestSendTextLongIsAtomic: the long (bracketed-paste) path must also type its
+// body and press Enter in a single tmux invocation — same atomicity as short.
+func TestSendTextLongIsAtomic(t *testing.T) {
+	mc := newMockTmuxClient()
+	require.NoError(t, sendText(mc, "s", "this is a long message over ten chars"))
+	cmds := mc.executedCmds()
+	require.Len(t, cmds, 1, "long (paste) text + Enter must also be one atomic tmux call")
+	assert.Contains(t, cmds[0], "Enter")
+	assert.Contains(t, cmds[0], ";")
+	assert.Contains(t, cmds[0], "200~") // bracketed-paste wrapped
 }
 
 func TestSendToSessionMissingArgs(t *testing.T) {

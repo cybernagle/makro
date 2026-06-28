@@ -278,6 +278,16 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     private var maxDurationTimer: Timer?
     private let maxDuration: TimeInterval = 60
 
+    // Audio-session recovery. After an interruption (Siri, a real phone call)
+    // or a device-route change (headphones unplugged), the mic + push stream go
+    // silent unless we reconfigure + restart — which is why a call looked dead
+    // after Siri testing. `suppressAudioResume()` is called on a deliberate end
+    // so an interruption that fires *during* "hang up" can't restart a call the
+    // user just ended.
+    private var resumeAfterInterruption = false
+    private var resumeCommitMode = false
+    private var audioObservers: [NSObjectProtocol] = []
+
     // TTS state
     private var synthesizer: SPXSpeechSynthesizer?
     private var audioEngine: AVAudioEngine?
@@ -288,6 +298,78 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     init(config: Config = .shared) {
         self.config = config
         super.init()
+        registerAudioSessionObservers()
+    }
+
+    deinit {
+        audioObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+
+    // MARK: Audio session recovery (interruption + route change)
+
+    private func registerAudioSessionObservers() {
+        let nc = NotificationCenter.default
+        audioObservers.append(nc.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            self?.handleAudioSessionInterruption(note)
+        })
+        audioObservers.append(nc.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            self?.handleAudioSessionRouteChange(note)
+        })
+    }
+
+    private func handleAudioSessionInterruption(_ note: Notification) {
+        guard let info = note.userInfo,
+              let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        switch type {
+        case .began:
+            // Only auto-resume an active continuous (call) session; one-shot
+            // voice outside a call is left for the user to re-tap.
+            if isListening && isContinuous {
+                resumeAfterInterruption = true
+                resumeCommitMode = commitMode
+            }
+        case .ended:
+            guard resumeAfterInterruption else { return }
+            resumeAfterInterruption = false
+            // suppressAudioResume() covers the deliberate-end case (button /
+            // Siri "hang up"); any other interruption that reaches .ended while
+            // a call was active should resume, so we don't gate on the (removed
+            // in modern SDKs) shouldResume hint.
+            restartRecognition()
+        @unknown default:
+            break
+        }
+    }
+
+    private func handleAudioSessionRouteChange(_ note: Notification) {
+        guard let info = note.userInfo,
+              let raw = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: raw) else { return }
+        // A device disappeared mid-call (e.g. headphones unplugged): the mic
+        // tap is bound to the old route, so restart under the new one.
+        if reason == .oldDeviceUnavailable, isListening, isContinuous {
+            restartRecognition()
+        }
+    }
+
+    /// Reconfigure the audio session and start a fresh recognizer so audio
+    /// flows again after an interruption / route change. Tears down WITHOUT
+    /// delivering the interrupted partial (no half-utterance sent).
+    private func restartRecognition() {
+        let commit = resumeCommitMode
+        fullyStopRecognizer()
+        startListening(continuous: true, commit: commit)
+    }
+
+    /// Called on a deliberate call end (button / Siri "hang up" / quota) so a
+    /// pending interruption-resume cannot restart a call the user ended.
+    func suppressAudioResume() {
+        resumeAfterInterruption = false
     }
 
     var isConfigured: Bool {

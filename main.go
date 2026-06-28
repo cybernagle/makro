@@ -277,7 +277,9 @@ func main() {
 			proposer := brain.NewProposer(provider, cfg.LLMModel, "")
 			pusher := &tuiBrainPusher{barkKey: cfg.BarkKey, barkURL: cfg.BarkURL}
 			br := brain.NewBrain(cfg.Brain, memClient, proposer, inbox, pusher)
-			brain.RegisterCommands(cmdRegistry, br)
+			// Adapt *agent.CommandRegistry to brain.CommandRegistrar here in the
+			// composition root, so agent and brain stay decoupled at L2.
+			brain.RegisterCommands(agentCmdRegistrar{cr: cmdRegistry}, br)
 			// Defer sendMsg wiring — programSend isn't set until after NewProgram.
 			// The closure captures pusher by pointer so the late assignment sticks.
 			programSendReady = func() { pusher.sendMsg = programSend }
@@ -586,6 +588,24 @@ func runCaptureCommand() {
 	// Read+discard the ack. We don't act on it — the hook must return fast.
 	buf := make([]byte, 64)
 	_, _ = conn.Read(buf)
+}
+
+// agentCmdRegistrar adapts *agent.CommandRegistry to brain.CommandRegistrar.
+// It lives in the composition root (not in agent or brain) so the two L2
+// packages never import each other: agent keeps its concrete SlashCommand type,
+// brain keeps its dependency-inverted CommandSpec, and this 5-line adapter is
+// the only place that knows both.
+type agentCmdRegistrar struct {
+	cr *agent.CommandRegistry
+}
+
+func (a agentCmdRegistrar) Register(spec brain.CommandSpec) {
+	a.cr.Register(&agent.SlashCommand{
+		Name:        spec.Name,
+		Usage:       spec.Usage,
+		Description: spec.Description,
+		Execute:     spec.Execute,
+	})
 }
 
 // tuiBrainPusher implements brain.Pusher for the TUI. It delivers a proposal as

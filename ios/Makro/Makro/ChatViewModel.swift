@@ -39,6 +39,16 @@ final class ChatViewModel: NSObject, ObservableObject {
         self.speech = AzureSpeechManager(config: config)
         super.init()
         wireSpeech()
+        // Model-level hang-up: `EndCallIntent` posts `.makroEndCall` so the
+        // call stops (STT/TTS/audio torn down) even when `CallView` isn't
+        // presenting or its `.onReceive` is suspended. The subscription is
+        // stored in `cancellables`, which is released on deinit → cleanup is
+        // symmetric without an explicit removeObserver.
+        NotificationCenter.default.publisher(for: .makroEndCall)
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.endCall() }
+            }
+            .store(in: &cancellables)
     }
 
     private func wireSpeech() {
@@ -234,6 +244,10 @@ final class ChatViewModel: NSObject, ObservableObject {
         isMuted = false
         expectSpokenReply = false
         NowPlayingManager.shared.endCall()
+        // Cancel any pending post-Siri auto-resume so ending a call (button or
+        // Siri "hang up") isn't immediately undone when the audio interruption
+        // from Siri itself ends.
+        speech.suppressAudioResume()
         stopListening()
         stopSpeaking()
     }

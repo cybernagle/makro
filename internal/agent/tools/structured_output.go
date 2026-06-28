@@ -34,7 +34,41 @@ var (
 	// match on words rather than cursor glyphs. Phrases are kept specific to
 	// avoid false-positives on ordinary agent output.
 	trustDialogRe = regexp.MustCompile(`(?i)(trust the files in this folder|yes, i trust the files|leave and come back|do you trust the files)`)
+	// barePromptRe matches the agent's ready input cursor alone on a line — a
+	// bare "❯" (optionally trailing spaces). When the pane ends here the agent
+	// is accepting input, even if a stale, already-answered selection lingers
+	// higher in scrollback.
+	barePromptRe = regexp.MustCompile(`^❯\s*$`)
 )
+
+// selectionScanLines is how many bottom lines agentReadyToSend scans for a live
+// Yes/No dialog. A live dialog occupies the bottom of the pane; an answered one
+// scrolls up past the input prompt. Keeping this small avoids false-positives
+// from historical selection lines.
+const selectionScanLines = 8
+
+// containsSelectionPrompt reports whether any line looks like an interactive
+// Yes/No selection — a numbered "❯ N." prompt or trust/onboarding phrasing.
+// Shared by detectStatus (status classification) and agentReadyToSend
+// (send-time gate) so the detection logic can't drift between them.
+func containsSelectionPrompt(lines []string) bool {
+	for _, line := range lines {
+		if selectionRe.MatchString(line) || trustDialogRe.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
+
+// lastNonEmptyLine returns the trimmed last non-empty line, or "" if none.
+func lastNonEmptyLine(lines []string) string {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if s := strings.TrimSpace(lines[i]); s != "" {
+			return s
+		}
+	}
+	return ""
+}
 
 // ReadStructuredOutput captures and parses the full pane output from a session.
 func ReadStructuredOutput(tc TmuxClient, sessionName string) (*StructuredOutput, error) {
@@ -66,10 +100,8 @@ func detectStatus(lines []string) string {
 	recent := lines[start:]
 
 	// Check for selection prompt first — highest priority.
-	for _, line := range recent {
-		if selectionRe.MatchString(line) {
-			return "waiting_input"
-		}
+	if containsSelectionPrompt(recent) {
+		return "waiting_input"
 	}
 
 	// Check for activity indicators.
@@ -116,21 +148,41 @@ func detectStatus(lines []string) string {
 // ready. If the pane can't be read (just created, nothing rendered yet), we do
 // not block — agent-alive already passed — and let the send through.
 func agentReadyToSend(tc TmuxClient, sessionName string) (bool, string) {
-	raw, err := tc.Exec(tmux.CapturePaneRangeCmd(sessionName, 40, 0))
+	raw, err := tc.Exec(tmux.CapturePaneRangeCmd(sessionName, 30, 0))
 	if err != nil || strings.TrimSpace(raw) == "" {
 		return true, ""
 	}
 	lines := strings.Split(raw, "\n")
-	start := len(lines) - 30
+
+	// Bare input prompt at the bottom ⇒ ready. A stale, already-answered
+	// selection lingering higher in scrollback must NOT block sends.
+	if barePromptRe.MatchString(lastNonEmptyLine(lines)) {
+		return true, ""
+	}
+
+	// Otherwise only block on a LIVE dialog, which occupies the bottom of the
+	// pane. Scanning just the bottom region avoids false-positives from
+	// historical selection lines scrolled up past the input prompt.
+	start := len(lines) - selectionScanLines
 	if start < 0 {
 		start = 0
 	}
-	for _, line := range lines[start:] {
-		if selectionRe.MatchString(line) || trustDialogRe.MatchString(line) {
-			return false, "agent is showing a Yes/No selection (trust/permission); resolve it in that pane, then resend"
-		}
+	if containsSelectionPrompt(lines[start:]) {
+		return false, "agent is showing a Yes/No selection (trust/permission); resolve it in that pane, then resend"
 	}
 	return true, ""
+}
+
+// paneEndsAtAgentPrompt reports whether the pane's last non-empty line is the
+// agent's bare input prompt — a strong signal the agent is alive and accepting
+// input even when checkAgentAlive's ps-based scan false-negatives (macOS SIP,
+// nvm/asdf/launchd wrappers make the agent PID invisible to `ps -ax`).
+func paneEndsAtAgentPrompt(tc TmuxClient, sessionName string) bool {
+	raw, err := tc.Exec(tmux.CapturePaneRangeCmd(sessionName, 5, 0))
+	if err != nil {
+		return false
+	}
+	return barePromptRe.MatchString(lastNonEmptyLine(strings.Split(raw, "\n")))
 }
 
 func extractLastUserMessage(lines []string) string {

@@ -18,6 +18,7 @@ type mockNotifier struct {
 	nextID    uint64
 	seq       uint64
 	status    string
+	working   bool
 	waiters   map[uint64]chan struct{}
 }
 
@@ -58,11 +59,18 @@ func (n *mockNotifier) LastStatus(session string) string {
 	return n.status
 }
 
+func (n *mockNotifier) Working(session string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.working
+}
+
 func (n *mockNotifier) Notify(status string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.seq++
 	n.status = status
+	n.working = status == "agent_start"
 	for id, ch := range n.waiters {
 		close(ch)
 		delete(n.waiters, id)
@@ -208,6 +216,32 @@ func TestWaitUntilIdleReturnsIdleOnNotification(t *testing.T) {
 		notifier.Notify("done")
 	}()
 
+	tool := NewWaitUntilIdleTool(mc, notifier)
+	result, err := tool.Execute(context.Background(), map[string]any{
+		"session_name":    sessionName,
+		"timeout_seconds": float64(5),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result, `"idle"`)
+}
+
+// TestWaitUntilIdleAgentStartThenDone: agent_start now wakes waiters (so the
+// submit-confirmation feature can observe it), but it must NOT make
+// wait_until_idle return "idle" the moment a turn begins — it must re-register
+// and keep waiting until agent_stop.
+func TestWaitUntilIdleAgentStartThenDone(t *testing.T) {
+	mc := newMockTmuxClient()
+	sessionName := "worker"
+	mc.results[fmt.Sprintf("capture-pane -t %s -p -S -", sessionName)] = "Done.\n❯ "
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", sessionName)] = "claude"
+	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_pid}", sessionName)] = "12345"
+	notifier := newMockNotifier()
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		notifier.Notify("agent_start") // turn begins — must NOT return idle
+		time.Sleep(1200 * time.Millisecond)
+		notifier.Notify("done") // turn ends — now idle
+	}()
 	tool := NewWaitUntilIdleTool(mc, notifier)
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"session_name":    sessionName,

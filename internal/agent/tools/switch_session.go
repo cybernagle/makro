@@ -17,8 +17,7 @@ func NewSwitchSessionTool(tc TmuxClient) Tool {
 			if name == "" {
 				return "", fmt.Errorf("name is required")
 			}
-			s := tc.State().FindSession(name)
-			if s == nil {
+			if !tc.HasSession(name) {
 				return "", fmt.Errorf("session %q not found", name)
 			}
 			return name, nil

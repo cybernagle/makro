@@ -347,7 +347,7 @@ func (s *ChatService) init() {
 				barkKey: cfg.BarkKey,
 				barkURL: cfg.BarkURL,
 			})
-			brain.RegisterCommands(cmdRegistry, s.brain)
+			brain.RegisterCommands(agentCmdRegistrar{cr: cmdRegistry}, s.brain)
 			go s.brain.Run(context.Background())
 			log.Printf("[chat_service] brain started (cron=%s)", cfg.Brain.CronTime)
 		}
@@ -686,6 +686,21 @@ func (s *ChatService) CloseBrain() {
 	if s.brainInbox != nil {
 		s.brainInbox.Close()
 	}
+}
+
+// agentCmdRegistrar adapts *agent.CommandRegistry to brain.CommandRegistrar.
+// Lives in the composition root so agent and brain stay decoupled at L2.
+type agentCmdRegistrar struct {
+	cr *agent.CommandRegistry
+}
+
+func (a agentCmdRegistrar) Register(spec brain.CommandSpec) {
+	a.cr.Register(&agent.SlashCommand{
+		Name:        spec.Name,
+		Usage:       spec.Usage,
+		Description: spec.Description,
+		Execute:     spec.Execute,
+	})
 }
 
 // guiBrainPusher implements brain.Pusher for the GUI. Delivers a proposal via
