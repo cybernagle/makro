@@ -189,6 +189,11 @@ func serve(addr string, tlsCert, tlsKey, password string) error {
 	mux.HandleFunc("/api/snapshot", snapshotHandler)
 	mux.HandleFunc("/api/recover", recoveryHandler)
 
+	// Artifact preview (iOS remote artifact viewing).
+	artifactSvc := &ArtifactService{}
+	mux.HandleFunc("/api/artifacts", artifactsListHandler(artifactSvc))
+	mux.HandleFunc("/api/artifact", artifactServeHandler(artifactSvc))
+
 	// Task API
 	taskStore, err := NewTaskStore()
 	if err != nil {
@@ -1055,4 +1060,72 @@ func recoveryHandler(w http.ResponseWriter, r *http.Request) {
 	n := RecoverFromSnapshot()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"recovered": n})
+}
+
+// ── Artifact preview ──
+
+// artifactsListHandler returns the artifact list (HTML/video) discovered under
+// a session's working directory. GET /api/artifacts?session=<name>.
+func artifactsListHandler(svc *ArtifactService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		session := r.URL.Query().Get("session")
+		if session == "" {
+			http.Error(w, "session query param required", http.StatusBadRequest)
+			return
+		}
+		entries, err := svc.ListArtifacts(session)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(entries)
+	}
+}
+
+// artifactServeHandler streams a single artifact file. GET
+// /api/artifact?session=<name>&path=<rel>. Uses http.ServeContent so video
+// Range requests (AVPlayer seek) work automatically. The path is validated to
+// stay within the session cwd before it ever touches the filesystem.
+func artifactServeHandler(svc *ArtifactService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		session := r.URL.Query().Get("session")
+		relPath := r.URL.Query().Get("path")
+		if session == "" || relPath == "" {
+			http.Error(w, "session and path query params required", http.StatusBadRequest)
+			return
+		}
+		absPath, artType, err := svc.ResolveArtifact(session, relPath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		f, err := os.Open(absPath)
+		if err != nil {
+			http.Error(w, "artifact not found", http.StatusNotFound)
+			return
+		}
+		defer f.Close()
+		fi, err := f.Stat()
+		if err != nil {
+			http.Error(w, "stat artifact: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// Content-Type per type; http.ServeContent handles Range/seek for video.
+		switch artType {
+		case "html":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		case "video":
+			w.Header().Set("Content-Type", "video/mp4")
+		}
+		http.ServeContent(w, r, filepath.Base(absPath), fi.ModTime(), f)
+	}
 }
