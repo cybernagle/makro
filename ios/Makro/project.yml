@@ -11,7 +11,11 @@ targets:
     type: application
     platform: iOS
     sources:
-      - Makro
+      - path: Makro
+        excludes:
+          - ".omc/**"
+          - "Pods/**"
+          - "build/**"
     settings:
       base:
         INFOPLIST_FILE: Makro/Info.plist
