@@ -43,7 +43,15 @@ func main() {
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
 		case "notify":
-			runSocketCommand("agent_stop")
+			// `notify <session> start` (UserPromptSubmit) begins a turn →
+			// agent_start. `notify <session> done/stop` (Stop hook) ends it →
+			// agent_stop. The third arg decides; default to agent_stop for
+			// backward compat with older hooks that omit it.
+			if len(os.Args) >= 4 && os.Args[3] == "start" {
+				runSocketCommand("agent_start")
+			} else {
+				runSocketCommand("agent_stop")
+			}
 			return
 		case "chat":
 			runSocketCommand("chat")
@@ -61,6 +69,12 @@ func main() {
 			// "cwd"}) piped in. Reads stdin here so the socket payload carries
 			// the full prompt; the server (AgentNotifier) parses it.
 			runCaptureCommand()
+			return
+		case "claude-start":
+			// SessionStart hook: forward the Claude session id ↔ tmux session
+			// mapping so usage ingestion can attribute transcripts. Reads the
+			// hook's stdin JSON ({"session_id","transcript_path","cwd"}).
+			runClaudeStartCommand()
 			return
 		}
 	}
@@ -277,7 +291,9 @@ func main() {
 			proposer := brain.NewProposer(provider, cfg.LLMModel, "")
 			pusher := &tuiBrainPusher{barkKey: cfg.BarkKey, barkURL: cfg.BarkURL}
 			br := brain.NewBrain(cfg.Brain, memClient, proposer, inbox, pusher)
-			brain.RegisterCommands(cmdRegistry, br)
+			// Adapt *agent.CommandRegistry to brain.CommandRegistrar here in the
+			// composition root, so agent and brain stay decoupled at L2.
+			brain.RegisterCommands(agentCmdRegistrar{cr: cmdRegistry}, br)
 			// Defer sendMsg wiring — programSend isn't set until after NewProgram.
 			// The closure captures pusher by pointer so the late assignment sticks.
 			programSendReady = func() { pusher.sendMsg = programSend }
@@ -588,6 +604,87 @@ func runCaptureCommand() {
 	_, _ = conn.Read(buf)
 }
 
+// runClaudeStartCommand forwards the Claude Code SessionStart hook payload
+// (session_id, transcript_path, cwd) to the running makro instance so usage
+// ingestion can attribute transcripts to tmux sessions. Reads stdin the same
+// way runCaptureCommand does.
+func runClaudeStartCommand() {
+	if len(os.Args) < 3 {
+		return
+	}
+	session := os.Args[2]
+
+	stdinBytes, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "/tmp"
+	}
+	sockPath := filepath.Join(home, ".makro", "hooks.sock")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", sockPath)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	// Parse the hook stdin to extract the fields notifier needs. We carry the
+	// raw payload too so the server can fall back to its own parsing.
+	var fields struct {
+		SessionID      string `json:"session_id"`
+		TranscriptPath string `json:"transcript_path"`
+		Cwd            string `json:"cwd"`
+	}
+	_ = json.Unmarshal(stdinBytes, &fields)
+
+	payload := map[string]string{
+		"type":              "claude_session_start",
+		"session":           session,
+		"claude_session_id": fields.SessionID,
+		"transcript_path":   fields.TranscriptPath,
+		"cwd":               fields.Cwd,
+	}
+	msg, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return
+	}
+	if _, err := conn.Write(msg); err != nil {
+		return
+	}
+	if uc, ok := conn.(*net.UnixConn); ok {
+		_ = uc.CloseWrite()
+	}
+	buf := make([]byte, 64)
+	_, _ = conn.Read(buf)
+}
+
+// agentCmdRegistrar adapts *agent.CommandRegistry to brain.CommandRegistrar.
+// It lives in the composition root (not in agent or brain) so the two L2
+// packages never import each other: agent keeps its concrete SlashCommand type,
+// brain keeps its dependency-inverted CommandSpec, and this 5-line adapter is
+// the only place that knows both.
+type agentCmdRegistrar struct {
+	cr *agent.CommandRegistry
+}
+
+func (a agentCmdRegistrar) Register(spec brain.CommandSpec) {
+	a.cr.Register(&agent.SlashCommand{
+		Name:        spec.Name,
+		Usage:       spec.Usage,
+		Description: spec.Description,
+		Execute:     spec.Execute,
+	})
+}
+
 // tuiBrainPusher implements brain.Pusher for the TUI. It delivers a proposal as
 // a chat system message via the sendMsg callback (which posts an
 // ExternalChatMsg into the Bubbletea program — the side channel that does NOT
@@ -639,6 +736,20 @@ func buildSocketPayload(msgType string) map[string]string {
 			"type":    "agent_stop",
 			"session": os.Args[2],
 			"status":  os.Args[3],
+		}
+	case "agent_start":
+		// `makro notify <session> start` — the UserPromptSubmit hook signals a
+		// turn is beginning. Must map to type "start" (not "agent_stop"), or
+		// confirmAgentStarted never sees the seq bump and falsely reports the
+		// send as "did not start a turn" after the 10s grace timeout.
+		if len(os.Args) < 4 {
+			fmt.Fprintf(os.Stderr, "Usage: makro notify <session> start\n")
+			return nil
+		}
+		return map[string]string{
+			"type":    "start",
+			"session": os.Args[2],
+			"status":  "start",
 		}
 	case "chat":
 		if len(os.Args) < 4 {

@@ -5,12 +5,34 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/naglezhang/makro/internal/tmux"
 	"github.com/naglezhang/makro/internal/util"
 )
 
-func NewSendToSessionTool(tc TmuxClient) Tool {
+// validateSendTarget runs the pre-send gates shared by every autonomous send
+// path (send_to_session, relay_message, restore_context): the agent must be
+// alive and not showing a Yes/No dialog. It returns the detected agent name
+// (e.g. "claude") so the caller can wait for a turn-start signal only for
+// agents whose hooks can emit one.
+//
+// The pane-prompt fallback (paneEndsAtAgentPrompt) rescues the case where
+// checkAgentAlive's process-tree scan false-negatives because the agent PID is
+// invisible to ps (macOS SIP, nvm/asdf/launchd wrappers): if the pane shows the
+// agent at its input prompt, trust the pane over the process scan.
+func validateSendTarget(tc TmuxClient, session string) (string, error) {
+	status := checkAgentAlive(tc, session)
+	if !status.Alive && !paneEndsAtAgentPrompt(tc, session) {
+		return "", fmt.Errorf("cannot send to %q: no coding agent (claude/copilot/codex) is running (%s); start the agent in that pane first", session, status.Reason)
+	}
+	if ready, reason := agentReadyToSend(tc, session); !ready {
+		return status.Agent, fmt.Errorf("cannot send to %q: %s", session, reason)
+	}
+	return status.Agent, nil
+}
+
+func NewSendToSessionTool(tc TmuxClient, notifier Notifier) Tool {
 	return Tool{
 		Name:        "send_to_session",
 		Description: "Send a command or message to a tmux session. Only works when a known coding agent (claude, copilot, codex) is alive. Destructive shell commands (rm -rf, curl|sh, etc.) are blocked. Follow with wait_until_idle to handle any confirmation prompts.",
@@ -25,9 +47,12 @@ func NewSendToSessionTool(tc TmuxClient) Tool {
 				return "", fmt.Errorf("name and message are required")
 			}
 
-			// Check session exists.
-			if !IsSessionAlive(tc, name) {
-				return "", fmt.Errorf("session %q not found", name)
+			// Pre-send gates: agent alive (or at its input prompt) and not
+			// showing a Yes/No dialog. Shared with relay_message and
+			// restore_context via validateSendTarget so every autonomous send
+			// path gets the same protection.
+			if _, err := validateSendTarget(tc, name); err != nil {
+				return "", err
 			}
 
 			// Blocklist check.
@@ -35,13 +60,100 @@ func NewSendToSessionTool(tc TmuxClient) Tool {
 				return "", fmt.Errorf("command blocked by safety policy: matched pattern %q", pattern)
 			}
 
-			if err := sendText(tc, name, message); err != nil {
+			// Atomic send + first-send Enter-loss recovery (resends Enter if
+			// claude didn't start a turn). Shared with DirectSend and the
+			// kanban/@mention paths via SendConfirmed.
+			if err := SendConfirmed(ctx, tc, notifier, name, message); err != nil {
 				return "", err
 			}
 
 			return fmt.Sprintf("Sent to %q: %s", name, util.Truncate(message, 50)), nil
 		},
 	}
+}
+
+// submitConfirmGrace is how long send_to_session waits after sending for the
+// agent to begin the turn (UserPromptSubmit hook → agent_start). If no reaction
+// arrives in this window the prompt likely never submitted, and we return an
+// error instead of letting the caller hang on wait_until_idle for the full
+// timeout. Overridable in tests to keep the "never started" path fast.
+var submitConfirmGrace = 10 * time.Second
+
+// confirmAgentStarted reports whether the agent reacted to a just-sent prompt
+// within grace — signalled by any hook notification newer than `before`
+// (typically agent_start from Claude Code's UserPromptSubmit hook). It detects
+// text that reached the input box but was never submitted, so the caller can
+// fail fast instead of hanging on the idle wait. A nil notifier (e.g. manual
+// @mention mode without hooks) short-circuits to true.
+func confirmAgentStarted(ctx context.Context, notifier Notifier, session string, before uint64, grace time.Duration) bool {
+	if notifier == nil {
+		return true
+	}
+	ch, cancel := notifier.WaitAfter(session, before)
+	defer cancel()
+	// NewTimer (+ Stop) rather than time.After: time.After's timer is not
+	// collected until it fires, so a burst of sends would leave one leaked
+	// timer per send on the happy path for the whole grace window.
+	t := time.NewTimer(grace)
+	defer t.Stop()
+	select {
+	case <-ch:
+		return true
+	case <-t.C:
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// firstConfirmGrace is how long SendConfirmed waits for the agent to start a
+// turn after the initial atomic send before assuming the Enter was lost and
+// resending it. Kept short (vs submitConfirmGrace) so the retry happens fast.
+// Overridable in tests.
+var firstConfirmGrace = 3 * time.Second
+
+// SendConfirmed sends message to session atomically and, for agents we can
+// observe (claude — its UserPromptSubmit hook feeds agent_start), confirms the
+// prompt was actually submitted. If the submit didn't register within
+// firstConfirmGrace — the classic first-send Enter-loss, where the agent just
+// rendered its welcome screen and absorbed the Enter while the text landed in
+// the input box — it resends Enter once (the text is already typed) and
+// re-confirms. Empirically the resend always lands once the agent has settled,
+// turning "first send always fails, second works" into "first send succeeds".
+//
+// notifier may be nil (manual modes without hooks); then the send is trusted
+// without confirmation. Non-claude agents (copilot/codex) have no submission
+// hook, so their sends are trusted too. Returns an error only if the prompt
+// still didn't submit after the retry, so callers fail fast instead of hanging.
+func SendConfirmed(ctx context.Context, tc TmuxClient, notifier Notifier, session, message string) error {
+	before := uint64(0)
+	if notifier != nil {
+		before = notifier.Snapshot(session)
+	}
+	if err := sendText(tc, session, message); err != nil {
+		return err
+	}
+	if notifier == nil {
+		return nil
+	}
+	// Only Claude Code emits agent_start (UserPromptSubmit hook); copilot/codex
+	// have no such hook, so we can't observe their submission — trust the send.
+	if checkAgentAlive(tc, session).Agent != "claude" {
+		return nil
+	}
+	if confirmAgentStarted(ctx, notifier, session, before, firstConfirmGrace) {
+		return nil
+	}
+	// Enter likely lost on the first send (agent wasn't settled at its prompt
+	// — welcome screen / first render). The text is already sitting in the
+	// input box; resend just Enter and re-confirm.
+	if _, err := tc.Exec(tmux.SendEnterCmd(session)); err != nil {
+		return fmt.Errorf("resend enter to %q: %w", session, err)
+	}
+	if confirmAgentStarted(ctx, notifier, session, before, submitConfirmGrace) {
+		return nil
+	}
+	return fmt.Errorf("sent to %q but claude did not start a turn within %s — the prompt may not have been submitted (Enter lost); check the pane and resend", session, firstConfirmGrace+submitConfirmGrace)
 }
 
 // blockedPatterns are hard-blocked — these commands are never allowed.
@@ -119,12 +231,6 @@ func DirectSend(tc TmuxClient, sessionName, text string) error {
 		return fmt.Errorf("session %q not found", sessionName)
 	}
 	return sendText(tc, sessionName, text)
-}
-
-// IsSessionAlive checks if a session exists. Exported for orchestrator use.
-func IsSessionAlive(tc TmuxClient, sessionName string) bool {
-	_, err := tc.Exec(tmux.HasSessionCmd(sessionName))
-	return err == nil
 }
 
 // Ensure unused import is not needed.

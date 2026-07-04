@@ -21,6 +21,9 @@ cmd/gui/node_modules/
 cmd/gui/build/
 cmd/gui/release/
 
+# Generated agent output (artifacts are discovered per-session, not source)
+/artifacts/
+
 # TLS certs (secrets — never commit)
 cmd/gui/certs/
 

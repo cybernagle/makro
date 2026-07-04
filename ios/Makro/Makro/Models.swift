@@ -69,6 +69,39 @@ struct ChatMessage: Identifiable, Equatable {
     }
 }
 
+// A plan the assistant proposed during a voice call, awaiting the user's
+// confirmation before it is dispatched to a coding-agent session. Received via
+// the `plan` WS event; confirmed/denied via /api/chat/confirm|deny.
+struct PendingPlan: Codable, Equatable {
+    let session: String   // 执行者 (target session)
+    let summary: String   // 一句话做什么
+    let brief: String     // 给该 session 的具体指令
+}
+
+// Voice-call interaction mode. Picked from a dropdown at the top of CallView;
+// sent to the backend on call start / switch. The backend applies per-mode
+// behavior (prefix + tool gate + plan staging). Default = .plan (落实).
+enum CallMode: String, CaseIterable, Codable {
+    case chat, plan, query
+
+    var label: String {
+        switch self {
+        case .chat: return "闲聊"
+        case .plan: return "落实"
+        case .query: return "查询"
+        }
+    }
+
+    /// One-line hint shown under the mode name in the picker.
+    var hint: String {
+        switch self {
+        case .chat: return "纯对话，说完就答"
+        case .plan: return "讨论→提议→确认→派发"
+        case .query: return "查 session/项目状态，不派发"
+        }
+    }
+}
+
 enum ConnectionState: Equatable {
     case disconnected
     case connecting

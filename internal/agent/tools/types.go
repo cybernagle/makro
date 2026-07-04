@@ -2,8 +2,6 @@ package tools
 
 import (
 	"context"
-
-	"github.com/naglezhang/makro/internal/tmux"
 )
 
 // Tool represents a callable tool that the orchestrator can invoke.
@@ -23,9 +21,19 @@ type Param struct {
 }
 
 // TmuxClient is the subset of tmux functionality that tools need.
+//
+// Tools interact with tmux through two channels:
+//   - Exec, which runs a raw tmux command string. Command strings are built
+//     with the tmux package's XxxCmd() helpers (a pure "command dictionary").
+//     This is an intentional, readable coupling — tools know the tmux CLI
+//     shape, and that is fine.
+//   - HasSession, which replaces an earlier State() *tmux.StateMirror method.
+//     Returning that concrete type leaked an entire tmux struct across the
+//     boundary when tools only ever needed "does this session exist?".
+//     HasSession keeps this interface free of tmux struct types.
 type TmuxClient interface {
 	Exec(cmd string) (string, error)
-	State() *tmux.StateMirror
+	HasSession(name string) bool
 }
 
 // Assessor evaluates session output for pending confirmation prompts
@@ -51,4 +59,8 @@ type Notifier interface {
 	WaitAfter(session string, after uint64) (<-chan struct{}, func())
 	// LastStatus returns the most recent notification type for a session.
 	LastStatus(session string) string
+	// Working reports whether the session's agent is mid-turn (true on
+	// agent_start, false on the next agent_stop). Used to distinguish a turn
+	// just started from one just finished.
+	Working(session string) bool
 }

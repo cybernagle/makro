@@ -654,6 +654,22 @@ document.addEventListener("keydown", (e) => {
     }
 });
 
+// Ctrl+Tab / Ctrl+Shift+Tab cycle terminal tabs forward/backward (browser-style),
+// in the same order the tab index badges (terminals Map insertion order).
+// Capture phase + stopPropagation so a focused xterm never receives the keystroke
+// — otherwise it would emit a stray sequence into the PTY.
+document.addEventListener("keydown", (e) => {
+    if (!e.ctrlKey || e.key !== "Tab") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const names = Array.from(terminals.keys());
+    if (names.length < 2) return;
+    const dir = e.shiftKey ? -1 : 1;
+    const cur = names.indexOf(activeTab);
+    const next = names[(cur + dir + names.length) % names.length];
+    switchToTab(next);
+}, true);
+
 document.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "j") {
         e.preventDefault();

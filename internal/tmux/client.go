@@ -54,16 +54,37 @@ func (c *Client) bin() string {
 	return "tmux"
 }
 
-func findTmuxBin() string {
+// FindTmuxBin locates the tmux binary. It prefers a tmux found on PATH, then
+// falls back to common install locations, and finally the bare name "tmux".
+//
+// Exported so the GUI (and other callers that issue one-shot tmux commands
+// outside a *Client lifecycle) resolve the binary the same way *Client does —
+// a single source of truth instead of each caller re-implementing the lookup.
+func FindTmuxBin() string {
+	if p, err := exec.LookPath("tmux"); err == nil {
+		return p
+	}
 	for _, p := range []string{"/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"} {
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
-	if p, err := exec.LookPath("tmux"); err == nil {
-		return p
-	}
 	return "tmux"
+}
+
+// DefaultArgs builds tmux command-line arguments targeting the user's default
+// socket (no -S flag), so callers integrate with the user's daily tmux server
+// rather than an isolated one. Pass the tmux subcommand and its flags as extra.
+//
+// Exported for the same reason as FindTmuxBin: one-shot GUI callers that cannot
+// share a running *Client still need to construct socket-compatible args. This
+// mirrors the (c *Client).tmuxArgs branch for socketPath == "".
+func DefaultArgs(extra ...string) []string {
+	return extra
+}
+
+func findTmuxBin() string {
+	return FindTmuxBin()
 }
 
 func (c *Client) Start(ctx context.Context) error {
@@ -107,6 +128,13 @@ func (c *Client) Notifications() <-chan Notification {
 
 func (c *Client) State() *StateMirror {
 	return c.state
+}
+
+// HasSession reports whether a session with the given name currently exists in
+// the state mirror. This satisfies tools.TmuxClient without exposing the
+// concrete *StateMirror across the package boundary.
+func (c *Client) HasSession(name string) bool {
+	return c.state.FindSession(name) != nil
 }
 
 func (c *Client) Stop() error {

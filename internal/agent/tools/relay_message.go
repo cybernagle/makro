@@ -33,6 +33,9 @@ func NewRelayMessageTool(tc TmuxClient) Tool {
 				return "", err
 			}
 
+			if _, err := validateSendTarget(tc, toSession); err != nil {
+				return "", err
+			}
 			msg := formatRelayMessage(fromSession, messageType, content, srcOutput)
 			if err := sendText(tc, toSession, msg); err != nil {
 				return "", err

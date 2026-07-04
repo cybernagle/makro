@@ -6,11 +6,32 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/naglezhang/makro/internal/agent"
 )
 
-// RegisterCommands wires the brain's slash commands into a CommandRegistry.
+// CommandSpec is the brain's dependency-inverted view of a slash command.
+// It carries only the fields brain needs to register /brain and /inbox,
+// deliberately omitting agent-specific concerns (e.g. skill binding). The
+// CommandRegistrar adapter in the agent package translates each spec into a
+// full agent.SlashCommand at registration time.
+//
+// Defined here — not imported from agent — so that brain never depends on its
+// application-layer sibling. This breaks the former brain → agent edge and
+// keeps the L2 packages decoupled.
+type CommandSpec struct {
+	Name        string
+	Usage       string
+	Description string
+	Execute     func(ctx context.Context, args []string) (string, error)
+}
+
+// CommandRegistrar is the capability brain needs to wire its slash commands
+// into the host application. Implemented by the agent package (via a thin
+// adapter over *agent.CommandRegistry); brain depends only on this interface.
+type CommandRegistrar interface {
+	Register(spec CommandSpec)
+}
+
+// RegisterCommands wires the brain's slash commands into a CommandRegistrar.
 // Call this from main.go / chat_service.go after the brain is built, so the
 // commands reach the chat pane's command suggestions and Execute path.
 //
@@ -23,12 +44,12 @@ import (
 //
 // The registry keys all commands under "brain" and "inbox"; subcommands (accept/
 // reject) are parsed inside the inbox Execute from args[0].
-func RegisterCommands(cr *agent.CommandRegistry, b *Brain) {
+func RegisterCommands(cr CommandRegistrar, b *Brain) {
 	if cr == nil || b == nil {
 		return
 	}
 
-	cr.Register(&agent.SlashCommand{
+	cr.Register(CommandSpec{
 		Name:        "brain",
 		Usage:       "/brain wake",
 		Description: "Trigger the brain's wake cycle immediately (proposal pushed when ready)",
@@ -41,7 +62,7 @@ func RegisterCommands(cr *agent.CommandRegistry, b *Brain) {
 		},
 	})
 
-	cr.Register(&agent.SlashCommand{
+	cr.Register(CommandSpec{
 		Name:        "inbox",
 		Usage:       "/inbox | /inbox accept <id> [reason] | /inbox reject <id> [reason]",
 		Description: "List brain proposals, or accept/reject one by ID",

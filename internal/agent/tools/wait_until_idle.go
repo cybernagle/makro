@@ -109,6 +109,15 @@ func pollUntilIdle(ctx context.Context, tc TmuxClient, sessionName string, timeo
 			if notifier != nil && notifier.LastStatus(sessionName) == "permission" {
 				return map[string]string{"status": "blocked"}, time.Since(start)
 			}
+			// An agent_start notification means the turn just began — the
+			// agent is NOT idle. Re-register the waiter and keep waiting for
+			// the agent_stop. (agent_start now wakes waiters; without this
+			// branch we'd return "idle" the moment a turn starts.)
+			if notifier != nil && notifier.Working(sessionName) {
+				lastSeen = notifier.Snapshot(sessionName)
+				notifyCh, cancelNotify = notifier.WaitAfter(sessionName, lastSeen)
+				continue
+			}
 			return map[string]string{"status": "idle"}, time.Since(start)
 		}
 	}

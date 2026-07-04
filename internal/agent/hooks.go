@@ -33,6 +33,14 @@ type BeforeToolCallResult struct {
 	Reason string
 }
 
+// BeforeToolCallPayload is fired to HookBeforeToolCall handlers. It carries the
+// tool name plus parsed args so a handler can veto specific tools (e.g. block
+// dispatch tools during a voice call's discuss/propose phases).
+type BeforeToolCallPayload struct {
+	Name string
+	Args map[string]any
+}
+
 type AfterToolCallResult struct {
 	ModifiedResult string
 }

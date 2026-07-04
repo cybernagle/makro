@@ -1,155 +1,209 @@
 # Makro
 
-AI coding agent orchestrator with a split-pane terminal UI. Manage multiple coding agents (Claude Code, GitHub Copilot, etc.) in parallel through a unified interface.
+Makro is a multi-surface **AI coding-agent orchestrator**. It manages many coding agents (Claude Code, GitHub Copilot, Codex, …) running in parallel tmux sessions, and gives you three ways to drive them:
+
+- a **terminal TUI** (split-pane, the original),
+- a **desktop app** (Electron + Go backend, with chat / terminals / kanban / artifacts / cost dashboard),
+- an **iOS app** (voice calls, sessions, kanban, artifacts — talk to your agents from your phone).
+
+All three talk to the same Go backend over a TLS-secured, authenticated HTTP/WebSocket API.
 
 ## Features
 
-- **Split-pane TUI** — Chat pane on the left, tmux session viewer on the right
-- **Phone layout** — Vertical split for narrow terminals (`--phone` or auto-switches at < 80 columns)
-- **@mention sessions** — Type `@session-name message` to send commands to a specific agent
-- **Sticky targeting** — Tab-complete an `@session` to target all subsequent messages there
-- **Slash commands** — `/create`, `/kill`, `/list`, `/switch`, `/watch`, `/layout`
-- **Natural language** — Describe what you want, the LLM orchestrator figures out the tool calls
-- **Session guardian** — Automated confirmation handling for background agents
-- **Multi-provider LLM** — Anthropic Claude and OpenAI support
-- **Cross-agent relay** — Agents communicate through hooks
+### Desktop app (`cmd/gui`)
+- **Split-pane workspace** — chat with the orchestrator on one side, live tmux terminals on the other.
+- **Terminal tabs** — one tab per session; `Ctrl+Tab` / `Shift+Ctrl+Tab` cycle tabs (browser-style); `Ctrl+1..9` jumps.
+- **Kanban** — a human-facing task board (todo / in-progress / review / done). Send a card to a session to dispatch it.
+- **Artifacts** — auto-discovered HTML/video that agents generate, previewable in-app.
+- **Cost dashboard** — per-model / per-session prompt-usage tracking with a 5h quota view.
+- **`@mention` / `&monitor`** — target a specific session, or watch one until idle and auto-handle confirmations.
+- **Views** — `Ctrl+T` terminals, `Ctrl+D` dashboard, `Ctrl+U` cost, `Ctrl+B` toggle chat, `Ctrl+J` focus chat↔terminal.
 
-## Install
+### iOS app (`ios/Makro`)
+- **Voice calls** — phone-call-style continuous STT/TTS. Discuss an idea out loud, have the assistant propose a plan, confirm, and it dispatches the work to a session. See [Voice calls & modes](#voice-calls--modes-ios).
+- **Sessions** — view and drive any tmux terminal from the phone (xterm over WebSocket).
+- **Kanban** — the same task board, on the go.
+- **Artifacts** — browse and preview agent-generated HTML/video.
+- **Push** — APNs + Bark notifications when an agent stops or needs attention.
 
-```bash
-brew install cybernagle/tap/makro
+### Terminal TUI (root `main.go`)
+- Split-pane chat + tmux viewer, phone layout for narrow terminals, `@mention`, slash commands, session guardian, cross-agent relay.
+
+### Shared backend
+- **Multi-provider LLM** — Anthropic Claude, OpenAI, and OpenAI-compatible endpoints (e.g. BigModel/GLM, auto-detected).
+- **Tool-calling orchestrator** with a hook system (before/after tool call, agent start/stop, permission).
+- **Send-to-session reliability** — atomic send + first-Enter-loss recovery (`SendConfirmed`), so the first message to a freshly-rendered agent actually submits.
+- **Brain / memory** — optional proactive memory layer (`~/.makro/`, memory-cli integration).
+- **TLS + password auth** — self-signed cert (TOFU pinning on iOS), constant-time password compare, path-traversal-safe serving.
+
+## Screenshots
+
+> _Placeholder — capture and drop into `docs/`:_
+>
+> | Shot | Suggested file | Shows |
+> |------|----------------|-------|
+> | Desktop app | `docs/shot-desktop.png` | Chat + terminal tabs + kanban |
+> | iOS voice call | `docs/shot-ios-call.png` | Call screen with the mode dropdown + (ideally) a pending-plan card |
+> | iOS artifacts | `docs/shot-ios-artifacts.png` | Artifacts list for a session |
+>
+> Reference them here as `![Desktop](docs/shot-desktop.png)` once added.
+
+## Voice calls & modes (iOS)
+
+A voice call runs a **discuss → propose → confirm → dispatch** flow, and the assistant can never dispatch without your confirmation (the `send_to_session` tool is gated during a call; dispatch is performed deterministically by the backend only after you confirm).
+
+Pick a **mode** from the dropdown at the top of the call screen:
+
+| Mode | Behavior |
+|------|----------|
+| **闲聊 / Chat** | Pure conversation — no tools, no dispatch. "Say it, get a reply." |
+| **落实 / Plan** *(default)* | Discuss, then the assistant proposes a structured plan (who/what/how), you confirm, it dispatches to a session. |
+| **查询 / Query** | Read-only tools (`list_sessions`, `read_session_output`) to answer "what's `dev` doing?" — no dispatch. |
+
+Modes are switched manually (voice-switching is intentionally deferred). The selected mode is remembered across calls.
+
+## Architecture
+
+```
+┌─────────────────────────┌──────────────────────────┐
+│  Desktop app            │  iOS app                 │
+│  Electron + Vite UI     │  SwiftUI                 │
+│  (cmd/gui/frontend)     │  (ios/Makro)             │
+├─────────────────────────┴──────────────────────────┤
+│        HTTPS / WebSocket  (TLS, password-auth)      │
+├─────────────────────────────────────────────────────┤
+│            makro-serve  (cmd/gui, Go)               │
+│  chat · terminals(xterm) · kanban · artifacts ·     │
+│  cost · brain · push(APNs/Bark)                     │
+├─────────────────────────────────────────────────────┤
+│              Agent Orchestrator (internal/agent)     │
+│  tool-calling loop · hooks · send-gate · modes      │
+├─────────────────────────────────────────────────────┤
+│   Tmux Manager (internal/tmux) · LLM (internal/llm) │
+└─────────────────────────────────────────────────────┘
+        ▲
+        │  (the TUI at repo root is a standalone client
+        │   of the same orchestrator/tmux/llm packages)
 ```
 
-Or build from source:
+## Project structure
 
+```
+makro/
+├── main.go                 # Terminal TUI (Bubbletea, split-pane)
+├── cmd/gui/                # Desktop app
+│   ├── *.go                # makro-serve backend (HTTP/WS server)
+│   ├── electron/           # Electron shell (main/preload/afterPack)
+│   ├── frontend/           # Vite UI (vanilla JS)
+│   └── package.json
+├── ios/Makro/              # iOS app (SwiftUI, xcodegen + CocoaPods)
+├── internal/
+│   ├── agent/              # orchestrator, tools, hooks, notifier
+│   ├── brain/              # proactive memory layer
+│   ├── llm/                # multi-provider streaming + tool use
+│   ├── tmux/               # tmux CLI client + parser
+│   ├── apns/ notify/       # push notifications
+│   ├── usage/              # prompt-usage tracking
+│   ├── config/ util/ tui/
+├── docs/                   # diagrams (kanban-architecture.svg, …)
+└── artifacts/              # generated investigation reports / samples
+```
+
+## Build & run
+
+### Desktop app
+```bash
+# 1. Go backend binary
+go build -o cmd/gui/bin/makro-serve ./cmd/gui/
+
+# 2. Frontend bundle
+cd cmd/gui/frontend && npm install && npm run build && cd ..
+
+# 3. Package the .app (use --dir; the DMG step is broken on this machine)
+rm -rf release/ && ./node_modules/.bin/electron-builder --dir
+# → release/mac-arm64/Makro.app
+
+# Dev mode (hot frontend, spawns makro-serve)
+cd cmd/gui && npm run dev
+```
+
+### iOS app
+```bash
+cd ios/Makro
+xcodegen generate          # regenerates Makro.xcodeproj from project.yml
+pod install                # Azure Speech SDK via CocoaPods
+xcodebuild -workspace Makro.xcworkspace -scheme Makro \
+  -sdk iphoneos -configuration Development -derivedDataPath build
+```
+Open `Makro.xcworkspace` (not the `.xcodeproj`) in Xcode. Configure the Azure Speech key/region and the Makro server URL/password in Settings.
+
+### Terminal TUI
 ```bash
 go build -o makro .
-```
-
-## Quick Start
-
-```bash
-# Start with default settings
-makro
-
-# Use phone (vertical) layout
-makro --phone
-
-# CLI chat mode (no TUI, for testing)
-makro --chat
-
-# Show current config
-makro --config
-```
-
-## Key Bindings
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+O` | Switch focus between Chat and Viewer panes |
-| `Ctrl+D` | Quit immediately |
-| `Ctrl+R` | Force layout recalculation |
-| `Ctrl+C` | Clear sticky target (press twice to quit) |
-| `[` / `]` | Switch between tmux sessions (in Viewer) |
-| `Up` / `Down` | Navigate input history (in Chat) |
-| `Enter` | Send message |
-| `Tab` | Accept autocomplete suggestion |
-
-## Chat Commands
-
-```
-@session text    Send text to a tmux session
-/create <name>   Create a new tmux session
-/kill <name>     Kill a tmux session
-/list            List all sessions
-/switch <name>   Switch viewer to a session
-/watch <name>    Start guardian for a session
-/watch stop      Stop all guardians
-/layout phone    Switch to vertical layout
-/layout default  Switch to horizontal layout
-/help            Show available commands
+./makro             # default split-pane
+./makro --phone     # vertical layout
+./makro --chat      # headless chat (for testing)
 ```
 
 ## Configuration
 
-Makro reads configuration from `~/.makro/config.json`:
+Makro reads `~/.makro/config.json` and falls back to `.claude/settings.json` for API key/model:
 
 ```json
 {
-  "llm_provider": "anthropic",
-  "llm_model": "claude-sonnet-4-20250514",
+  "llm_provider": "openai",
+  "llm_model": "glm-4.7",
   "tmux_mode": "auto"
 }
 ```
-
-### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
 | `MAKRO_LLM_PROVIDER` | `anthropic` or `openai` |
 | `MAKRO_LLM_API_KEY` | API key (overrides config) |
 | `MAKRO_LLM_MODEL` | Model name |
-| `ANTHROPIC_API_KEY` | Anthropic API key (fallback) |
-| `OPENAI_API_KEY` | OpenAI API key (fallback) |
 | `MAKRO_TMUX_MODE` | `auto`, `dedicated`, or `shared` |
+| `MAKRO_PASSWORD` | Fixed backend password (desktop app; random otherwise) |
 
-### Claude Settings Integration
+`~/.makro/` also holds `chat.jsonl` (history), `tasks.json` (kanban), and `prompt_usage.db` (cost tracking).
 
-Makro automatically reads `.claude/settings.json` for API key and model preferences.
+## TUI key bindings & commands
 
-## Architecture
+| Key | Action | | Key | Action |
+|-----|--------|-|-----|--------|
+| `Ctrl+O` | Focus chat ↔ viewer | | `[` / `]` | Switch sessions (viewer) |
+| `Ctrl+D` | Quit | | `Up`/`Down` | Input history (chat) |
+| `Ctrl+R` | Reflow layout | | `Enter` | Send |
+| `Ctrl+C` | Clear sticky target (×2 = quit) | | `Tab` | Accept autocomplete |
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                  Makro (main)                  │
-│              Bubbletea TUI - split pane              │
-├─────────────────────┬────────────────────────────────┤
-│   Chat Pane (40%)   │    Tmux Viewer (60%)           │
-│   - Message history  │    - Session output rendering  │
-│   - Input + @mention │    - Session switching         │
-│   - Tool results     │    - Keystroke forwarding      │
-├─────────────────────┴────────────────────────────────┤
-│                 Agent Orchestrator                    │
-│  - Input routing: slash commands → @mentions → LLM   │
-│  - Tool call loop with hook system                   │
-│  - Cross-agent message relay                         │
-├──────────────────────────────────────────────────────┤
-│                  Tmux Manager                         │
-│  - Dedicated tmux server on ~/.makro/tmux.sock │
-│  - Session/window/pane state mirror                  │
-│  - 500ms polling loop                                │
-├──────────────────────────────────────────────────────┤
-│               LLM Providers                          │
-│  - Anthropic (streaming + tool use)                  │
-│  - OpenAI (streaming + tool use)                     │
-└──────────────────────────────────────────────────────┘
+@session text    Send text to a tmux session
+/create <name>   Create a session
+/kill <name>     Kill a session
+/list            List sessions
+/switch <name>   Switch viewer
+/watch <name>    Start guardian for a session
+/layout phone    Vertical layout
+/help            Show commands
 ```
 
 ## Development
 
 ```bash
-# Build
-go build -o makro .
-
-# Test
-go test ./...
-
-# Vet
-go vet ./...
-
-# Format
-go fmt ./...
-
-# Integration tests (requires tmux)
-go test ./... -tags=integration -v
+go test ./...                              # unit tests
+go test ./... -tags=integration -v         # integration tests (needs tmux)
+go vet ./... && go fmt ./...               # vet + format
 ```
+
+The pre-commit hook runs `go vet` + `gofmt` + `go test` over the **entire tree** (not just staged files) — format stray Go files before committing.
 
 ## Requirements
 
-- Go 1.26+
-- tmux
-- Anthropic or OpenAI API key
+- Go 1.26+, tmux
+- (Desktop app) Node.js, Electron
+- (iOS app) Xcode, CocoaPods, an Azure Speech resource (for voice)
+- Anthropic or OpenAI(-compatible) API key
 
 ## License
 
-Apache-2.0 license
+Apache-2.0

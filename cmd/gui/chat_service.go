@@ -7,9 +7,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/naglezhang/makro/internal/agent"
 	"github.com/naglezhang/makro/internal/agent/tools"
@@ -21,6 +23,16 @@ import (
 	"github.com/naglezhang/makro/internal/tmux"
 	"github.com/naglezhang/makro/internal/usage"
 )
+
+// stagedPlan is a plan the assistant proposed during a voice call, awaiting
+// the user's confirmation before it is dispatched. Session = the coding-agent
+// session that will execute; Summary = one-line "what" (shown/spoken); Brief =
+// the concrete instruction text actually sent to that session.
+type stagedPlan struct {
+	Session string `json:"session"`
+	Summary string `json:"summary"`
+	Brief   string `json:"brief"`
+}
 
 type ChatService struct {
 	hub               *chatHub
@@ -42,6 +54,16 @@ type ChatService struct {
 	mu                sync.Mutex
 	initErr           string
 
+	// Voice-call phase state for the discuss → propose → dispatch flow.
+	// callActive is toggled by iOS on call start/end (POST /api/chat/call).
+	// stagedPlan is non-nil between the assistant proposing a plan and the user
+	// confirming/denying it; while set, dispatch tools are blocked by the
+	// voice-call-dispatch-gate hook, and dispatch happens deterministically via
+	// ConfirmPlan → tools.DirectSend (which bypasses the hook).
+	callActive bool
+	callMode   CallMode
+	stagedPlan *stagedPlan
+
 	// capture is the brain capture sink. nil until init() runs (and stays nil
 	// when cfg.Brain.CaptureEnabled is false). SendMessage and the OnCapture
 	// notifier callback both route through it.
@@ -53,7 +75,7 @@ type ChatService struct {
 }
 
 func NewChatService() *ChatService {
-	s := &ChatService{monitors: make(map[string]context.CancelFunc)}
+	s := &ChatService{monitors: make(map[string]context.CancelFunc), callMode: ModePlan}
 	// Initialize chat history immediately (doesn't need orchestrator).
 	s.initHistory()
 	return s
@@ -225,6 +247,41 @@ func (s *ChatService) init() {
 	orch.SetMaxContextMessages(cfg.MaxContextMessages)
 	orch.SetSystemPrompt(agent.DefaultSystemPrompt())
 
+	// Voice-call gate: while a call is active, refuse tools per the current
+	// mode. Chat mode blocks ALL tools (pure conversation). Plan/Query block the
+	// mutating tools (send_to_session etc.) so the assistant can't push content
+	// into a session itself — in plan mode it proposes a plan instead and
+	// dispatch happens deterministically via ConfirmPlan → SendConfirmed, which
+	// bypasses this hook entirely.
+	orch.Hooks().Register(agent.Hook{
+		Type: agent.HookBeforeToolCall,
+		Name: "voice-call-dispatch-gate",
+		Handler: func(ctx context.Context, payload any) (any, error) {
+			s.mu.Lock()
+			active := s.callActive
+			mode := s.callMode
+			s.mu.Unlock()
+			if !active {
+				return agent.BeforeToolCallResult{}, nil
+			}
+			cfg := callModeConfigs[mode]
+			name := ""
+			if p, ok := payload.(agent.BeforeToolCallPayload); ok {
+				name = p.Name
+			}
+			if cfg.BlockAllTools {
+				return agent.BeforeToolCallResult{Block: true, Reason: "闲聊模式下不使用工具，直接对话即可。"}, nil
+			}
+			if voiceCallBlockedTools[name] {
+				return agent.BeforeToolCallResult{
+					Block:  true,
+					Reason: "语音通话中不能直接派发；请用 ```plan 块提议并等用户确认。",
+				}, nil
+			}
+			return agent.BeforeToolCallResult{}, nil
+		},
+	})
+
 	// Prompt-usage tracking (SQLite). Best-effort: a failure logs and disables
 	// tracking rather than blocking the orchestrator.
 	if usageStore, uerr := usage.Open(filepath.Join(cfg.DataDir, "prompt_usage.db")); uerr != nil {
@@ -347,7 +404,7 @@ func (s *ChatService) init() {
 				barkKey: cfg.BarkKey,
 				barkURL: cfg.BarkURL,
 			})
-			brain.RegisterCommands(cmdRegistry, s.brain)
+			brain.RegisterCommands(agentCmdRegistrar{cr: cmdRegistry}, s.brain)
 			go s.brain.Run(context.Background())
 			log.Printf("[chat_service] brain started (cron=%s)", cfg.Brain.CronTime)
 		}
@@ -411,11 +468,105 @@ func (s *ChatService) init() {
 	}
 }
 
-// voicePromptPrefix is prepended to user messages that arrive from a voice
-// call. It asks the model for a spoken-friendly style so TTS output is natural
-// (conversational, no tables/code blocks, concise — short bullet points OK).
-// Kept short to avoid inflating context; it only applies to voice turns.
-const voicePromptPrefix = "[你正在和用户语音通话，请用简洁口语回答：不要用表格、代码块或 markdown 符号；可以用简短的「第一、第二」式要点；回答尽量短以节省语音合成额度。]\n\n"
+// CallMode selects the voice-call interaction style. Each mode is a backend
+// config (prefix + tool gate + whether plans are staged) applied to voice
+// turns; iOS picks the mode in a dropdown and sends it on call start / switch.
+// Adding a mode = add a const + a callModeConfigs entry + an iOS option.
+type CallMode string
+
+const (
+	ModeChat  CallMode = "chat"  // 闲聊: pure conversation, no tools, no propose/dispatch.
+	ModePlan  CallMode = "plan"  // 落实: discuss → propose → confirm → dispatch (default).
+	ModeQuery CallMode = "query" // 查询: read-only tools to answer state questions, no dispatch.
+)
+
+// parseCallMode maps the iOS-sent string to a CallMode. Unknown → ModePlan.
+func parseCallMode(mode string) CallMode {
+	switch CallMode(mode) {
+	case ModeChat, ModePlan, ModeQuery:
+		return CallMode(mode)
+	}
+	return ModePlan
+}
+
+// callModeConfig is the per-mode behavior.
+//   - Prefix is prepended to every voice turn (style + the mode's rules).
+//   - BlockAllTools true ⇒ the dispatch gate refuses EVERY tool (chat = pure
+//     LLM, fastest/cheapest). When false, only the mutating tools in
+//     voiceCallBlockedTools are refused — read/observe tools stay allowed
+//     (plan's discuss phase + query).
+//   - StagePlans true ⇒ the assistant's ```plan blocks are parsed for the
+//     confirm/dispatch flow (plan only).
+//
+// In every mode, dispatch to a session happens ONLY deterministically via
+// ConfirmPlan → SendConfirmed, which bypasses the gate — and ConfirmPlan only
+// fires from a staged plan, which only exists in plan mode.
+type callModeConfig struct {
+	Prefix        string
+	BlockAllTools bool
+	StagePlans    bool
+}
+
+// planModePrefix is the 落实 (plan) mode protocol: discuss, then propose a
+// structured plan, then dispatch only after the user confirms.
+const planModePrefix = "[语音通话模式·落实] 用简洁口语回答：不用表格、代码块或 markdown 符号；可用「第一、第二」短要点；尽量短以节省语音额度。\n" +
+	"本次通话分三阶段，你只能在前两阶段行动：\n" +
+	"1) 讨论：澄清、细化、深化用户想法。不要调用 send_to_session / relay_message / create_session（会被拦截）。\n" +
+	"2) 提议：当任务清晰且用户想做时，先用一句话口述计划，然后在回复【末尾】输出一个计划块，格式严格如下，输出后停下并问「要我落实吗？」：\n" +
+	"```plan\n{\"session\":\"<真实session名>\",\"summary\":\"<一句话做什么>\",\"brief\":\"<给该session的可执行指令>\"}\n```\n" +
+	"3) 派发：由系统在用户确认后自动执行，你绝不自己派发。\n" +
+	"session 名必须先用 list_sessions 查真实结果；brief 要具体、可直接执行。确认前不得派发。\n\n"
+
+// chatModePrefix is the 闲聊 (chat) mode: casual conversation, no tools, no
+// propose/dispatch — "说完就答".
+const chatModePrefix = "[语音通话模式·闲聊] 自然轻松地口语聊天，像朋友。不要调用任何工具，不要提议落实或派发。不用表格/代码/markdown，简短温暖，说完即答。\n\n"
+
+// queryModePrefix is the 查询 (query) mode: answer questions about session or
+// project state using read-only tools; never dispatch.
+const queryModePrefix = "[语音通话模式·查询] 用简洁口语回答用户关于 session 或项目状态的问题。可用只读工具查真实状态：list_sessions（有哪些 session）、read_session_output / read_structured_output（某个 session 在干什么、有没有报错）。不要派发任务、不要提议落实、不要调用 send_to_session。不用表格/代码/markdown，简短。\n\n"
+
+// callModeConfigs maps each mode to its behavior. Adding a mode = add a row.
+var callModeConfigs = map[CallMode]callModeConfig{
+	ModeChat:  {Prefix: chatModePrefix, BlockAllTools: true, StagePlans: false},
+	ModePlan:  {Prefix: planModePrefix, BlockAllTools: false, StagePlans: true},
+	ModeQuery: {Prefix: queryModePrefix, BlockAllTools: false, StagePlans: false},
+}
+
+// planBlockRe extracts the JSON object inside a ```plan fenced block from the
+// assistant's streamed reply. Non-greedy up to the closing fence.
+var planBlockRe = regexp.MustCompile("(?s)```plan\\s*(.*?)\\s*```")
+
+// voiceCallBlockedTools are the tools the voice-call-dispatch-gate refuses while
+// a call is active: anything that pushes content into (or auto-answers) a
+// coding-agent session. Read/observe tools stay allowed so discussion is grounded.
+var voiceCallBlockedTools = map[string]bool{
+	"send_to_session":      true,
+	"relay_message":        true,
+	"create_session":       true,
+	"respond_confirmation": true,
+}
+
+// isConfirmPhrase reports whether a recognized utterance is a clear confirmation
+// of a staged plan. Used only when a plan is already staged (i.e. right after
+// the assistant asked 「要我落实吗？」), so a liberal yes-set is safe. Ambiguous
+// input is treated as "not confirmed" → returns to discussion.
+func isConfirmPhrase(s string) bool {
+	for _, k := range []string{"确认", "落实", "派发", "执行吧", "发吧", "就这样", "yes", "confirm", "confirmed", "approved", "go ahead", "do it"} {
+		if strings.Contains(s, k) {
+			return true
+		}
+	}
+	// Terse affirmative, only when the whole utterance is short — so 「对」/「好的」
+	// as a standalone yes right after a propose, not mid-sentence in discussion.
+	if utf8.RuneCountInString(s) <= 6 {
+		for _, k := range []string{"可以", "好的", "好了", "对的", "是的", "好", "对", "行", "没问题", "ok", "okay", "sure"} {
+			if strings.Contains(s, k) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func (s *ChatService) SendMessage(input string, voice bool) error {
 	// Capture the user's raw message before voice-prefixing and orchestrator
@@ -425,8 +576,20 @@ func (s *ChatService) SendMessage(input string, voice bool) error {
 	if s.capture != nil && strings.TrimSpace(input) != "" {
 		s.capture.Capture(brain.SourceMakro, "", input, "")
 	}
+	// Voice-call confirm gate: if a plan is staged and this is a voice turn,
+	// interpret the utterance as a confirm / amend rather than fresh input. A
+	// clear confirm dispatches (and we stop — no orchestrator round-trip);
+	// anything else drops the staged plan and routes the turn as continued
+	// discussion. The on-screen confirm button is the unambiguous path.
+	if voice && s.handleVoiceConfirmIntent(input) {
+		return nil
+	}
+
 	if voice {
-		input = voicePromptPrefix + input
+		s.mu.Lock()
+		mode := s.callMode
+		s.mu.Unlock()
+		input = callModeConfigs[mode].Prefix + input
 	}
 	if s.orch == nil {
 		if s.initErr == "" {
@@ -502,6 +665,17 @@ func (s *ChatService) SendMessage(input string, voice bool) error {
 				if s.history != nil && assistantText.Len() > 0 {
 					s.history.Append("assistant", assistantText.String())
 				}
+				// Voice-call: scan the reply for a proposed ```plan and stage it
+				// for user confirmation (flips phase to "proposed"). Only plan
+				// mode stages plans; chat/query never do.
+				if voice {
+					s.mu.Lock()
+					stage := callModeConfigs[s.callMode].StagePlans
+					s.mu.Unlock()
+					if stage {
+						s.maybeStagePlan(assistantText.String())
+					}
+				}
 			}
 		}
 	}()
@@ -511,6 +685,130 @@ func (s *ChatService) SendMessage(input string, voice bool) error {
 func (s *ChatService) Cancel() {
 	if s.orch != nil {
 		s.orch.Cancel()
+	}
+}
+
+// ── Voice-call discuss → propose → dispatch ──
+
+// handleVoiceConfirmIntent runs at the top of a voice turn. If a plan is staged
+// (phase == proposed), it interprets the utterance: a clear confirm dispatches
+// the plan and returns handled=true (no orchestrator round-trip); anything else
+// drops the staged plan and returns handled=false so the turn routes as continued
+// discussion. Returns false immediately when no plan is staged.
+func (s *ChatService) handleVoiceConfirmIntent(text string) bool {
+	s.mu.Lock()
+	plan := s.stagedPlan
+	s.mu.Unlock()
+	if plan == nil {
+		return false
+	}
+	if isConfirmPhrase(strings.ToLower(strings.TrimSpace(text))) {
+		s.ConfirmPlan()
+		return true
+	}
+	// Not a clear confirm → treat as amendment / continued discussion: clear the
+	// staged plan so a future propose re-stages fresh, then route normally.
+	s.clearStagedPlan()
+	s.emit("chat:phase", "discuss")
+	return false
+}
+
+// maybeStagePlan scans a voice-call assistant reply for a ```plan block. On a
+// valid one it stores it as the pending plan and emits chat:plan + chat:phase
+// so clients (iOS / desktop) surface a confirm affordance.
+func (s *ChatService) maybeStagePlan(text string) {
+	m := planBlockRe.FindStringSubmatch(text)
+	if m == nil {
+		return
+	}
+	var p stagedPlan
+	if err := json.Unmarshal([]byte(strings.TrimSpace(m[1])), &p); err != nil {
+		return
+	}
+	if p.Session == "" || p.Brief == "" {
+		return
+	}
+	s.mu.Lock()
+	s.stagedPlan = &p
+	s.mu.Unlock()
+	data, _ := json.Marshal(map[string]any{
+		"session": p.Session,
+		"summary": p.Summary,
+		"brief":   p.Brief,
+	})
+	s.emit("chat:plan", string(data))
+	s.emit("chat:phase", "proposed")
+}
+
+// ConfirmPlan dispatches the staged plan to its session deterministically via
+// DirectSend (bypasses the voice-call-dispatch-gate hook), then clears state.
+// Called by POST /api/chat/confirm and by a voice confirm utterance.
+func (s *ChatService) ConfirmPlan() {
+	s.mu.Lock()
+	plan := s.stagedPlan
+	s.stagedPlan = nil
+	s.mu.Unlock()
+	if plan == nil {
+		return
+	}
+	if s.tc == nil {
+		s.emit("chat:error", "派发失败: 后端未就绪")
+		return
+	}
+	// Deterministic dispatch with first-send Enter-loss recovery: if claude
+	// just rendered its welcome screen and swallowed the Enter, SendConfirmed
+	// detects the missed submit and resends Enter once.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := tools.SendConfirmed(ctx, s.tc, s.notifier, plan.Session, plan.Brief); err != nil {
+		s.emit("chat:error", "派发失败: "+err.Error())
+		return
+	}
+	s.emit("chat:dispatched", plan.Session)
+	s.emit("chat:phase", "discuss")
+	s.emit("chat:system", fmt.Sprintf("已派发给 @%s ✓", plan.Session))
+}
+
+// DenyPlan drops the staged plan and returns to discussion. Called by POST
+// /api/chat/deny and by the on-screen cancel button.
+func (s *ChatService) DenyPlan() {
+	s.clearStagedPlan()
+	s.emit("chat:phase", "discuss")
+}
+
+func (s *ChatService) clearStagedPlan() {
+	s.mu.Lock()
+	s.stagedPlan = nil
+	s.mu.Unlock()
+}
+
+// SendToSession sends text to a coding-agent session with first-send Enter-loss
+// recovery (the same tools.SendConfirmed the send_to_session tool uses). Used by
+// the kanban send-to-session HTTP path so it shares the tool's reliability
+// instead of the fire-and-forget sendToTmuxSession helper — which silently lost
+// the Enter on the first send to a freshly-rendered agent. Falls back to the
+// legacy send when the backend/notifier isn't initialized.
+func (s *ChatService) SendToSession(session, text string) error {
+	if s.tc == nil || s.notifier == nil {
+		return sendToTmuxSession(session, text)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return tools.SendConfirmed(ctx, s.tc, s.notifier, session, text)
+}
+
+// SetCallActive toggles voice-call mode and sets the interaction mode (called by
+// POST /api/chat/call with {active, mode}). On any transition the staged plan is
+// cleared; on start the phase resets to discuss. Mid-call mode switches reuse
+// this with active=true + the new mode.
+func (s *ChatService) SetCallActive(active bool, mode string) {
+	s.mu.Lock()
+	s.callActive = active
+	s.callMode = parseCallMode(mode)
+	s.stagedPlan = nil
+	s.mu.Unlock()
+	if active {
+		s.emit("chat:phase", "discuss")
 	}
 }
 
@@ -652,6 +950,12 @@ func (s *ChatService) emit(event string, data string) {
 			s.hub.Emit("switch_tab", data)
 		case "chat:session_state":
 			s.hub.Emit("session_state", data)
+		case "chat:plan":
+			s.hub.Emit("plan", data)
+		case "chat:phase":
+			s.hub.Emit("phase", data)
+		case "chat:dispatched":
+			s.hub.Emit("dispatched", data)
 		}
 		return
 	}
@@ -686,6 +990,21 @@ func (s *ChatService) CloseBrain() {
 	if s.brainInbox != nil {
 		s.brainInbox.Close()
 	}
+}
+
+// agentCmdRegistrar adapts *agent.CommandRegistry to brain.CommandRegistrar.
+// Lives in the composition root so agent and brain stay decoupled at L2.
+type agentCmdRegistrar struct {
+	cr *agent.CommandRegistry
+}
+
+func (a agentCmdRegistrar) Register(spec brain.CommandSpec) {
+	a.cr.Register(&agent.SlashCommand{
+		Name:        spec.Name,
+		Usage:       spec.Usage,
+		Description: spec.Description,
+		Execute:     spec.Execute,
+	})
 }
 
 // guiBrainPusher implements brain.Pusher for the GUI. Delivers a proposal via

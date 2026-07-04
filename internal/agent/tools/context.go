@@ -133,6 +133,9 @@ func NewRestoreContextTool(tc TmuxClient) Tool {
 				return "", fmt.Errorf("parse snapshot: %w", err)
 			}
 
+			if _, err := validateSendTarget(tc, name); err != nil {
+				return "", err
+			}
 			msg := formatRestoreMessage(sourceSession, snapshotFile, label, &out)
 			if err := sendText(tc, name, msg); err != nil {
 				return "", err

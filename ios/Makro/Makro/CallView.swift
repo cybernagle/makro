@@ -20,16 +20,28 @@ struct CallView: View {
                 statusOrb
                 Spacer()
                 transcript
+                if vm.pendingPlan != nil {
+                    pendingPlanCard
+                        .padding(.top, 8)
+                }
                 Spacer()
                 hangUpButton
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 40)
             .padding(.top, 20)
+            .animation(DS.snappy, value: vm.pendingPlan)
         }
         .preferredColorScheme(.dark)
         .onAppear { vm.startCall() }
         .onDisappear { vm.endCall() }
+        .onReceive(CallRouter.shared.$pendingEnd) { wantsEnd in
+            // Siri/Shortcuts "hang up" → dismiss; onDisappear ends the call
+            // (stops STT/TTS, clears Now Playing).
+            guard wantsEnd else { return }
+            CallRouter.shared.pendingEnd = false
+            dismiss()
+        }
         .onChange(of: phase) { newPhase in
             // Keep the lock-screen card in sync with the call phase.
             if vm.isMuted {
@@ -41,15 +53,46 @@ struct CallView: View {
         .onChange(of: vm.isMuted) { muted in
             NowPlayingManager.shared.updatePhase(muted ? "已静音" : phaseLabel(for: phase))
         }
+        .onChange(of: vm.pendingPlan) { _ in
+            // A staged plan flips the lock-screen prompt to the confirm ask.
+            if vm.isMuted {
+                NowPlayingManager.shared.updatePhase("已静音")
+            } else {
+                NowPlayingManager.shared.updatePhase(phaseLabel)
+            }
+        }
     }
 
     // MARK: - Header
 
     private var header: some View {
         VStack(spacing: 4) {
-            Text("Makro")
-                .font(DS.display(26, .semibold))
-                .foregroundStyle(DS.Canvas.phosphor)
+            // Mode dropdown: tap to switch 闲聊 / 落实 / 查询 (manual; voice-
+            // switching is intentionally deferred — reliability + complexity).
+            Menu {
+                ForEach(CallMode.allCases, id: \.self) { mode in
+                    Button {
+                        vm.setCallMode(mode)
+                    } label: {
+                        HStack {
+                            Text("\(mode.label) · \(mode.hint)")
+                            if mode == vm.callMode { Image(systemName: "checkmark") }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Text("Makro")
+                        .font(DS.display(26, .semibold))
+                        .foregroundStyle(DS.Canvas.phosphor)
+                    Text("·\(vm.callMode.label)")
+                        .font(DS.text(15, .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+            }
             Text(phaseLabel)
                 .font(DS.text(13, .medium))
                 .foregroundStyle(.white.opacity(0.6))
@@ -127,6 +170,73 @@ struct CallView: View {
         .frame(maxHeight: 180)
     }
 
+    // MARK: - Pending plan (confirm before dispatch)
+
+    /// Card shown when the assistant has proposed a plan during the call. The
+    /// spoken summary already appeared in the transcript; this shows the
+    /// structured execution target (who/what) and the confirm/deny buttons.
+    /// Confirm → server dispatches to the session; deny → back to discussion.
+    @ViewBuilder
+    private var pendingPlanCard: some View {
+        if let plan = vm.pendingPlan {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Image(systemName: "paperplane.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(DS.Canvas.phosphor)
+                    Text("待确认落实")
+                        .font(DS.text(14, .semibold))
+                        .foregroundStyle(.white)
+                }
+                Text(plan.summary.isEmpty ? plan.brief : plan.summary)
+                    .font(DS.text(15, .medium))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 5) {
+                    Image(systemName: "person.crop.square.filled.and.at.rectangle")
+                        .font(.system(size: 11))
+                    Text("执行：\(plan.session)")
+                }
+                .font(DS.text(12, .regular))
+                .foregroundStyle(.white.opacity(0.6))
+                if !plan.brief.isEmpty && plan.brief != plan.summary {
+                    Text(plan.brief)
+                        .font(DS.text(12, .regular))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 10) {
+                    Button { vm.denyPlan() } label: {
+                        Text("取消")
+                            .font(DS.text(14, .semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(.white.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    Button { vm.confirmPlan() } label: {
+                        Text("确认落实")
+                            .font(DS.text(14, .semibold))
+                            .foregroundStyle(.black)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(DS.Canvas.phosphor)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+                .padding(.top, 2)
+            }
+            .padding(16)
+            .background(.white.opacity(0.06))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(DS.Canvas.phosphor.opacity(0.4), lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+    }
+
     // MARK: - Hang up
 
     private var hangUpButton: some View {
@@ -160,7 +270,10 @@ struct CallView: View {
     }
 
     private var phaseLabel: String {
-        phaseLabel(for: phase)
+        // A staged plan takes over the phase cue: the call is waiting on the
+        // user's confirm/deny, not listening for a new utterance.
+        if vm.pendingPlan != nil { return "待你确认 — 说『确认』或点按钮" }
+        return phaseLabel(for: phase)
     }
 
     private func phaseLabel(for p: Phase) -> String {

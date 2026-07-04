@@ -90,11 +90,42 @@ struct ChatView: View {
             .fullScreenCover(isPresented: $showCall) {
                 CallView(vm: vm)
             }
+            .onReceive(CallRouter.shared.$pendingStart) { wantsCall in
+                // Warm re-trigger: app already running and ChatView alive.
+                guard wantsCall else { return }
+                CallRouter.shared.pendingStart = false
+                showCall = true
+            }
             .task {
                 await vm.loadHistory()
                 vm.connect()
                 withAnimation(DS.spring) { appeared = true }
+                // Cold start: Siri may have set the flag before this view
+                // existed, so .onReceive (which only fires on future changes)
+                // would miss it. Check the current value on appear.
+                if CallRouter.shared.pendingStart {
+                    CallRouter.shared.pendingStart = false
+                    showCall = true
+                }
             }
+            // ⚠️ LOAD-BEARING DUAL-CONSUME of `CallRouter.pendingStart`:
+            // `pendingStart` is read in TWO places above — `.onReceive`
+            // (warm) and `.task` (cold-start). BOTH are required:
+            //   • `.onReceive` fires only on changes emitted AFTER the view
+            //     subscribes, so it covers warm re-triggers (app running,
+            //     Siri invoked again) but cannot see a value that was set
+            //     before this view existed.
+            //   • `.task` reads the *current* value on first appear, which is
+            //     the only path that catches a cold-launch hang-up where
+            //     `StartCallIntent.perform()` set the flag before ChatView
+            //     was on screen.
+            // `@Published` emits on EVERY assignment (including repeated
+            // `true`), which is what makes the Bool one-shot work — the
+            // consumer resets it to `false` and the next `true` re-fires.
+            // DO NOT add `.removeDuplicates()` to the publisher chain (it
+            // would coalesce `false → true → false → true` into a single
+            // emission and silently break re-trigger). DO NOT delete the
+            // `.task` current-value check (cold launch would stop working).
             .onDisappear { vm.disconnect() }
         }
     }

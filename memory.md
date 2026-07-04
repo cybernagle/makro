@@ -300,3 +300,60 @@ These differ from intuition — always check the SDK headers under
 - A heredoc commit message with apostrophes (`assistant's`) breaks the shell.
   Use `git commit -F - <<'EOF' ... EOF` (quoted delimiter) instead of
   `git commit -m "$(...)"`.
+
+## Known Bugs (unresolved)
+
+### send_to_session Enter loss — two-step send unreliable (PARTIALLY FIXED)
+
+**Status:** The current code (`; Enter` single tmux call) is reliable, but the
+**root cause of intermittent Enter loss is NOT fully understood.** This is a
+record for whoever revisits it.
+
+**Symptom (user-reported):** `send_to_session` intermittently delivers text to
+the target pane's input box but the Enter never fires — the agent never
+receives the message. Random; retrying often works.
+
+**Reproduction (done 2026-06-29):** Isolated tmux server + real claude TUI as
+the receiver. Harness at `/tmp/sendtest_harness.go` sends N messages, each
+checks whether a unique marker shows up in the pane (submitted) vs. times out
+(Enter lost).
+
+  - `oneStep` (current code: `send-keys -l body ; send-keys Enter` in ONE
+    `tc.Exec`): **15/15 success, 0% failure.**
+  - `twoStep` (old code: two separate `tc.Exec` calls): **2/15 success, ~87%
+    failure.** First 2 ok, then every subsequent send lost its Enter.
+
+**Key data point:** `twoStep` failures were NOT random — they started after the
+2nd send and then *every* send failed. This points to a stateful trigger
+(claude's context growing → slower redraws), not a coin-flip race. The window
+between the two `exec.Command` calls (~ms) only matters once claude's TUI
+redraw crosses that threshold.
+
+**What's confirmed:**
+  - The `; Enter` refactor (`0228c77`) DID fix it — current deployed code is
+    reliable. That refactor was correct.
+  - The `confirmAgentStarted` / `validateSendTarget` gates added by the same
+    refactor are unrelated to the Enter loss (they were a red herring during
+    diagnosis).
+  - `notify <session> start` → `agent_stop` mis-routing (fixed in `a29affd`)
+    was a SEPARATE bug that caused `confirmAgentStarted` false-failures; also
+    fixed.
+
+**What's NOT understood (for future work):**
+  - **Why does the gap between two `tmux send-keys` calls lose the Enter?**
+    Hypothesis: claude TUI redraws during thinking, and `send-keys Enter`
+    arriving mid-redraw is dropped by the alternate-screen / redraw. Not yet
+    proven — the harness only tested idle-state sends; a "send while
+    thinking" variant was never run.
+  - **Is the `; Enter` fix truly bulletproof, or does it just shrink the
+    window?** 15/15 is encouraging but not conclusive at scale. Untested
+    under: high tmux server load, very long messages, concurrent sends,
+    sends during a pane resize.
+  - **Does `send-keys -l` with bracketed paste (`\033[200~...\033[201~`) +
+    `; Enter` behave differently from the short-message literal path?** The
+    `isShortResponse` (<=10 char) threshold switches code paths; the harness
+    always sent long messages, so the short path is untested at scale.
+
+**Repro environment:** `tmux -L sendtest99`, session `receiver`, real claude
+TUI (no model needed for the prompt/render behavior). Kill with
+`/opt/homebrew/bin/tmux -L sendtest99 kill-server`.

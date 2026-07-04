@@ -347,6 +347,11 @@ func (n *AgentNotifier) handleConn(conn net.Conn) {
 		n.mu.Lock()
 		n.working[msg.Session] = true
 		n.mu.Unlock()
+		// Wake anyone waiting for agent activity (e.g. send_to_session's
+		// submit confirmation). Without this, WaitAfter only ever resolves
+		// on agent_stop/permission, so a "did the turn start?" wait would
+		// hang until its grace timeout and falsely report failure.
+		n.Notify(msg.Session, "agent_start")
 		if onAgentStart != nil {
 			onAgentStart(msg.Session)
 		}
