@@ -177,21 +177,16 @@ Makro reads `~/.makro/config.json` and falls back to `.claude/settings.json` for
 Declare named **roles** that bind classes of work to the tmux session that handles them. When you send input that isn't a slash command or `@mention`, Makro asks the LLM which role best matches and routes the task there — instead of spawning yet another anonymous session. Missing or empty `roles.toml` disables routing (Makro behaves as before).
 
 ```toml
-# ~/.makro/roles.toml — user-global. A project-local ./.makro/roles.toml overrides.
+# ~/.makro/roles.toml — user-global. A project-local ./.makro/roles.toml overrides (see note below).
 [[role]]
 name        = "makro"
 description = "Makro 项目本身的开发、编排、修复"
-session     = "makro"          # tmux session name; empty = create on demand
+session     = "makro"          # tmux session that already has a coding agent running
 
 [[role]]
 name        = "juli"
 description = "juli 项目的开发与维护"
 session     = "juli"
-
-[[role]]
-name        = "research"
-description = "通用调研、技术选型、阅读外部资料"
-session     = ""               # created when first routed to
 
 [[role]]
 name        = "default"
@@ -200,13 +195,15 @@ description = "兜底:无法路由时的默认角色"
 
 | Field | Required | Notes |
 |-------|----------|-------|
-| `name` | yes | Identifier-safe (letters, digits, `_`, `-`); unique. |
+| `name` | yes | Identifier-safe (letters, digits, `_`, `-`); unique within a file. |
 | `description` | yes | What this role owns. Written verbatim into the routing prompt — be specific. |
-| `session` | no | Bound tmux session. Empty = Makro creates it on first route. Defaults to the role's `name`. |
+| `session` | no | Bound tmux session name. At dispatch time, an empty `session` resolves to the role's `name`. The session **must already exist and have a coding agent running** — Phase 1 does not auto-create sessions (auto-launch is planned for a later phase). |
 | `clear_after` | no | `manual` (default), `marker`, `guardian`. Reserved for the reviewer-role auto-clear (Phase 3). |
 | `state_file` | no | Per-project state file template, e.g. `reviewer/{project}.md`. Reserved for the reviewer role (Phase 3). |
 
-**Routing cascade:** A-level (config) roles → fallback to a role named `default` (or the first role) when no match clears the confidence threshold. B-level (runtime-created) roles and graduation are Phase 2. Slash commands and `@mention` always bypass routing.
+**Routing cascade:** A-level (config) roles → fallback to a role named `default` (or the first role) when no match clears the confidence threshold (0.5). B-level (runtime-created) roles and graduation are Phase 2. Slash commands and `@mention` always bypass routing.
+
+**Config override:** `~/.makro/roles.toml` (user-global) is loaded first, then `./.makro/roles.toml` (project-local) overrides it. A role name repeated across the two files is **silently last-wins** (the project entry replaces the user entry); duplicates *within one file* are an error.
 
 ## TUI key bindings & commands
 

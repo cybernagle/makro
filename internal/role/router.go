@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/naglezhang/makro/internal/llm"
 )
@@ -13,6 +14,10 @@ import (
 // ConfidenceThreshold is the minimum confidence to accept a routing decision.
 // Below it, the router falls back to the store default (spec §3.3).
 const ConfidenceThreshold = 0.5
+
+// routingCallTimeout bounds a single routing LLM call. A slow or dead model
+// falls back to the default role instead of hanging the turn.
+const routingCallTimeout = 15 * time.Second
 
 // Decision is the outcome of routing one task.
 type Decision struct {
@@ -58,7 +63,12 @@ func (r *Router) Route(ctx context.Context, task string) (Decision, error) {
 
 	opts := llm.GenerateOptions{Model: r.model}
 
-	result, err := r.provider.Complete(ctx, prompt, opts)
+	// Bound the routing call: a slow/dead model falls back to default instead
+	// of hanging the whole turn (ProcessInput's ctx is only cancelled by the
+	// NEXT input, so without this a stuck route blocks indefinitely).
+	routeCtx, cancel := context.WithTimeout(ctx, routingCallTimeout)
+	defer cancel()
+	result, err := r.provider.Complete(routeCtx, prompt, opts)
 	if err != nil {
 		// LLM failure is recoverable: fall back, don't surface to the user.
 		log.Printf("[role] routing LLM error: %v (falling back)", err)
@@ -148,9 +158,13 @@ func stripFences(s string) string {
 	return s
 }
 
+// truncate caps s to n runes (not bytes), appending "..." if shortened. Safe
+// for UTF-8 / multi-byte content — byte-slicing would split runes and write
+// invalid bytes to logs.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return string(r[:n]) + "..."
 }

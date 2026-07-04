@@ -163,14 +163,16 @@ func (o *Orchestrator) LoadSkills(dirs []string) error {
 // SetRoles configures role-based routing. When set, non-slash, non-@mention
 // input is routed to the matching role's session instead of going to
 // handleLLM. An empty store disables routing (falls through to handleLLM).
-func (o *Orchestrator) SetRoles(store *role.Store) {
+// notifier is the AgentNotifier used for first-send Enter-loss recovery in
+// the gated send path; pass nil to skip recovery (rare; tests).
+func (o *Orchestrator) SetRoles(store *role.Store, notifier tools.Notifier) {
 	if store == nil || store.Len() == 0 {
 		o.router = nil
 		o.dispatcher = nil
 		return
 	}
 	o.router = role.NewRouter(store, o.provider)
-	o.dispatcher = role.NewDispatcher(o.tc)
+	o.dispatcher = role.NewDispatcher(o.tc, notifier)
 	o.dispatcher.SetStore(store)
 }
 

@@ -176,10 +176,14 @@ func (s *InboxStore) CountTodayProposals(ctx context.Context) (int, error) {
 	if s == nil {
 		return 0, nil
 	}
-	today := time.Now().Format("2006-01-02")
+	// created_at is stored via SQLite CURRENT_TIMESTAMP (UTC), so "today" must
+	// be computed in UTC too. Using date('now') keeps both sides in SQLite's
+	// own UTC clock — a Go-local time.Now() would mismatch near the day
+	// boundary in non-UTC timezones (e.g. CST 00:00–08:00 is still the prior
+	// UTC day, so the count silently returned 0).
 	var n int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM proposals WHERE date(created_at) = date(?)`, today).Scan(&n)
+		`SELECT COUNT(*) FROM proposals WHERE date(created_at) = date('now')`).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("brain inbox: count today: %w", err)
 	}

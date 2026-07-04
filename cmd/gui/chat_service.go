@@ -261,7 +261,7 @@ func (s *ChatService) init() {
 		allRoles = append(allRoles, rs...)
 	}
 	if len(allRoles) > 0 {
-		orch.SetRoles(role.NewStore(allRoles))
+		orch.SetRoles(role.NewStore(allRoles), notifier)
 	}
 	orch.SetModel(cfg.LLMModel)
 	orch.SetMaxContextMessages(cfg.MaxContextMessages)

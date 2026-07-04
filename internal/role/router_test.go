@@ -104,3 +104,29 @@ func TestRouterEmptyStoreNoFallback(t *testing.T) {
 	assert.True(t, dec.NoRoles)
 	assert.Equal(t, 0, rt.provider.(*fakeProvider).calls, "no LLM call when store is empty")
 }
+
+func TestRouterThresholdBoundaryAccepted(t *testing.T) {
+	// Confidence exactly at the threshold (0.5) must be ACCEPTED, not fallen
+	// back. Pins the < vs <= comparison so a refactor can't silently flip it.
+	store := NewStore([]Role{{Name: "makro", Description: "a"}})
+	rt := NewRouter(store, &fakeProvider{resp: &llm.CompleteResult{
+		Content: routerJSON(t, "makro", 0.5)}})
+
+	dec, err := rt.Route(context.Background(), "task")
+	require.NoError(t, err)
+	assert.False(t, dec.Fallback, "confidence == threshold (0.5) must accept")
+	assert.Equal(t, "makro", dec.RoleName)
+}
+
+func TestRouterMultiObjectResponseFallsBack(t *testing.T) {
+	// If the LLM emits two JSON objects, stripFences's first-{...}-to-last-}
+	// span produces invalid JSON. This must degrade to fallback, not panic.
+	store := NewStore([]Role{{Name: "makro", Description: "a"}})
+	rt := NewRouter(store, &fakeProvider{resp: &llm.CompleteResult{
+		Content: `{"note":"thinking"} {"role":"makro","confidence":0.9,"reason":"x"}`,
+	}})
+
+	dec, err := rt.Route(context.Background(), "task")
+	require.NoError(t, err, "multi-object response is recoverable: fall back")
+	assert.True(t, dec.Fallback)
+}
