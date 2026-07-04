@@ -126,6 +126,16 @@ var firstConfirmGrace = 3 * time.Second
 // hook, so their sends are trusted too. Returns an error only if the prompt
 // still didn't submit after the retry, so callers fail fast instead of hanging.
 func SendConfirmed(ctx context.Context, tc TmuxClient, notifier Notifier, session, message string) error {
+	// Safety: enforce the same destructive-command blocklist as the
+	// send_to_session tool. SendConfirmed is the choke point for every
+	// autonomous send path (send_to_session, voice dispatch via ConfirmPlan,
+	// kanban / @mention HTTP), and `message` is LLM-generated — so an rm -rf or
+	// curl|sh buried in a plan's brief must be refused here too, not just in
+	// the tool path.
+	if blocked, pattern := isBlockedCommand(message); blocked {
+		return fmt.Errorf("command blocked by safety policy: matched pattern %q", pattern)
+	}
+
 	before := uint64(0)
 	if notifier != nil {
 		before = notifier.Snapshot(session)
@@ -144,9 +154,15 @@ func SendConfirmed(ctx context.Context, tc TmuxClient, notifier Notifier, sessio
 	if confirmAgentStarted(ctx, notifier, session, before, firstConfirmGrace) {
 		return nil
 	}
-	// Enter likely lost on the first send (agent wasn't settled at its prompt
-	// — welcome screen / first render). The text is already sitting in the
-	// input box; resend just Enter and re-confirm.
+	// The turn didn't start within firstConfirmGrace. Before resending Enter,
+	// make sure the agent hasn't already moved on: if the UserPromptSubmit hook
+	// was simply slow (system load / slow disk) the first Enter DID submit and
+	// the agent is now off its bare input prompt (showing the message /
+	// thinking) — resending Enter would land a stray keystroke. Only resend
+	// when the pane still ends at the input prompt, i.e. the Enter was lost.
+	if !paneEndsAtAgentPrompt(tc, session) {
+		return nil
+	}
 	if _, err := tc.Exec(tmux.SendEnterCmd(session)); err != nil {
 		return fmt.Errorf("resend enter to %q: %w", session, err)
 	}

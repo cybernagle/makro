@@ -57,3 +57,23 @@ func TestQuoteArg(t *testing.T) {
 	assert.Equal(t, `"has\"quote"`, quoteArg(`has"quote`))
 	assert.Equal(t, `"has\\backslash"`, quoteArg(`has\backslash`))
 }
+
+// TestParseTmuxArgsSemicolonSeparator locks the invariant send.go's atomic
+// send relies on: a bare ";" between whitespace becomes its own argv token, so
+// tmux treats it as a command separator. If parseTmuxArgs ever special-cased or
+// stripped ";", the atomic "body ; Enter" send would break silently.
+func TestParseTmuxArgsSemicolonSeparator(t *testing.T) {
+	args := parseTmuxArgs("send-keys -t s -l body ; send-keys -t s Enter")
+	idx := -1
+	for i, a := range args {
+		if a == ";" {
+			idx = i
+			break
+		}
+	}
+	assert.GreaterOrEqual(t, idx, 0, "bare ';' must survive as its own token")
+	if idx >= 0 {
+		assert.Equal(t, "body", args[idx-1], "';' must not glue to the preceding token")
+		assert.Equal(t, "send-keys", args[idx+1], "';' must not glue to the following token")
+	}
+}

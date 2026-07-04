@@ -205,8 +205,13 @@ func (c *Client) Exec(cmd string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// parseTmuxArgs splits a tmux command string into arguments,
-// respecting single and double quotes.
+// parseTmuxArgs splits a tmux command string into argv tokens, respecting
+// single and double quotes. It deliberately does NOT special-case ';' — a bare
+// ";" between whitespace becomes its own token, which tmux interprets as a
+// command separator. internal/agent/tools/send.go relies on this invariant to
+// make an atomic "send-keys -l <body> ; send-keys Enter" send (one Exec call,
+// two tmux commands joined by ";"). If this ever starts stripping/merging ';',
+// the atomic send breaks silently. See TestParseTmuxArgsSemicolonSeparator.
 func parseTmuxArgs(cmd string) []string {
 	var args []string
 	var current strings.Builder

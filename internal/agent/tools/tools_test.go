@@ -312,13 +312,18 @@ func TestSendToSessionConfirmsSubmitted(t *testing.T) {
 // starts a turn (Enter lost / prompt not submitted). The tool must fail fast
 // instead of letting the caller hang on wait_until_idle for the full timeout.
 func TestSendToSessionDetectsUnsubmittedHang(t *testing.T) {
-	orig := submitConfirmGrace
+	origFirst, origSubmit := firstConfirmGrace, submitConfirmGrace
+	firstConfirmGrace = 60 * time.Millisecond
 	submitConfirmGrace = 60 * time.Millisecond
-	defer func() { submitConfirmGrace = orig }()
+	defer func() { firstConfirmGrace, submitConfirmGrace = origFirst, origSubmit }()
 
 	mc := newMockTmuxClient()
 	mc.results[tmux.PaneCurrentCommandCmd("s")] = "claude"
 	mc.results[tmux.CapturePaneRangeCmd("s", 30, 0)] = "✻ Welcome to Claude Code!\n\n❯ "
+	// Agent still at its bare input prompt (Enter lost, text sitting in the
+	// box): paneEndsAtAgentPrompt must agree so SendConfirmed proceeds to the
+	// resend instead of treating it as "turn already started".
+	mc.results[tmux.CapturePaneRangeCmd("s", 5, 0)] = "✻ Welcome to Claude Code!\n\n❯ "
 	n := newMockNotifier() // never fires agent_start
 
 	tool := NewSendToSessionTool(mc, n)
@@ -506,6 +511,10 @@ func TestSendConfirmedResendsEnterOnLostSubmit(t *testing.T) {
 
 	mc := newMockTmuxClient()
 	mc.results[tmux.PaneCurrentCommandCmd("s")] = "claude"
+	// Agent is still sitting at its bare input prompt (Enter was lost, text in
+	// the box) — paneEndsAtAgentPrompt must say "still at prompt" so the resend
+	// is allowed to proceed.
+	mc.results[tmux.CapturePaneRangeCmd("s", 5, 0)] = "✻ Welcome to Claude Code!\n\n❯ "
 	n := newMockNotifier() // never fires agent_start → simulates lost Enter
 
 	err := SendConfirmed(context.Background(), mc, n, "s", "do the thing")
@@ -534,6 +543,8 @@ func TestSendConfirmedSucceedsAfterResend(t *testing.T) {
 
 	mc := newMockTmuxClient()
 	mc.results[tmux.PaneCurrentCommandCmd("s")] = "claude"
+	// Still at the input prompt → resend is allowed.
+	mc.results[tmux.CapturePaneRangeCmd("s", 5, 0)] = "✻ Welcome to Claude Code!\n\n❯ "
 	n := newMockNotifier()
 	// Simulate the resent Enter landing: fire agent_start just after the first
 	// (short) confirm window times out, within the second (longer) window.
@@ -571,4 +582,50 @@ func TestSendConfirmedSucceedsOnFirstTry(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 0, standaloneEnter, "no Enter resend when the first submit landed")
+}
+
+// TestSendConfirmedBlocksDestructive: the destructive-command blocklist (rm -rf,
+// curl|sh, …) applies to SendConfirmed, not just the send_to_session tool. The
+// voice-dispatch path routes through here with an LLM-generated brief, so a
+// destructive command must be refused before anything is sent to tmux.
+func TestSendConfirmedBlocksDestructive(t *testing.T) {
+	mc := newMockTmuxClient()
+	n := newMockNotifier()
+	err := SendConfirmed(context.Background(), mc, n, "s", "rm -rf /")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked")
+	// Blocked before sendText — nothing reaches tmux.
+	for _, c := range mc.executedCmds() {
+		assert.NotContains(t, c, "send-keys", "destructive command must not reach tmux")
+	}
+}
+
+// TestSendConfirmedSkipsResendWhenTurnAlreadyStarted: if the first Enter DID
+// submit but the UserPromptSubmit hook was slow (>firstConfirmGrace), the agent
+// has moved off its bare input prompt — resending Enter would land a stray
+// keystroke (empty prompt / bleeds into the next turn). SendConfirmed detects
+// this via paneEndsAtAgentPrompt and does NOT resend.
+func TestSendConfirmedSkipsResendWhenTurnAlreadyStarted(t *testing.T) {
+	origFirst, origSubmit := firstConfirmGrace, submitConfirmGrace
+	firstConfirmGrace = 40 * time.Millisecond
+	submitConfirmGrace = 40 * time.Millisecond
+	defer func() { firstConfirmGrace, submitConfirmGrace = origFirst, origSubmit }()
+
+	mc := newMockTmuxClient()
+	mc.results[tmux.PaneCurrentCommandCmd("s")] = "claude"
+	// Pane shows the submitted message + thinking — NOT the bare input prompt,
+	// i.e. the turn already started (hook was slow).
+	mc.results[tmux.CapturePaneRangeCmd("s", 5, 0)] = "⏺ I'll fix the bug.\n✻ Thinking…"
+	n := newMockNotifier() // never fires within grace (slow-hook simulation)
+
+	err := SendConfirmed(context.Background(), mc, n, "s", "do the thing")
+	require.NoError(t, err, "turn already started → success, no resend")
+
+	// No standalone Enter resend: only the atomic send (which carries the body
+	// + Enter) should appear; a bare Enter resend would not contain the body.
+	for _, c := range mc.executedCmds() {
+		if strings.Contains(c, "Enter") && !strings.Contains(c, "do the thing") {
+			t.Errorf("unexpected standalone Enter resend while agent already started: %q", c)
+		}
+	}
 }
