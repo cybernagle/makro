@@ -269,3 +269,22 @@ New packages/files (proposed; final names TBD in implementation plan):
 **Phase 3:**
 - Reviewer role: `state_file`, read/write, `/clear` on manual signal.
 - `clear_after = "marker"` and `"guardian"` implementations.
+
+## 12. Architectural principle: Role is an asset, Agent is infrastructure
+
+Long-term direction (recorded 2026-07-05, validated with user). This is a **trajectory, not Phase 1 scope** — it constrains *how* data structures are written, not *what* is built now.
+
+- **Role is the compounding asset**: it encodes domain knowledge, accumulates telemetry (call-count, score), and grows coupled to its owner. The role library is the moat.
+- **Agent is replaceable infrastructure**: the LLM, the orchestrator loop, the tool registry are all commodity over time.
+- **Single role evolves toward `agent + code + prompt`**: not just a persona/prompt, but carrying its own tools/behaviors. Phase 1's config-only role is the starting point of that evolution.
+- **Role has a full lifecycle**: call-count → score → deprecation. The B→A graduation in §3.4 is the seed of this; later phases generalize it to telemetry-driven promotion *and* retirement.
+
+### Implication for Phase 1 (the only one that touches Phase 1)
+
+The `Role` data model must be **extensible without migration**:
+
+- `Role` struct carries a `Metadata map[string]any` field. Phase 1 reads/writes nothing in it; future telemetry fields live there first, then get promoted to first-class struct fields once stable.
+- The `roles.toml` loader is **forward-compatible**: unknown keys are tolerated (not errors), so adding config fields later never breaks existing user configs. (This is typically a one-flag default in Go TOML libraries and costs nothing.)
+- The graduation counter (Phase 2) is shaped as `map[string]int` (role-name → count) from day one, not a hardcoded `if usedFiveTimes` — so it can grow into full lifecycle telemetry without rework.
+
+Phase 1 implements **zero** telemetry/scoring/deprecation logic. The principle only fixes the *shape* of the structs so the evolution path stays open at near-zero cost.
