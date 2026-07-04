@@ -102,11 +102,13 @@ makro/
 │   ├── brain/              # proactive memory layer
 │   ├── llm/                # multi-provider streaming + tool use
 │   ├── tmux/               # tmux CLI client + parser
-│   ├── apns/ notify/       # push notifications
+│   ├── apns/               # Apple push notifications
+│   ├── notify/             # hook → running-instance forwarding
 │   ├── usage/              # prompt-usage tracking
-│   ├── config/ util/ tui/
-├── docs/                   # diagrams (kanban-architecture.svg, …)
-└── artifacts/              # generated investigation reports / samples
+│   ├── config/             # config loading, .claude fallback
+│   ├── util/               # shared helpers
+│   └── tui/                # Bubbletea TUI (root app)
+└── docs/                   # diagrams (kanban-architecture.svg, …)
 ```
 
 ## Build & run
@@ -119,8 +121,9 @@ go build -o cmd/gui/bin/makro-serve ./cmd/gui/
 # 2. Frontend bundle
 cd cmd/gui/frontend && npm install && npm run build && cd ..
 
-# 3. Package the .app (use --dir; the DMG step is broken on this machine)
-rm -rf release/ && ./node_modules/.bin/electron-builder --dir
+# 3. Electron deps + package the .app (--dir skips the DMG/notarize step;
+#    DMG isn't needed for a local install)
+cd cmd/gui && npm install && rm -rf release/ && ./node_modules/.bin/electron-builder --dir
 # → release/mac-arm64/Makro.app
 
 # Dev mode (hot frontend, spawns makro-serve)
@@ -133,9 +136,9 @@ cd ios/Makro
 xcodegen generate          # regenerates Makro.xcodeproj from project.yml
 pod install                # Azure Speech SDK via CocoaPods
 xcodebuild -workspace Makro.xcworkspace -scheme Makro \
-  -sdk iphoneos -configuration Development -derivedDataPath build
+  -sdk iphoneos -configuration Debug -derivedDataPath build
 ```
-Open `Makro.xcworkspace` (not the `.xcodeproj`) in Xcode. Configure the Azure Speech key/region and the Makro server URL/password in Settings.
+Open `Makro.xcworkspace` (not the `.xcodeproj`) in Xcode. Configure the Azure Speech key/region and the Makro server URL/password in Settings. Device builds require an Apple Developer signing identity (Xcode → Signing & Capabilities).
 
 ### Terminal TUI
 ```bash
@@ -164,6 +167,8 @@ Makro reads `~/.makro/config.json` and falls back to `.claude/settings.json` for
 | `MAKRO_LLM_MODEL` | Model name |
 | `MAKRO_TMUX_MODE` | `auto`, `dedicated`, or `shared` |
 | `MAKRO_PASSWORD` | Fixed backend password (desktop app; random otherwise) |
+| `ANTHROPIC_API_KEY` | Anthropic API key (fallback) |
+| `OPENAI_API_KEY` | OpenAI(-compatible) API key (fallback) |
 
 `~/.makro/` also holds `chat.jsonl` (history), `tasks.json` (kanban), and `prompt_usage.db` (cost tracking).
 
