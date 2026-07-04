@@ -51,8 +51,7 @@ func NewSendToSessionTool(tc TmuxClient, notifier Notifier) Tool {
 			// showing a Yes/No dialog. Shared with relay_message and
 			// restore_context via validateSendTarget so every autonomous send
 			// path gets the same protection.
-			agent, err := validateSendTarget(tc, name)
-			if err != nil {
+			if _, err := validateSendTarget(tc, name); err != nil {
 				return "", err
 			}
 
@@ -61,23 +60,11 @@ func NewSendToSessionTool(tc TmuxClient, notifier Notifier) Tool {
 				return "", fmt.Errorf("command blocked by safety policy: matched pattern %q", pattern)
 			}
 
-			// Snapshot notification state BEFORE sending so the confirmation
-			// below only reacts to this send.
-			before := uint64(0)
-			if notifier != nil {
-				before = notifier.Snapshot(name)
-			}
-
-			if err := sendText(tc, name, message); err != nil {
+			// Atomic send + first-send Enter-loss recovery (resends Enter if
+			// claude didn't start a turn). Shared with DirectSend and the
+			// kanban/@mention paths via SendConfirmed.
+			if err := SendConfirmed(ctx, tc, notifier, name, message); err != nil {
 				return "", err
-			}
-
-			// Confirm the agent picked up the prompt — but only for agents we
-			// can observe. Claude Code's UserPromptSubmit hook feeds
-			// agent_start; copilot/codex have no such hook, so waiting would
-			// always time out and falsely report failure for them.
-			if agent == "claude" && !confirmAgentStarted(ctx, notifier, name, before, submitConfirmGrace) {
-				return "", fmt.Errorf("cannot send to %q: text was delivered but claude did not start a turn within %s — the prompt may not have been submitted; check the pane and resend", name, submitConfirmGrace)
 			}
 
 			return fmt.Sprintf("Sent to %q: %s", name, util.Truncate(message, 50)), nil
@@ -117,6 +104,56 @@ func confirmAgentStarted(ctx context.Context, notifier Notifier, session string,
 	case <-ctx.Done():
 		return false
 	}
+}
+
+// firstConfirmGrace is how long SendConfirmed waits for the agent to start a
+// turn after the initial atomic send before assuming the Enter was lost and
+// resending it. Kept short (vs submitConfirmGrace) so the retry happens fast.
+// Overridable in tests.
+var firstConfirmGrace = 3 * time.Second
+
+// SendConfirmed sends message to session atomically and, for agents we can
+// observe (claude — its UserPromptSubmit hook feeds agent_start), confirms the
+// prompt was actually submitted. If the submit didn't register within
+// firstConfirmGrace — the classic first-send Enter-loss, where the agent just
+// rendered its welcome screen and absorbed the Enter while the text landed in
+// the input box — it resends Enter once (the text is already typed) and
+// re-confirms. Empirically the resend always lands once the agent has settled,
+// turning "first send always fails, second works" into "first send succeeds".
+//
+// notifier may be nil (manual modes without hooks); then the send is trusted
+// without confirmation. Non-claude agents (copilot/codex) have no submission
+// hook, so their sends are trusted too. Returns an error only if the prompt
+// still didn't submit after the retry, so callers fail fast instead of hanging.
+func SendConfirmed(ctx context.Context, tc TmuxClient, notifier Notifier, session, message string) error {
+	before := uint64(0)
+	if notifier != nil {
+		before = notifier.Snapshot(session)
+	}
+	if err := sendText(tc, session, message); err != nil {
+		return err
+	}
+	if notifier == nil {
+		return nil
+	}
+	// Only Claude Code emits agent_start (UserPromptSubmit hook); copilot/codex
+	// have no such hook, so we can't observe their submission — trust the send.
+	if checkAgentAlive(tc, session).Agent != "claude" {
+		return nil
+	}
+	if confirmAgentStarted(ctx, notifier, session, before, firstConfirmGrace) {
+		return nil
+	}
+	// Enter likely lost on the first send (agent wasn't settled at its prompt
+	// — welcome screen / first render). The text is already sitting in the
+	// input box; resend just Enter and re-confirm.
+	if _, err := tc.Exec(tmux.SendEnterCmd(session)); err != nil {
+		return fmt.Errorf("resend enter to %q: %w", session, err)
+	}
+	if confirmAgentStarted(ctx, notifier, session, before, submitConfirmGrace) {
+		return nil
+	}
+	return fmt.Errorf("sent to %q but claude did not start a turn within %s — the prompt may not have been submitted (Enter lost); check the pane and resend", session, firstConfirmGrace+submitConfirmGrace)
 }
 
 // blockedPatterns are hard-blocked — these commands are never allowed.

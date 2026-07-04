@@ -478,3 +478,97 @@ func TestTruncate(t *testing.T) {
 	assert.Equal(t, "short", util.Truncate("short", 10))
 	assert.Equal(t, "a very long string i...", util.Truncate("a very long string indeed", 20))
 }
+
+// ── SendConfirmed: first-send Enter-loss recovery ──
+
+// TestSendConfirmedNilNotifierTrustedSend: without a notifier there's nothing
+// to observe submission, so the message is sent exactly once (atomic) and
+// trusted — no confirm, no retry.
+func TestSendConfirmedNilNotifierTrustedSend(t *testing.T) {
+	mc := newMockTmuxClient()
+	err := SendConfirmed(context.Background(), mc, nil, "s", "hi there")
+	require.NoError(t, err)
+	cmds := mc.executedCmds()
+	require.Len(t, cmds, 1, "nil notifier → single atomic send, no confirm/retry")
+	assert.Contains(t, cmds[0], "hi there")
+}
+
+// TestSendConfirmedResendsEnterOnLostSubmit reproduces the deterministic
+// first-send failure: claude rendered its welcome screen and swallowed the
+// Enter, so agent_start never fires. SendConfirmed must (a) resend just Enter
+// once — NOT re-type the body — and (b) ultimately error since the turn still
+// never starts.
+func TestSendConfirmedResendsEnterOnLostSubmit(t *testing.T) {
+	origFirst, origSubmit := firstConfirmGrace, submitConfirmGrace
+	firstConfirmGrace = 40 * time.Millisecond
+	submitConfirmGrace = 40 * time.Millisecond
+	defer func() { firstConfirmGrace, submitConfirmGrace = origFirst, origSubmit }()
+
+	mc := newMockTmuxClient()
+	mc.results[tmux.PaneCurrentCommandCmd("s")] = "claude"
+	n := newMockNotifier() // never fires agent_start → simulates lost Enter
+
+	err := SendConfirmed(context.Background(), mc, n, "s", "do the thing")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not start")
+
+	// The body must be typed exactly once. The retry resends Enter only —
+	// re-typing the body would duplicate it in the input box.
+	bodyCmds := 0
+	for _, c := range mc.executedCmds() {
+		if strings.Contains(c, "do the thing") {
+			bodyCmds++
+		}
+	}
+	assert.Equal(t, 1, bodyCmds, "body must be typed once; retry resends Enter only")
+}
+
+// TestSendConfirmedSucceedsAfterResend: the lost-Enter recovery actually works
+// — the resent Enter lands (agent_start fires during the second confirm window)
+// and SendConfirmed returns nil.
+func TestSendConfirmedSucceedsAfterResend(t *testing.T) {
+	origFirst, origSubmit := firstConfirmGrace, submitConfirmGrace
+	firstConfirmGrace = 40 * time.Millisecond
+	submitConfirmGrace = 400 * time.Millisecond
+	defer func() { firstConfirmGrace, submitConfirmGrace = origFirst, origSubmit }()
+
+	mc := newMockTmuxClient()
+	mc.results[tmux.PaneCurrentCommandCmd("s")] = "claude"
+	n := newMockNotifier()
+	// Simulate the resent Enter landing: fire agent_start just after the first
+	// (short) confirm window times out, within the second (longer) window.
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		n.Notify("agent_start")
+	}()
+
+	err := SendConfirmed(context.Background(), mc, n, "s", "do the thing")
+	require.NoError(t, err)
+}
+
+// TestSendConfirmedSucceedsOnFirstTry: when the first Enter lands normally
+// (agent_start fires immediately), no retry Enter is sent.
+func TestSendConfirmedSucceedsOnFirstTry(t *testing.T) {
+	origFirst, origSubmit := firstConfirmGrace, submitConfirmGrace
+	firstConfirmGrace = 400 * time.Millisecond
+	defer func() { firstConfirmGrace, submitConfirmGrace = origFirst, origSubmit }()
+
+	mc := newMockTmuxClient()
+	mc.results[tmux.PaneCurrentCommandCmd("s")] = "claude"
+	n := newMockNotifier()
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		n.Notify("agent_start")
+	}()
+
+	err := SendConfirmed(context.Background(), mc, n, "s", "do the thing")
+	require.NoError(t, err)
+	// No standalone Enter resend: only the atomic send + the pane-command check.
+	standaloneEnter := 0
+	for _, c := range mc.executedCmds() {
+		if strings.Contains(c, "Enter") && !strings.Contains(c, "do the thing") {
+			standaloneEnter++
+		}
+	}
+	assert.Equal(t, 0, standaloneEnter, "no Enter resend when the first submit landed")
+}

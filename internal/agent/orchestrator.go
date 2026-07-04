@@ -524,7 +524,7 @@ func (o *Orchestrator) executeTool(ctx context.Context, tc llm.ToolCall) llm.Too
 
 	args := parseJSONArgs(tc.Arguments)
 
-	result, err := o.hooks.Fire(ctx, HookBeforeToolCall, args)
+	result, err := o.hooks.Fire(ctx, HookBeforeToolCall, BeforeToolCallPayload{Name: tc.Name, Args: args})
 	if err != nil {
 		return llm.ToolResult{CallID: tc.ID, Content: fmt.Sprintf("Hook error: %v", err), IsError: true}
 	}

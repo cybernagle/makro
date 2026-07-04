@@ -186,6 +186,9 @@ func serve(addr string, tlsCert, tlsKey, password string) error {
 	mux.HandleFunc("/ws/snapshot/", wsSnapshotHandler)
 	mux.HandleFunc("/ws/chat", chatWSHandler(hub))
 	mux.HandleFunc("/api/chat/cancel", chatCancelHandler(chatSvc))
+	mux.HandleFunc("/api/chat/confirm", chatConfirmHandler(chatSvc))
+	mux.HandleFunc("/api/chat/deny", chatDenyHandler(chatSvc))
+	mux.HandleFunc("/api/chat/call", chatCallHandler(chatSvc))
 	mux.HandleFunc("/api/snapshot", snapshotHandler)
 	mux.HandleFunc("/api/recover", recoveryHandler)
 
@@ -200,7 +203,7 @@ func serve(addr string, tlsCert, tlsKey, password string) error {
 		log.Printf("[server] task store init: %v", err)
 	}
 	mux.HandleFunc("/api/tasks", tasksHandler(taskStore))
-	mux.HandleFunc("/api/tasks/", taskRouteHandler(taskStore))
+	mux.HandleFunc("/api/tasks/", taskRouteHandler(taskStore, chatSvc))
 
 	// Serve frontend static files (for Electron mode).
 	// Look for frontend/dist relative to the binary, then fall back to working dir.
@@ -381,7 +384,7 @@ func sessionHandler(chatSvc *ChatService) http.HandlerFunc {
 				sessionCaptureHandler(w, r, name)
 				return
 			case "send":
-				sessionSendHandler(w, r, name)
+				sessionSendHandler(chatSvc, w, r, name)
 				return
 			case "viewed":
 				sessionViewedHandler(chatSvc, w, r, name)
@@ -432,10 +435,10 @@ func sessionCaptureHandler(w http.ResponseWriter, r *http.Request, name string) 
 	json.NewEncoder(w).Encode(map[string]string{"content": content})
 }
 
-// sessionSendHandler sends text to a tmux session via send-keys. Reuses the
-// existing sendToTmuxSession helper (short → send-keys -l + Enter; long →
-// bracketed paste).
-func sessionSendHandler(w http.ResponseWriter, r *http.Request, name string) {
+// sessionSendHandler sends text to a tmux session via the confirmed send path
+// (first-send Enter-loss recovery). Reuses chatSvc.SendToSession so it shares
+// the send_to_session tool's reliability.
+func sessionSendHandler(chatSvc *ChatService, w http.ResponseWriter, r *http.Request, name string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -451,7 +454,7 @@ func sessionSendHandler(w http.ResponseWriter, r *http.Request, name string) {
 		http.Error(w, "empty text", http.StatusBadRequest)
 		return
 	}
-	if err := sendToTmuxSession(name, body.Text); err != nil {
+	if err := chatSvc.SendToSession(name, body.Text); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -624,6 +627,52 @@ func chatCancelHandler(chatSvc *ChatService) http.HandlerFunc {
 			return
 		}
 		chatSvc.Cancel()
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// chatConfirmHandler dispatches the staged voice-call plan (phase: proposed →
+// dispatched). Called by the iOS confirm button or a voice confirm utterance.
+func chatConfirmHandler(chatSvc *ChatService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		chatSvc.ConfirmPlan()
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// chatDenyHandler drops the staged plan and returns to discussion.
+func chatDenyHandler(chatSvc *ChatService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		chatSvc.DenyPlan()
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// chatCallHandler toggles voice-call mode (resets staged plan; resets phase on
+// start). Called by iOS on call start/end.
+func chatCallHandler(chatSvc *ChatService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Active bool   `json:"active"`
+			Mode   string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		chatSvc.SetCallActive(body.Active, body.Mode)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
@@ -899,7 +948,7 @@ func tasksHandler(store *TaskStore) http.HandlerFunc {
 	}
 }
 
-func taskRouteHandler(store *TaskStore) http.HandlerFunc {
+func taskRouteHandler(store *TaskStore, chatSvc *ChatService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// /api/tasks/:id or /api/tasks/:id/send
 		path := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
@@ -916,7 +965,7 @@ func taskRouteHandler(store *TaskStore) http.HandlerFunc {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
-			handleTaskSend(store, w, r, id)
+			handleTaskSend(store, chatSvc, w, r, id)
 			return
 		}
 
@@ -947,7 +996,7 @@ func taskRouteHandler(store *TaskStore) http.HandlerFunc {
 	}
 }
 
-func handleTaskSend(store *TaskStore, w http.ResponseWriter, r *http.Request, id string) {
+func handleTaskSend(store *TaskStore, chatSvc *ChatService, w http.ResponseWriter, r *http.Request, id string) {
 	var body struct {
 		Session string `json:"session"`
 	}
@@ -964,7 +1013,7 @@ func handleTaskSend(store *TaskStore, w http.ResponseWriter, r *http.Request, id
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	if err := sendToTmuxSession(body.Session, task.Content); err != nil {
+	if err := chatSvc.SendToSession(body.Session, task.Content); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

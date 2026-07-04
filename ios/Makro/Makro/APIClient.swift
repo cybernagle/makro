@@ -128,6 +128,36 @@ final class APIClient: NSObject {
         _ = try await urlSession.data(for: request)
     }
 
+    // ── Voice-call discuss → propose → dispatch ──
+
+    /// Confirm the staged plan → server dispatches it to its session.
+    func confirmPlan() async throws {
+        let url = config.httpBaseURL.appendingPathComponent("api/chat/confirm")
+        var request = authedRequest(url: url)
+        request.httpMethod = "POST"
+        _ = try await urlSession.data(for: request)
+    }
+
+    /// Deny the staged plan → server returns to discussion.
+    func denyPlan() async throws {
+        let url = config.httpBaseURL.appendingPathComponent("api/chat/deny")
+        var request = authedRequest(url: url)
+        request.httpMethod = "POST"
+        _ = try await urlSession.data(for: request)
+    }
+
+    /// Notify the server that a voice call started/ended and set the interaction
+    /// mode (resets staged plan + phase; backend applies per-mode behavior).
+    /// Best-effort; failures are ignored.
+    func setCallActive(_ active: Bool, mode: CallMode) async {
+        let url = config.httpBaseURL.appendingPathComponent("api/chat/call")
+        var request = authedRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["active": active, "mode": mode.rawValue])
+        _ = try? await urlSession.data(for: request)
+    }
+
     /// Registers this device's APNs push token with the makro backend so the
     /// Mac can send it push notifications when an agent finishes.
     func registerDeviceToken(deviceID: String, token: String) async throws {

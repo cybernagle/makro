@@ -22,6 +22,20 @@ final class ChatViewModel: NSObject, ObservableObject {
     @Published var isInCall = false
     @Published var isMuted = false
 
+    // Voice-call phase (discuss → proposed → dispatched). pendingPlan is
+    // non-nil while a plan is awaiting the user's confirmation; CallView shows
+    // confirm/deny buttons while set.
+    @Published private(set) var pendingPlan: PendingPlan?
+    @Published private(set) var callPhase: String = "discuss"
+    // Voice-call interaction mode (闲聊/落实/查询), picked from the CallView
+    // dropdown. Persisted across launches; default 落实 (plan).
+    @Published var callMode: CallMode = {
+        let raw = UserDefaults.standard.string(forKey: "makro.callMode") ?? CallMode.plan.rawValue
+        return CallMode(rawValue: raw) ?? .plan
+    }() {
+        didSet { UserDefaults.standard.set(callMode.rawValue, forKey: "makro.callMode") }
+    }
+
     private var cancellables: Set<AnyCancellable> = []
 
     private var task: URLSessionWebSocketTask?
@@ -178,6 +192,31 @@ final class ChatViewModel: NSObject, ObservableObject {
         Task { try? await api.cancelChat() }
     }
 
+    /// Confirm the staged voice-call plan → server dispatches it to its session.
+    func confirmPlan() {
+        guard pendingPlan != nil else { return }
+        pendingPlan = nil
+        Task { try? await api.confirmPlan() }
+    }
+
+    /// Deny the staged plan → server returns to discussion.
+    func denyPlan() {
+        pendingPlan = nil
+        Task { try? await api.denyPlan() }
+    }
+
+    /// Switch the voice-call interaction mode (from the CallView dropdown).
+    /// Resets any pending plan and tells the backend to apply the new mode's
+    /// behavior (prefix + tool gate + plan staging).
+    func setCallMode(_ mode: CallMode) {
+        callMode = mode
+        pendingPlan = nil
+        callPhase = "discuss"
+        if isInCall {
+            Task { await api.setCallActive(true, mode: mode) }
+        }
+    }
+
     // MARK: - Voice conversation
 
     /// Toggle mic listening. Tap to start, tap again (or trailing silence) to stop.
@@ -223,6 +262,11 @@ final class ChatViewModel: NSObject, ObservableObject {
         }
         isInCall = true
         isMuted = false
+        // Reset voice-call phase state and tell the backend a call started
+        // (it clears any staged plan + flips on the dispatch gate).
+        pendingPlan = nil
+        callPhase = "discuss"
+        Task { await api.setCallActive(true, mode: callMode) }
         // Arm spoken replies for the whole call; the done→TTS path checks isInCall.
         stopSpeaking()
         // Commit mode (VAD-gated push stream) is gated by the VAD setting; when
@@ -243,6 +287,9 @@ final class ChatViewModel: NSObject, ObservableObject {
         isInCall = false
         isMuted = false
         expectSpokenReply = false
+        pendingPlan = nil
+        callPhase = "discuss"
+        Task { await api.setCallActive(false, mode: callMode) }
         NowPlayingManager.shared.endCall()
         // Cancel any pending post-Siri auto-resume so ending a call (button or
         // Siri "hang up") isn't immediately undone when the audio interruption
@@ -319,9 +366,11 @@ final class ChatViewModel: NSObject, ObservableObject {
             // Typed messages outside a call never set either flag → silent.
             if (expectSpokenReply || isInCall),
                let last = messages.last,
-               last.role == .assistant,
-               !last.text.isEmpty {
-                speech.speak(last.text)
+               last.role == .assistant {
+                // Strip the ```plan block (if any) so TTS reads only the
+                // conversational summary, not the raw JSON execution target.
+                let spoken = stripPlanBlocks(last.text)
+                if !spoken.isEmpty { speech.speak(spoken) }
             }
         case "error":
             let msg = json["data"] as? String ?? "Unknown error"
@@ -330,6 +379,21 @@ final class ChatViewModel: NSObject, ObservableObject {
         case "system":
             let msg = json["data"] as? String ?? ""
             messages.append(ChatMessage(role: .system, text: msg))
+        case "plan":
+            // Assistant proposed a plan during a voice call → surface the
+            // confirm affordance. The prose summary is already in the last
+            // assistant message; this carries the structured execution target.
+            if let dataStr = json["data"] as? String,
+               let d = dataStr.data(using: .utf8) {
+                pendingPlan = try? JSONDecoder().decode(PendingPlan.self, from: d)
+            }
+        case "phase":
+            let p = json["data"] as? String ?? "discuss"
+            callPhase = p
+            // Leaving "proposed" (confirm / deny / dispatch) clears the card.
+            if p != "proposed" { pendingPlan = nil }
+        case "dispatched":
+            pendingPlan = nil
         case "session_state":
             // Per-session working/unread snapshot; re-broadcast to the
             // Sessions list via NotificationCenter (it doesn't own this WS).
@@ -401,4 +465,15 @@ extension ChatViewModel: URLSessionWebSocketDelegate {
     nonisolated func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         Config.handleTLSChallenge(challenge, completionHandler: completionHandler)
     }
+}
+
+// stripPlanBlocks removes ```plan fenced blocks from assistant text so TTS and
+// the call transcript surface only the conversational summary, not the raw JSON
+// execution target (which is delivered separately via the `plan` WS event).
+private func stripPlanBlocks(_ text: String) -> String {
+    guard let re = try? NSRegularExpression(pattern: "```plan[\\s\\S]*?```\\s*", options: []) else {
+        return text
+    }
+    let range = NSRange(text.startIndex..., in: text)
+    return re.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
 }
