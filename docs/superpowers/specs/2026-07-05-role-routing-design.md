@@ -137,6 +137,13 @@ Example tree:
 **Why centralized over repo-level** (e.g. `<repo>/.makro-review.md`):
 - Doesn't pollute external repos (`memory`, `juli` are not Makro's codebase).
 - One namespace, indexed `role × project` — exactly the two axes of the routing model.
+
+**Why net-new, not reusing `save_context`/`restore_context`:**
+Makro already persists session snapshots via `save_context`/`restore_context` to `~/.makro/contexts/<session>/latest.json`. That mechanism is **not** reused here, deliberately:
+- **Wrong key** — `contexts/` is keyed by *tmux session name*. One reviewer session handles 10 projects, so all 10 projects' state would collapse into `contexts/reviewer/`, losing the project axis (or forcing string-packing like `contexts/reviewer__makro/`).
+- **Wrong format** — `contexts/` stores an auto-parsed pane snapshot in JSON (`StructuredOutput`: rawOutput, status, errors, filesModified). Reviewer state is human-authored Markdown conclusions — a different content type.
+- **Wrong lifecycle** — `save_context` is a point-in-time manual snapshot for crash recovery / handoff; reviewer state is cumulative per-project knowledge, rewritten at the end of each review loop.
+- Forcing `contexts/` to serve both would mean a new keying scheme + a second format + a different write trigger inside an existing subsystem — more coupling, not less. `save_context` stays fit-for-purpose (single-session snapshot); the new `state/roles/` tree owns role×project state.
 - Same root as `~/.makro/skills/` and `~/.makro/roles.toml`.
 - Not in git — this state is local, it should not land in the reviewed repo.
 
