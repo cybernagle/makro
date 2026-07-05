@@ -174,7 +174,7 @@ Makro reads `~/.makro/config.json` and falls back to `.claude/settings.json` for
 
 ### Role-based routing (`~/.makro/roles.toml`)
 
-Declare named **roles** that bind classes of work to the tmux session that handles them. When you send input that isn't a slash command or `@mention`, Makro asks the LLM which role best matches and routes the task there — instead of spawning yet another anonymous session. Missing or empty `roles.toml` disables routing (Makro behaves as before).
+Declare named **roles** that tell the orchestrator which tmux session handles what. Roles are injected into the orchestrator's system prompt as context — the main conversation reads them and uses the existing `send_to_session` tool to route matching tasks to the right session, instead of spawning yet another anonymous one. There is no separate router: the orchestrator LLM does the routing as part of its normal conversation. Missing or empty `roles.toml` means the orchestrator gets no role context (it behaves as before).
 
 ```toml
 # ~/.makro/roles.toml — user-global. A project-local ./.makro/roles.toml overrides (see note below).
@@ -201,7 +201,7 @@ description = "兜底:无法路由时的默认角色"
 | `clear_after` | no | `manual` (default), `marker`, `guardian`. Reserved for the reviewer-role auto-clear (Phase 3). |
 | `state_file` | no | Per-project state file template, e.g. `reviewer/{project}.md`. Reserved for the reviewer role (Phase 3). |
 
-**Routing cascade:** A-level (config) roles → fallback to a role named `default` (or the first role) when no match clears the confidence threshold (0.5). B-level (runtime-created) roles and graduation are Phase 2. Slash commands and `@mention` always bypass routing.
+**How routing works:** roles are context, not a separate router. The orchestrator's main conversation reads the role list from its system prompt and decides — per task — whether to `send_to_session` to a matching role's session or handle the task inline. Slash commands and `@mention` always bypass this (they work exactly as before). A task with no clear role match is handled in the main conversation.
 
 **Config override:** `~/.makro/roles.toml` (user-global) is loaded first, then `./.makro/roles.toml` (project-local) overrides it. A role name repeated across the two files is **silently last-wins** (the project entry replaces the user entry); duplicates *within one file* are an error.
 
