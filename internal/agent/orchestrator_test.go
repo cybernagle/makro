@@ -9,6 +9,7 @@ import (
 
 	"github.com/naglezhang/makro/internal/agent/tools"
 	"github.com/naglezhang/makro/internal/llm"
+	"github.com/naglezhang/makro/internal/role"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -468,4 +469,20 @@ func (p *unrecoverableOverflowProvider) Stream(ctx context.Context, messages []l
 	ch <- llm.StreamEvent{Type: llm.EventDone}
 	close(ch)
 	return ch, nil
+}
+
+// TestSetModelPropagatesToRouter locks the fix for the bug where the role router
+// made its routing LLM call with Model:"" — because SetModel didn't propagate
+// to the router — so the provider returned no choices and every message fell
+// back to the default session (e.g. dev).
+func TestSetModelPropagatesToRouter(t *testing.T) {
+	o := NewOrchestrator(&mockProvider{}, nil, NewHookManager(), nil)
+	store := role.NewStore([]role.Role{{Name: "dev", Description: "dev work", Session: "dev"}})
+	o.SetRoles(store, nil)
+	o.SetModel("glm-4.7")
+
+	if o.router == nil {
+		t.Fatal("SetRoles did not install a router")
+	}
+	assert.Equal(t, "glm-4.7", o.router.Model(), "SetModel must propagate to the role router (regression: empty model → routing 'no choices' → everything falls back to default)")
 }

@@ -133,6 +133,12 @@ func (o *Orchestrator) SetSystemPrompt(prompt string) {
 
 func (o *Orchestrator) SetModel(model string) {
 	o.model = model
+	// Propagate to the role router — it makes its own LLM call and needs the
+	// model. Without this the router sends Model:"" → provider returns no
+	// choices → every message falls back to the default session.
+	if o.router != nil {
+		o.router.SetModel(model)
+	}
 }
 
 func (o *Orchestrator) SetCallTimeout(d time.Duration) {
@@ -172,6 +178,7 @@ func (o *Orchestrator) SetRoles(store *role.Store, notifier tools.Notifier) {
 		return
 	}
 	o.router = role.NewRouter(store, o.provider)
+	o.router.SetModel(o.model) // in case SetModel ran before SetRoles
 	o.dispatcher = role.NewDispatcher(o.tc, notifier)
 	o.dispatcher.SetStore(store)
 }
@@ -434,11 +441,17 @@ func (o *Orchestrator) handleRoute(ctx context.Context, ch chan<- OrchestratorEv
 		return
 	}
 
-	roleNote := fmt.Sprintf("→ %s", dec.RoleName)
+	// Fallback (routing LLM error / malformed / low confidence) → don't
+	// auto-dispatch to the default session (that would send every hiccup or
+	// ambiguous input to e.g. dev). Let the orchestrator handle it. Only a
+	// confident routing decision dispatches below.
 	if dec.Fallback {
-		roleNote = fmt.Sprintf("→ %s (fallback: %s)", dec.RoleName, dec.Reason)
+		ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("→ orchestrator (routing fallback: %s)", dec.Reason)}
+		o.handleLLM(ctx, ch, input)
+		return
 	}
-	ch <- OrchestratorEvent{Type: EventText, Content: roleNote}
+
+	ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("→ %s", dec.RoleName)}
 
 	if err := o.dispatcher.Dispatch(ctx, dec, input); err != nil {
 		ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("Dispatch error: %v", err)}

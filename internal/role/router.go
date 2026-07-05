@@ -45,6 +45,11 @@ func NewRouter(store *Store, provider llm.Provider) *Router {
 // SetModel overrides the model used for the routing call.
 func (r *Router) SetModel(m string) { r.model = m }
 
+// Model returns the model the router uses for its routing LLM call. Exposed so
+// callers (and tests) can confirm the orchestrator propagated its model — an
+// empty model means the routing call will fail with "no choices returned".
+func (r *Router) Model() string { return r.model }
+
 // routingResponse is the JSON shape the LLM is asked to return.
 type routingResponse struct {
 	Role       string  `json:"role"`
