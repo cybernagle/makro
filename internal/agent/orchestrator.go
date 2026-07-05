@@ -13,6 +13,7 @@ import (
 	"github.com/naglezhang/makro/internal/agent/skills"
 	"github.com/naglezhang/makro/internal/agent/tools"
 	"github.com/naglezhang/makro/internal/llm"
+	"github.com/naglezhang/makro/internal/role"
 	"github.com/naglezhang/makro/internal/usage"
 	"github.com/naglezhang/makro/internal/util"
 )
@@ -66,6 +67,8 @@ type Orchestrator struct {
 	cancelFn           context.CancelFunc
 	skillMu            sync.Mutex
 	activeSkill        *skills.Skill
+	router             *role.Router
+	dispatcher         *role.Dispatcher
 	usage              *usage.Store
 }
 
@@ -155,6 +158,22 @@ func (o *Orchestrator) LoadSkills(dirs []string) error {
 		})
 	}
 	return nil
+}
+
+// SetRoles configures role-based routing. When set, non-slash, non-@mention
+// input is routed to the matching role's session instead of going to
+// handleLLM. An empty store disables routing (falls through to handleLLM).
+// notifier is the AgentNotifier used for first-send Enter-loss recovery in
+// the gated send path; pass nil to skip recovery (rare; tests).
+func (o *Orchestrator) SetRoles(store *role.Store, notifier tools.Notifier) {
+	if store == nil || store.Len() == 0 {
+		o.router = nil
+		o.dispatcher = nil
+		return
+	}
+	o.router = role.NewRouter(store, o.provider)
+	o.dispatcher = role.NewDispatcher(o.tc, notifier)
+	o.dispatcher.SetStore(store)
 }
 
 func (o *Orchestrator) SetCommandRegistry(cr *CommandRegistry) {
@@ -369,6 +388,18 @@ func (o *Orchestrator) ProcessInput(ctx context.Context, input string) (<-chan O
 		return ch, nil
 	}
 
+	// Role-based routing: if roles are configured, route the input to the
+	// matching role's session. NoRoles (empty store) falls through to
+	// handleLLM. Slash commands and @mention above bypass routing entirely.
+	if o.router != nil {
+		go func() {
+			defer close(ch)
+			defer cancel()
+			o.handleRoute(ctx, ch, input)
+		}()
+		return ch, nil
+	}
+
 	go func() {
 		defer close(ch)
 		defer cancel()
@@ -384,6 +415,35 @@ func (o *Orchestrator) handleMention(ctx context.Context, ch chan<- Orchestrator
 	} else {
 		ch <- OrchestratorEvent{Type: EventDone}
 	}
+}
+
+// handleRoute routes input via the role Router and dispatches to the chosen
+// role's session. On any routing/dispatch error it surfaces the error as text
+// rather than crashing the turn.
+func (o *Orchestrator) handleRoute(ctx context.Context, ch chan<- OrchestratorEvent, input string) {
+	dec, err := o.router.Route(ctx, input)
+	if err != nil {
+		ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("Routing error: %v", err)}
+		ch <- OrchestratorEvent{Type: EventDone}
+		return
+	}
+
+	if dec.NoRoles {
+		// No roles configured: fall back to a normal LLM turn.
+		o.handleLLM(ctx, ch, input)
+		return
+	}
+
+	roleNote := fmt.Sprintf("→ %s", dec.RoleName)
+	if dec.Fallback {
+		roleNote = fmt.Sprintf("→ %s (fallback: %s)", dec.RoleName, dec.Reason)
+	}
+	ch <- OrchestratorEvent{Type: EventText, Content: roleNote}
+
+	if err := o.dispatcher.Dispatch(ctx, dec, input); err != nil {
+		ch <- OrchestratorEvent{Type: EventText, Content: fmt.Sprintf("Dispatch error: %v", err)}
+	}
+	ch <- OrchestratorEvent{Type: EventDone}
 }
 
 func (o *Orchestrator) handleLLM(ctx context.Context, ch chan<- OrchestratorEvent, input string) {

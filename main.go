@@ -24,6 +24,7 @@ import (
 	"github.com/naglezhang/makro/internal/config"
 	"github.com/naglezhang/makro/internal/llm"
 	"github.com/naglezhang/makro/internal/notify"
+	rolepkg "github.com/naglezhang/makro/internal/role"
 	"github.com/naglezhang/makro/internal/tmux"
 	"github.com/naglezhang/makro/internal/tui"
 )
@@ -172,6 +173,25 @@ func main() {
 	}
 	if err := orch.LoadSkills(skillDirs); err != nil {
 		log.Printf("[main] warning: could not load skills: %v", err)
+	}
+
+	// Load A-level roles (spec: role-based routing). Missing file is fine —
+	// routing is simply disabled. Project-local overrides user-global, same
+	// convention as skills. Later files override earlier ones.
+	rolePaths := []string{
+		filepath.Join(homeDir, ".makro", "roles.toml"),
+		filepath.Join(".", ".makro", "roles.toml"),
+	}
+	var allRoles []rolepkg.Role
+	for _, p := range rolePaths {
+		rs, err := rolepkg.LoadFile(p)
+		if err != nil {
+			log.Printf("[main] warning: roles config %s: %v", p, err)
+		}
+		allRoles = append(allRoles, rs...)
+	}
+	if len(allRoles) > 0 {
+		orch.SetRoles(rolepkg.NewStore(allRoles), notifier)
 	}
 	orch.SetModel(cfg.LLMModel)
 	orch.SetMaxContextMessages(cfg.MaxContextMessages)

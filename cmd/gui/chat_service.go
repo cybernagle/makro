@@ -20,6 +20,7 @@ import (
 	"github.com/naglezhang/makro/internal/config"
 	"github.com/naglezhang/makro/internal/llm"
 	"github.com/naglezhang/makro/internal/notify"
+	"github.com/naglezhang/makro/internal/role"
 	"github.com/naglezhang/makro/internal/tmux"
 	"github.com/naglezhang/makro/internal/usage"
 )
@@ -243,6 +244,25 @@ func (s *ChatService) init() {
 		filepath.Join(".", ".makro", "skills"),
 	}
 	orch.LoadSkills(skillDirs)
+
+	// Load A-level roles (spec: role-based routing). Missing file is fine —
+	// routing is simply disabled. Project-local overrides user-global, same
+	// convention as skills. Later files override earlier ones.
+	rolePaths := []string{
+		filepath.Join(homeDir, ".makro", "roles.toml"),
+		filepath.Join(".", ".makro", "roles.toml"),
+	}
+	var allRoles []role.Role
+	for _, p := range rolePaths {
+		rs, err := role.LoadFile(p)
+		if err != nil {
+			log.Printf("[gui] warning: roles config %s: %v", p, err)
+		}
+		allRoles = append(allRoles, rs...)
+	}
+	if len(allRoles) > 0 {
+		orch.SetRoles(role.NewStore(allRoles), notifier)
+	}
 	orch.SetModel(cfg.LLMModel)
 	orch.SetMaxContextMessages(cfg.MaxContextMessages)
 	orch.SetSystemPrompt(agent.DefaultSystemPrompt())
