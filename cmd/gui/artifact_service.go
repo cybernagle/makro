@@ -3,38 +3,33 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 )
 
-// ArtifactService discovers and serves artifact files (HTML, video) generated
-// by AI agents in their session working directories.
-//
-// Artifacts are scanned from a fixed set of conventional subdirectories under
-// each session's cwd (dist, output, artifacts, public, build) to avoid
-// surfacing noise like node_modules. Only .html and .mp4/.webm are collected.
+// ArtifactService serves per-session artifacts from a CENTRAL store at
+// ~/.makro/artifacts/<session>/. The coding agent (Claude Code is the
+// executor) writes deliverables there directly, following the
+// `makro-artifacts` skill that Makro installs into ~/.claude/skills/. Makro
+// itself does NOT scan session cwds or copy files — it just lists/serves the
+// central dir, so discovery is deterministic and doesn't depend on where an
+// agent happened to write (which is what hid the `business` session's
+// ~/artifact/ output in the scan-based model).
 type ArtifactService struct{}
 
-// ArtifactEntry is one discovered artifact, returned to the client.
+// ArtifactEntry is one artifact in the central store. Path is the basename
+// (the central store is flat per session).
 type ArtifactEntry struct {
-	Name  string `json:"name"`  // basename
-	Path  string `json:"path"`  // path relative to the session cwd
-	Type  string `json:"type"`  // "html" or "video"
-	Mtime int64  `json:"mtime"` // unix seconds
-	Size  int64  `json:"size"`  // bytes
+	Name  string `json:"name"`
+	Path  string `json:"path"`
+	Type  string `json:"type"` // "html" or "video"
+	Mtime int64  `json:"mtime"`
+	Size  int64  `json:"size"`
 }
 
-// artifactScanDirs are the conventional output directories scanned under a
-// session cwd. Kept narrow to avoid node_modules / .git noise.
-var artifactScanDirs = []string{"dist", "output", "artifacts", "public", "build"}
-
-// artifactExtType maps a file extension to its artifact type, or "" if the
-// extension is not a recognized artifact.
 func artifactExtType(name string) string {
-	ext := strings.ToLower(filepath.Ext(name))
-	switch ext {
+	switch strings.ToLower(filepath.Ext(name)) {
 	case ".html", ".htm":
 		return "html"
 	case ".mp4", ".webm", ".mov":
@@ -43,106 +38,68 @@ func artifactExtType(name string) string {
 	return ""
 }
 
-// sessionCwd resolves a tmux session name to its active pane's working directory
-// via tmux display-message. Works for any agent (Claude Code, Copilot, ZCode)
-// since it reads tmux state, not agent-specific records. Returns "" if tmux
-// can't resolve the session (not running, no such session).
-func sessionCwd(sessionName string) string {
-	out, err := exec.Command(getTmuxBin(), tmuxArgs(
-		"display-message", "-t", sessionName, "-p", "#{pane_current_path}",
-	)...).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+// centralArtifactsDir is the per-session store, e.g. ~/.makro/artifacts/business.
+func centralArtifactsDir(session string) string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".makro", "artifacts", session)
 }
 
-// ListArtifacts scans the conventional subdirectories of a session's cwd and
-// returns all recognized artifacts, newest first. Returns an empty slice (not
-// nil) if the cwd can't be resolved or no artifacts exist.
-func (s *ArtifactService) ListArtifacts(sessionName string) ([]ArtifactEntry, error) {
-	cwd := sessionCwd(sessionName)
-	if cwd == "" {
-		return []ArtifactEntry{}, fmt.Errorf("could not resolve working directory for session %q", sessionName)
+// ListArtifacts lists the central store for a session. Returns an empty slice
+// (not nil) when the dir is absent/empty. Newest first.
+func (s *ArtifactService) ListArtifacts(session string) ([]ArtifactEntry, error) {
+	entries := []ArtifactEntry{}
+	files, err := os.ReadDir(centralArtifactsDir(session))
+	if err != nil {
+		return entries, nil
 	}
-
-	var entries []ArtifactEntry
-	for _, sub := range artifactScanDirs {
-		dir := filepath.Join(cwd, sub)
-		// Skip non-existent scan dirs quietly — most projects won't have all of them.
-		fi, err := os.Stat(dir)
-		if err != nil || !fi.IsDir() {
+	for _, f := range files {
+		if f.IsDir() {
 			continue
 		}
-		_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return nil
-			}
-			artType := artifactExtType(d.Name())
-			if artType == "" {
-				return nil
-			}
-			info, err := d.Info()
-			if err != nil {
-				return nil
-			}
-			rel, err := filepath.Rel(cwd, path)
-			if err != nil {
-				return nil
-			}
-			entries = append(entries, ArtifactEntry{
-				Name:  d.Name(),
-				Path:  filepath.ToSlash(rel),
-				Type:  artType,
-				Mtime: info.ModTime().Unix(),
-				Size:  info.Size(),
-			})
-			return nil
+		t := artifactExtType(f.Name())
+		if t == "" {
+			continue
+		}
+		info, err := f.Info()
+		if err != nil {
+			continue
+		}
+		entries = append(entries, ArtifactEntry{
+			Name: f.Name(), Path: f.Name(), Type: t,
+			Mtime: info.ModTime().Unix(), Size: info.Size(),
 		})
 	}
-
-	// Newest first.
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Mtime > entries[j].Mtime
-	})
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Mtime > entries[j].Mtime })
 	return entries, nil
 }
 
-// ResolveArtifact validates `relPath` against the session cwd and returns the
-// absolute filesystem path of the artifact, plus its type. It rejects any path
-// that escapes the cwd (.., absolute paths, symlink escapes). This is the only
-// path that reaches the filesystem for serving, so traversal safety lives here.
-func (s *ArtifactService) ResolveArtifact(sessionName, relPath string) (absPath, artType string, err error) {
-	cwd := sessionCwd(sessionName)
-	if cwd == "" {
-		return "", "", fmt.Errorf("could not resolve working directory for session %q", sessionName)
-	}
+// ResolveArtifact resolves relPath within the central store (flat: basenames)
+// and returns its absolute path + type. Traversal-safe: rejects "..",
+// absolute paths, symlink escapes.
+func (s *ArtifactService) ResolveArtifact(session, relPath string) (absPath, artType string, err error) {
 	if relPath == "" {
 		return "", "", fmt.Errorf("path is required")
 	}
-
-	// Join against cwd and clean. filepath.Join already resolves ".." lexically,
-	// but a leading "/" in relPath would make Join treat it as absolute — strip
-	// any leading separator to keep it relative.
-	relPath = strings.TrimLeft(relPath, "/")
-	joined := filepath.Join(cwd, relPath)
-	cleaned := filepath.Clean(joined)
-
-	// Resolve symlinks so a link can't escape cwd.
+	dir := centralArtifactsDir(session)
+	// EvalSymlinks on BOTH the dir and the target so a cwd under a symlinked
+	// path (e.g. macOS /var → /private/var) doesn't make isWithinDir false-
+	// negative on the resolved target.
+	dirResolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", "", fmt.Errorf("artifact not found")
+	}
+	cleaned := filepath.Clean(filepath.Join(dir, strings.TrimLeft(relPath, "/")))
 	resolved, evalErr := filepath.EvalSymlinks(cleaned)
 	if evalErr != nil {
 		return "", "", fmt.Errorf("artifact not found")
 	}
-
-	if !isWithinCwd(resolved, cwd) {
-		return "", "", fmt.Errorf("path escapes session working directory")
+	if !isWithinDir(resolved, dirResolved) {
+		return "", "", fmt.Errorf("path escapes artifact store")
 	}
-
 	fi, err := os.Stat(resolved)
 	if err != nil || fi.IsDir() {
 		return "", "", fmt.Errorf("artifact not found")
 	}
-
 	t := artifactExtType(resolved)
 	if t == "" {
 		return "", "", fmt.Errorf("unsupported artifact type")
@@ -150,10 +107,8 @@ func (s *ArtifactService) ResolveArtifact(sessionName, relPath string) (absPath,
 	return resolved, t, nil
 }
 
-// isWithinDir checks that target is within dir (both must be clean absolute
-// paths). Mirrors internal/agent/tools/resolve_path.go's isWithinDir: a relative
-// path from dir→target starting with ".." means target escaped dir.
-func isWithinCwd(target, dir string) bool {
+// isWithinDir checks that target is within dir (both clean absolute paths).
+func isWithinDir(target, dir string) bool {
 	target = filepath.Clean(target)
 	dir = filepath.Clean(dir)
 	rel, err := filepath.Rel(dir, target)
