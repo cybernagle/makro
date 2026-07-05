@@ -154,15 +154,16 @@ func SendConfirmed(ctx context.Context, tc TmuxClient, notifier Notifier, sessio
 	if confirmAgentStarted(ctx, notifier, session, before, firstConfirmGrace) {
 		return nil
 	}
-	// The turn didn't start within firstConfirmGrace. Before resending Enter,
-	// make sure the agent hasn't already moved on: if the UserPromptSubmit hook
-	// was simply slow (system load / slow disk) the first Enter DID submit and
-	// the agent is now off its bare input prompt (showing the message /
-	// thinking) — resending Enter would land a stray keystroke. Only resend
-	// when the pane still ends at the input prompt, i.e. the Enter was lost.
-	if !paneEndsAtAgentPrompt(tc, session) {
-		return nil
-	}
+	// The turn didn't start within firstConfirmGrace: either Enter was lost
+	// (text sitting in the input box unsubmitted) OR the UserPromptSubmit hook
+	// fired but makro didn't receive it (path mismatch, socket error, timeout,
+	// or any other edge case). Resend Enter unconditionally — we no longer
+	// consult paneEndsAtAgentPrompt because that check is unreliable in
+	// environments with status bars / wrappers below the ❯ prompt (it always
+	// returns false, suppressing the resend). A stray Enter is harmless: if
+	// the prompt already submitted and the agent is thinking, the resend lands
+	// as an empty input that Claude ignores; if Enter was truly lost, this
+	// recovers it. The timeout is the single source of truth.
 	if _, err := tc.Exec(tmux.SendEnterCmd(session)); err != nil {
 		return fmt.Errorf("resend enter to %q: %w", session, err)
 	}
