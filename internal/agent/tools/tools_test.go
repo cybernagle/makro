@@ -600,12 +600,14 @@ func TestSendConfirmedBlocksDestructive(t *testing.T) {
 	}
 }
 
-// TestSendConfirmedSkipsResendWhenTurnAlreadyStarted: if the first Enter DID
-// submit but the UserPromptSubmit hook was slow (>firstConfirmGrace), the agent
-// has moved off its bare input prompt — resending Enter would land a stray
-// keystroke (empty prompt / bleeds into the next turn). SendConfirmed detects
-// this via paneEndsAtAgentPrompt and does NOT resend.
-func TestSendConfirmedSkipsResendWhenTurnAlreadyStarted(t *testing.T) {
+// TestSendConfirmedResendsEnterOnTimeoutRegardlessOfPane: when the
+// UserPromptSubmit hook doesn't fire within firstConfirmGrace, SendConfirmed
+// resends Enter unconditionally. We no longer consult paneEndsAtAgentPrompt
+// (it's unreliable in environments with status bars below the ❯ prompt, and
+// the timeout alone is the source of truth). This test simulates "hook slow
+// OR Enter truly lost" by showing a pane that is NOT at the bare prompt —
+// the resend must still happen.
+func TestSendConfirmedResendsEnterOnTimeoutRegardlessOfPane(t *testing.T) {
 	origFirst, origSubmit := firstConfirmGrace, submitConfirmGrace
 	firstConfirmGrace = 40 * time.Millisecond
 	submitConfirmGrace = 40 * time.Millisecond
@@ -613,19 +615,23 @@ func TestSendConfirmedSkipsResendWhenTurnAlreadyStarted(t *testing.T) {
 
 	mc := newMockTmuxClient()
 	mc.results[tmux.PaneCurrentCommandCmd("s")] = "claude"
-	// Pane shows the submitted message + thinking — NOT the bare input prompt,
-	// i.e. the turn already started (hook was slow).
+	// Pane shows submitted message + thinking — NOT a bare prompt. Under the
+	// old pane-based logic this would suppress the resend; under the new
+	// timeout-only logic the resend must still fire.
 	mc.results[tmux.CapturePaneRangeCmd("s", 5, 0)] = "⏺ I'll fix the bug.\n✻ Thinking…"
 	n := newMockNotifier() // never fires within grace (slow-hook simulation)
 
 	err := SendConfirmed(context.Background(), mc, n, "s", "do the thing")
-	require.NoError(t, err, "turn already started → success, no resend")
+	// With no hook confirmation after the resend either, SendConfirmed returns
+	// an error — that's expected; the point is the resend HAPPENED.
+	require.Error(t, err, "no hook confirmation after resend → error")
 
-	// No standalone Enter resend: only the atomic send (which carries the body
-	// + Enter) should appear; a bare Enter resend would not contain the body.
+	// A bare Enter resend (not carrying the body) must have been sent.
+	var sawBareEnter bool
 	for _, c := range mc.executedCmds() {
 		if strings.Contains(c, "Enter") && !strings.Contains(c, "do the thing") {
-			t.Errorf("unexpected standalone Enter resend while agent already started: %q", c)
+			sawBareEnter = true
 		}
 	}
+	assert.True(t, sawBareEnter, "expected a bare Enter resend after timeout, regardless of pane state")
 }

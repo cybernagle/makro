@@ -154,15 +154,16 @@ func SendConfirmed(ctx context.Context, tc TmuxClient, notifier Notifier, sessio
 	if confirmAgentStarted(ctx, notifier, session, before, firstConfirmGrace) {
 		return nil
 	}
-	// The turn didn't start within firstConfirmGrace. Before resending Enter,
-	// make sure the agent hasn't already moved on: if the UserPromptSubmit hook
-	// was simply slow (system load / slow disk) the first Enter DID submit and
-	// the agent is now off its bare input prompt (showing the message /
-	// thinking) — resending Enter would land a stray keystroke. Only resend
-	// when the pane still ends at the input prompt, i.e. the Enter was lost.
-	if !paneEndsAtAgentPrompt(tc, session) {
-		return nil
-	}
+	// The turn didn't start within firstConfirmGrace: either Enter was lost
+	// (text sitting in the input box unsubmitted) OR the UserPromptSubmit hook
+	// fired but makro didn't receive it (path mismatch, socket error, timeout,
+	// or any other edge case). Resend Enter unconditionally — we no longer
+	// consult paneEndsAtAgentPrompt because that check is unreliable in
+	// environments with status bars / wrappers below the ❯ prompt (it always
+	// returns false, suppressing the resend). A stray Enter is harmless: if
+	// the prompt already submitted and the agent is thinking, the resend lands
+	// as an empty input that Claude ignores; if Enter was truly lost, this
+	// recovers it. The timeout is the single source of truth.
 	if _, err := tc.Exec(tmux.SendEnterCmd(session)); err != nil {
 		return fmt.Errorf("resend enter to %q: %w", session, err)
 	}
@@ -247,25 +248,6 @@ func DirectSend(tc TmuxClient, sessionName, text string) error {
 		return fmt.Errorf("session %q not found", sessionName)
 	}
 	return sendText(tc, sessionName, text)
-}
-
-// SafeSend is the gated send path shared by every autonomous send route
-// (role routing, and the future home for @mention). It runs the same
-// pre-send gates and Enter-loss recovery as the send_to_session tool:
-//
-//   - validateSendTarget: the agent must be alive (or showing its input
-//     prompt) and not blocked on a Yes/No dialog.
-//   - SendConfirmed: the destructive-command blocklist, the atomic send,
-//     and the first-send Enter-loss recovery for Claude Code.
-//
-// Use this — not DirectSend — whenever the send is initiated by code rather
-// than an explicit, manual user action. DirectSend is reserved for @mention,
-// where the user deliberately typed the target and accepts the raw send.
-func SafeSend(ctx context.Context, tc TmuxClient, notifier Notifier, session, message string) error {
-	if _, err := validateSendTarget(tc, session); err != nil {
-		return err
-	}
-	return SendConfirmed(ctx, tc, notifier, session, message)
 }
 
 // Ensure unused import is not needed.

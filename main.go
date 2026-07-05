@@ -191,7 +191,7 @@ func main() {
 		allRoles = append(allRoles, rs...)
 	}
 	if len(allRoles) > 0 {
-		orch.SetRoles(rolepkg.NewStore(allRoles), notifier)
+		orch.SetRoles(rolepkg.NewStore(allRoles))
 	}
 	orch.SetModel(cfg.LLMModel)
 	orch.SetMaxContextMessages(cfg.MaxContextMessages)
