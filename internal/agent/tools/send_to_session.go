@@ -249,24 +249,5 @@ func DirectSend(tc TmuxClient, sessionName, text string) error {
 	return sendText(tc, sessionName, text)
 }
 
-// SafeSend is the gated send path shared by every autonomous send route
-// (role routing, and the future home for @mention). It runs the same
-// pre-send gates and Enter-loss recovery as the send_to_session tool:
-//
-//   - validateSendTarget: the agent must be alive (or showing its input
-//     prompt) and not blocked on a Yes/No dialog.
-//   - SendConfirmed: the destructive-command blocklist, the atomic send,
-//     and the first-send Enter-loss recovery for Claude Code.
-//
-// Use this — not DirectSend — whenever the send is initiated by code rather
-// than an explicit, manual user action. DirectSend is reserved for @mention,
-// where the user deliberately typed the target and accepts the raw send.
-func SafeSend(ctx context.Context, tc TmuxClient, notifier Notifier, session, message string) error {
-	if _, err := validateSendTarget(tc, session); err != nil {
-		return err
-	}
-	return SendConfirmed(ctx, tc, notifier, session, message)
-}
-
 // Ensure unused import is not needed.
 var _ = strings.TrimSpace
