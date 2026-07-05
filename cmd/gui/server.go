@@ -147,6 +147,11 @@ func serve(addr string, tlsCert, tlsKey, password string) error {
 		return fmt.Errorf("refusing to start: --password required when bound to non-loopback address %q", addr)
 	}
 
+	// Install the makro-artifacts CC skill so coding agents (Claude Code is the
+	// executor) write deliverables into the central store
+	// (~/.makro/artifacts/<session>/), which Makro then lists for iOS/desktop.
+	ensureCCSkills()
+
 	hub := newChatHub()
 	chatSvc := NewChatService()
 	chatSvc.hub = hub
