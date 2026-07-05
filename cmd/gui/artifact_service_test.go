@@ -94,3 +94,32 @@ func TestEnsureCCSkillsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "USER EDIT", string(data), "existing skill must not be clobbered")
 }
+
+// TestValidArtifactSession: traversal-shaped session names are rejected, real
+// session names pass.
+func TestValidArtifactSession(t *testing.T) {
+	for _, bad := range []string{"", ".", "..", "a/b", `a\b`, "../x", "a..b"} {
+		assert.False(t, validArtifactSession(bad), "should reject %q", bad)
+	}
+	for _, good := range []string{"business", "dev", "v1.2", "my-session", "audit"} {
+		assert.True(t, validArtifactSession(good), "should accept %q", good)
+	}
+}
+
+// TestListArtifactsRejectsTraversalSession: a crafted session name can't list
+// dirs outside the central store (P0 path-traversal fix).
+func TestListArtifactsRejectsTraversalSession(t *testing.T) {
+	withTempHome(t)
+	svc := &ArtifactService{}
+	_, err := svc.ListArtifacts("../../etc")
+	assert.Error(t, err)
+}
+
+// TestResolveArtifactRejectsTraversalSession: a crafted session name can't
+// serve files from outside the central store (P0 path-traversal fix).
+func TestResolveArtifactRejectsTraversalSession(t *testing.T) {
+	withTempHome(t)
+	svc := &ArtifactService{}
+	_, _, err := svc.ResolveArtifact("../../etc", "passwd")
+	assert.Error(t, err)
+}

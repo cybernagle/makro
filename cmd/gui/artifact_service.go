@@ -44,9 +44,31 @@ func centralArtifactsDir(session string) string {
 	return filepath.Join(home, ".makro", "artifacts", session)
 }
 
+// validArtifactSession rejects session names that could escape the central
+// store via path traversal. A real tmux session name can't contain "." or ":"
+// anyway, and certainly not "/" or "\" — so this only refuses names that
+// centralArtifactsDir would resolve outside ~/.makro/artifacts/<session>/.
+// Without it, /api/artifacts?session=../../etc could list (and /api/artifact
+// could serve) arbitrary html/video files outside the store.
+func validArtifactSession(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	if strings.Contains(name, "..") {
+		return false
+	}
+	return true
+}
+
 // ListArtifacts lists the central store for a session. Returns an empty slice
 // (not nil) when the dir is absent/empty. Newest first.
 func (s *ArtifactService) ListArtifacts(session string) ([]ArtifactEntry, error) {
+	if !validArtifactSession(session) {
+		return nil, fmt.Errorf("invalid session name")
+	}
 	entries := []ArtifactEntry{}
 	files, err := os.ReadDir(centralArtifactsDir(session))
 	if err != nil {
@@ -77,6 +99,9 @@ func (s *ArtifactService) ListArtifacts(session string) ([]ArtifactEntry, error)
 // and returns its absolute path + type. Traversal-safe: rejects "..",
 // absolute paths, symlink escapes.
 func (s *ArtifactService) ResolveArtifact(session, relPath string) (absPath, artType string, err error) {
+	if !validArtifactSession(session) {
+		return "", "", fmt.Errorf("invalid session name")
+	}
 	if relPath == "" {
 		return "", "", fmt.Errorf("path is required")
 	}
