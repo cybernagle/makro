@@ -19,13 +19,15 @@ import (
 type ArtifactService struct{}
 
 // ArtifactEntry is one artifact in the central store. Path is the basename
-// (the central store is flat per session).
+// (the central store is flat per session). Session tags which session owns it
+// (always set, so the "all sessions" view can group by session).
 type ArtifactEntry struct {
-	Name  string `json:"name"`
-	Path  string `json:"path"`
-	Type  string `json:"type"` // "html" or "video"
-	Mtime int64  `json:"mtime"`
-	Size  int64  `json:"size"`
+	Session string `json:"session"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Type    string `json:"type"` // "html" or "video"
+	Mtime   int64  `json:"mtime"`
+	Size    int64  `json:"size"`
 }
 
 func artifactExtType(name string) string {
@@ -40,8 +42,14 @@ func artifactExtType(name string) string {
 
 // centralArtifactsDir is the per-session store, e.g. ~/.makro/artifacts/business.
 func centralArtifactsDir(session string) string {
+	return filepath.Join(centralArtifactsRoot(), session)
+}
+
+// centralArtifactsRoot is the parent of all per-session stores:
+// ~/.makro/artifacts/. Each subdir is one session's store.
+func centralArtifactsRoot() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".makro", "artifacts", session)
+	return filepath.Join(home, ".makro", "artifacts")
 }
 
 // validArtifactSession rejects session names that could escape the central
@@ -63,16 +71,26 @@ func validArtifactSession(name string) bool {
 	return true
 }
 
-// ListArtifacts lists the central store for a session. Returns an empty slice
-// (not nil) when the dir is absent/empty. Newest first.
+// ListArtifacts lists artifacts. If session is "", lists across ALL sessions
+// (each entry tagged with its Session); otherwise lists just that session.
+// Returns an empty slice (not nil) when the dir is absent/empty. Newest first.
 func (s *ArtifactService) ListArtifacts(session string) ([]ArtifactEntry, error) {
+	if session == "" {
+		return s.listAllArtifacts()
+	}
 	if !validArtifactSession(session) {
 		return nil, fmt.Errorf("invalid session name")
 	}
+	return s.listSessionArtifacts(session), nil
+}
+
+// listSessionArtifacts lists one session's central dir, tagging each entry
+// with the session name. Empty slice if the dir is absent.
+func (s *ArtifactService) listSessionArtifacts(session string) []ArtifactEntry {
 	entries := []ArtifactEntry{}
 	files, err := os.ReadDir(centralArtifactsDir(session))
 	if err != nil {
-		return entries, nil
+		return entries
 	}
 	for _, f := range files {
 		if f.IsDir() {
@@ -87,9 +105,34 @@ func (s *ArtifactService) ListArtifacts(session string) ([]ArtifactEntry, error)
 			continue
 		}
 		entries = append(entries, ArtifactEntry{
-			Name: f.Name(), Path: f.Name(), Type: t,
+			Session: session, Name: f.Name(), Path: f.Name(), Type: t,
 			Mtime: info.ModTime().Unix(), Size: info.Size(),
 		})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Mtime > entries[j].Mtime })
+	return entries
+}
+
+// listAllArtifacts lists every session's central dir (each subdir of the root
+// is one session), tagging each entry with its session. Newest first across
+// all sessions.
+func (s *ArtifactService) listAllArtifacts() ([]ArtifactEntry, error) {
+	root := centralArtifactsRoot()
+	sessions, err := os.ReadDir(root)
+	if err != nil {
+		return []ArtifactEntry{}, nil // no central store yet
+	}
+	entries := []ArtifactEntry{}
+	for _, sess := range sessions {
+		if !sess.IsDir() {
+			continue
+		}
+		name := sess.Name()
+		// Skip traversal-shaped / hidden dir names — they aren't real sessions.
+		if !validArtifactSession(name) || strings.HasPrefix(name, ".") {
+			continue
+		}
+		entries = append(entries, s.listSessionArtifacts(name)...)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Mtime > entries[j].Mtime })
 	return entries, nil
