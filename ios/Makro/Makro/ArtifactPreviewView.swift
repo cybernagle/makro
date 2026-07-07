@@ -8,7 +8,6 @@ import AVKit
 /// URLSession's pinned trust, so remote fetch would fail cert validation).
 struct ArtifactPreviewView: View {
     let artifact: Artifact
-    let session: String
 
     @State private var loadState: LoadState = .loading
 
@@ -48,7 +47,7 @@ struct ArtifactPreviewView: View {
 
     private func loadContent() async {
         do {
-            let data = try await APIClient.shared.fetchArtifactContent(session: session, path: artifact.path)
+            let data = try await APIClient.shared.fetchArtifactContent(session: artifact.session, path: artifact.path)
             if artifact.isHTML {
                 let html = String(data: data, encoding: .utf8) ?? ""
                 await MainActor.run { loadState = .htmlString(html) }
