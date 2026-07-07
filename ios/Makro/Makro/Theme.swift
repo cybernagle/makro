@@ -74,6 +74,40 @@ extension View {
                 .mask(RoundedRectangle(cornerRadius: radius, style: .continuous).inset(by: 0.5))
         )
     }
+
+    /// Sweeps a diagonal highlight across placeholder shapes (loading skeletons).
+    /// Used on redacted/inset blocks to signal "loading" without a spinner.
+    func shimmering() -> some View { modifier(Shimmer()) }
+}
+
+// MARK: - Shimmer (skeleton highlight sweep)
+
+private struct Shimmer: ViewModifier {
+    @State private var phase: CGFloat = -1
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                GeometryReader { geo in
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: Color.white.opacity(0.55), location: 0.5),
+                            .init(color: .clear, location: 1)
+                        ],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    )
+                    .frame(width: geo.size.width * 0.5)
+                    .offset(x: phase * geo.size.width * 1.5)
+                }
+                .allowsHitTesting(false)
+            )
+            .onAppear {
+                phase = -1
+                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                    phase = 1
+                }
+            }
+    }
 }
 
 // MARK: - Status pill

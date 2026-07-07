@@ -175,10 +175,15 @@ final class APIClient: NSObject {
 
     // MARK: - Artifacts
 
-    /// Lists HTML/video artifacts discovered under a session's working directory.
-    func fetchArtifacts(session: String) async throws -> [Artifact] {
-        let encoded = session.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? session
-        let url = URL(string: "\(config.httpBaseURL.absoluteString)/api/artifacts?session=\(encoded)")!
+    /// Lists artifacts. session == nil (or empty) asks the backend for ALL
+    /// sessions; a specific name filters to that session only.
+    func fetchArtifacts(session: String?) async throws -> [Artifact] {
+        var urlString = "\(config.httpBaseURL.absoluteString)/api/artifacts"
+        if let session, !session.isEmpty {
+            let encoded = session.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? session
+            urlString += "?session=\(encoded)"
+        }
+        let url = URL(string: urlString)!
         var request = authedRequest(url: url)
         let (data, response) = try await urlSession.data(for: request)
         try checkAuth(response)

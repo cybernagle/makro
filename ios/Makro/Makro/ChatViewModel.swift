@@ -43,6 +43,8 @@ final class ChatViewModel: NSObject, ObservableObject {
     private var pingTimer: Timer?
     private var reconnectTask: Task<Void, Never>?
     private var reconnectDelay: TimeInterval = 1
+    private var streamingWatchdog: Task<Void, Never>?
+    private var pendingTurns = 0
     private let config: Config
     private let api: APIClient
     private let speech: AzureSpeechManager
@@ -147,6 +149,17 @@ final class ChatViewModel: NSObject, ObservableObject {
         connectionState = .disconnected
     }
 
+    deinit {
+        // Belt-and-suspenders cleanup. onDisappear calls disconnect(), but a
+        // stuck URLSession delegate or an in-flight reconnect sleep could
+        // otherwise extend this VM's lifetime. Stored-property access only —
+        // safe in a nonisolated deinit.
+        streamingWatchdog?.cancel()
+        reconnectTask?.cancel()
+        pingTimer?.invalidate()
+        task?.cancel(with: .goingAway, reason: nil)
+    }
+
     func reconnectIfNeeded() {
         guard connectionState == .connected else { return }
         stopPing()
@@ -176,19 +189,65 @@ final class ChatViewModel: NSObject, ObservableObject {
     func send(text: String, voice: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // Concurrent turns (e.g. voice onRecognized firing while a reply is
+        // still streaming) share the indicator via pendingTurns — each send
+        // bumps the count, each done/error decrements; the indicator only
+        // clears when the last one finishes. No reentry truncation, so a
+        // legitimate in-flight reply is never cut short.
         messages.append(ChatMessage(role: .user, text: trimmed))
+        pendingTurns += 1
         isStreaming = true
+        startStreamingWatchdog()
         Task {
             do {
                 try await api.sendChat(text: trimmed, voice: voice)
             } catch {
                 messages.append(ChatMessage(role: .system, text: "[error: \(error.localizedDescription)]"))
-                isStreaming = false
+                markTurnEnd()
+            }
+        }
+    }
+
+    /// One in-flight turn finished normally (done/error/HTTP-fail). Decrement;
+    /// only drop the indicator when the last concurrent turn finishes — so a
+    /// fast voice follow-up doesn't extinguish a still-streaming reply.
+    private func markTurnEnd() {
+        pendingTurns = max(0, pendingTurns - 1)
+        guard pendingTurns == 0 else { return }
+        streamingWatchdog?.cancel()
+        streamingWatchdog = nil
+        isStreaming = false
+    }
+
+    /// Force-clear ALL in-flight turns (watchdog timeout / WS drop / cancel).
+    /// Used when the turn is certainly dead, not just completed.
+    private func endStreaming() {
+        streamingWatchdog?.cancel()
+        streamingWatchdog = nil
+        pendingTurns = 0
+        isStreaming = false
+    }
+
+    /// Failsafe: if no `done`/`error` arrives within 60s (WS dropped the
+    /// broadcast, or a server path skipped it), force the turn closed so the
+    /// indicator never sticks. 60s is well past normal agent turn latency.
+    private func startStreamingWatchdog() {
+        streamingWatchdog?.cancel()
+        streamingWatchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.isStreaming else { return }
+                self.messages.append(ChatMessage(role: .system, text: "[响应超时,已自动结束]"))
+                self.endStreaming()
             }
         }
     }
 
     func cancel() {
+        // User-initiated stop: don't wait for the server's done (that may be
+        // exactly what's stuck). Reset locally right away.
+        endStreaming()
         Task { try? await api.cancelChat() }
     }
 
@@ -360,7 +419,7 @@ final class ChatViewModel: NSObject, ObservableObject {
             }
         case "done":
             thinkingText = nil
-            isStreaming = false
+            markTurnEnd()
             // Read aloud when this turn was triggered by voice, or whenever we
             // are in an active call (every reply is spoken in call mode).
             // Typed messages outside a call never set either flag → silent.
@@ -375,7 +434,7 @@ final class ChatViewModel: NSObject, ObservableObject {
         case "error":
             let msg = json["data"] as? String ?? "Unknown error"
             messages.append(ChatMessage(role: .system, text: "[error: \(msg)]"))
-            isStreaming = false
+            markTurnEnd()
         case "system":
             let msg = json["data"] as? String ?? ""
             messages.append(ChatMessage(role: .system, text: msg))
@@ -418,15 +477,23 @@ final class ChatViewModel: NSObject, ObservableObject {
         stopPing()
         task = nil
         connectionState = .disconnected
+        // WS dropped mid-turn: the backend's `done` broadcast has no buffer
+        // and no replay, so it's already lost. Close the turn now rather than
+        // leaving the indicator pinned until the watchdog times out.
+        if isStreaming {
+            messages.append(ChatMessage(role: .system, text: "[连接中断]"))
+            endStreaming()
+        }
         scheduleReconnect()
     }
 
     private func scheduleReconnect() {
         let delay = reconnectDelay
         reconnectDelay = min(reconnectDelay * 2, 60)
-        reconnectTask = Task {
+        reconnectTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
+            guard let self else { return }
             self.connectionState = .connecting
             self.openConnection()
         }

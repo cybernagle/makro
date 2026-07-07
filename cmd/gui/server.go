@@ -1126,11 +1126,8 @@ func artifactsListHandler(svc *ArtifactService) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		// session is optional: empty lists artifacts across ALL sessions.
 		session := r.URL.Query().Get("session")
-		if session == "" {
-			http.Error(w, "session query param required", http.StatusBadRequest)
-			return
-		}
 		entries, err := svc.ListArtifacts(session)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)

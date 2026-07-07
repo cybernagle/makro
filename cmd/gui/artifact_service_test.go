@@ -123,3 +123,45 @@ func TestResolveArtifactRejectsTraversalSession(t *testing.T) {
 	_, _, err := svc.ResolveArtifact("../../etc", "passwd")
 	assert.Error(t, err)
 }
+
+// TestListArtifactsAllSessions: empty session lists across ALL sessions, each
+// entry tagged with its session. Non-artifact files and hidden dirs are skipped.
+func TestListArtifactsAllSessions(t *testing.T) {
+	withTempHome(t)
+	for _, sess := range []string{"dev", "business"} {
+		require.NoError(t, os.MkdirAll(centralArtifactsDir(sess), 0o755))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(centralArtifactsDir("dev"), "a.html"), []byte("a"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(centralArtifactsDir("business"), "b.mp4"), []byte("b"), 0o644))
+	// Noise: non-artifact + a hidden session dir — both must be skipped.
+	require.NoError(t, os.WriteFile(filepath.Join(centralArtifactsDir("dev"), "skip.txt"), []byte("x"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(centralArtifactsRoot(), ".hidden"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(centralArtifactsRoot(), ".hidden", "c.html"), []byte("c"), 0o644))
+
+	svc := &ArtifactService{}
+	entries, err := svc.ListArtifacts("") // empty → all sessions
+	require.NoError(t, err)
+	require.Len(t, entries, 2, "only a.html + b.mp4; skip.txt + .hidden session filtered")
+
+	got := map[string]string{} // name → session
+	for _, e := range entries {
+		got[e.Name] = e.Session
+	}
+	assert.Equal(t, "dev", got["a.html"])
+	assert.Equal(t, "business", got["b.mp4"])
+}
+
+// TestListArtifactsTagsSession: a single-session list tags each entry with the
+// session name (so the all-sessions grouping field is always present).
+func TestListArtifactsTagsSession(t *testing.T) {
+	withTempHome(t)
+	dir := centralArtifactsDir("dev")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.html"), []byte("a"), 0o644))
+
+	svc := &ArtifactService{}
+	entries, err := svc.ListArtifacts("dev")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "dev", entries[0].Session)
+}
