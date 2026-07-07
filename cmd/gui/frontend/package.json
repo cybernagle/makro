@@ -9,7 +9,6 @@
     "build": "vite build --mode production"
   },
   "dependencies": {
-    "@wailsio/runtime": "latest",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-unicode11": "^0.9.0",
     "@xterm/addon-webgl": "^0.19.0",
