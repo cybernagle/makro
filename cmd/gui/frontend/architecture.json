@@ -1,14 +1,14 @@
 {
-  "version": "1.0",
+  "version": "2.0",
   "layers": [
     {
       "id": "entry",
       "name": "Entry Points",
       "tag": "Layer 1 / 6",
-      "desc": "Makro 有两个入口。TUI 入口解析 CLI 参数，加载配置，初始化 LLM provider、tmux client、agent orchestrator，然后启动 Bubbletea TUI。GUI 入口注册三个 Wails service，嵌入前端资源，启动桌面窗口。",
+      "desc": "Makro 有两个入口二进制，共享同一套 internal/* 核心。TUI 入口 (main.go) 是装配根：解析 CLI 子命令、wire 好 config/provider/tmux/orchestrator/brain/tui，进程内调用。GUI 入口 (cmd/gui/main.go = makro-serve) 是 HTTP/WS server，由 Electron 作为子进程拉起 (serve 子命令)，监听 127.0.0.1:7070 + TLS + Bearer。其余子命令 (notify/permission/capture/claude-start) 是 Claude Code hook 的转发器。",
       "components": [
-        { "id": "main-tui", "name": "main.go", "path": "main.go", "loc": 498, "detail": "TUI 入口 · CLI 解析 · 配置加载 · Bubbletea 启动 · 子命令: notify, chat, send, permission" },
-        { "id": "main-gui", "name": "cmd/gui/main.go", "path": "cmd/gui/main.go", "loc": 56, "detail": "GUI 入口 · Wails v3 · 注册 TmuxService + TerminalService + ChatService · macOS 窗口配置" }
+        { "id": "main-tui", "name": "main.go", "path": "main.go", "loc": 807, "detail": "TUI 入口 + 装配根 · wire config/provider/tmux/orchestrator/brain/tui · CLI 子命令: notify/chat/send/permission/capture/claude-start (经 ~/.makro/hooks.sock 转发到运行实例)" },
+        { "id": "main-gui", "name": "cmd/gui/main.go", "path": "cmd/gui/main.go", "loc": 120, "detail": "GUI 入口 (makro-serve) · serve: HTTP/WS server，由 Electron 拉起，127.0.0.1:7070 + 自签 TLS + Bearer · notify/permission/capture/claude-start: Claude hook 转发器" }
       ],
       "deps": ["presentation", "agent"]
     },
@@ -16,22 +16,24 @@
       "id": "presentation",
       "name": "Presentation",
       "tag": "Layer 2 / 6",
-      "desc": "两套前端共享同一个 Agent 核心层。TUI 用 Bubbletea v2 做分屏（左聊天 + 右 tmux viewer）。GUI 用 Wails + xterm.js 做桌面应用（终端 tab + 聊天面板）。两者都支持 @session 切换、斜杠命令、Markdown 渲染。",
+      "desc": "三种客户端形态，共用同一个 Agent 核心。TUI 用 Bubbletea v2 分屏（左聊天 + 右 tmux viewer）。桌面端 = Electron 渲染进程加载 Vue3 SPA（xterm.js 渲染终端），SPA 由 makro-serve 在 / 提供。iOS 用原生 SwiftUI。三者都调同一套 /api/* + /ws/*。",
       "components": [
-        { "id": "tui", "name": "internal/tui/", "path": "internal/tui/", "loc": 1727, "detail": "app.go (632) · chat.go (776) · viewer.go (328) · 分屏布局 · 快捷键 · @mention 自动补全" },
-        { "id": "frontend", "name": "cmd/gui/frontend/", "path": "cmd/gui/frontend/src/main.js", "loc": 376, "detail": "main.js · xterm.js v5 + Unicode11 + WebGL · marked markdown · Wails Events · Cmd+B/J/L 快捷键" }
+        { "id": "tui", "name": "internal/tui/", "path": "internal/tui/", "loc": 1758, "detail": "app.go (654) · chat.go (776) · viewer.go (328) · 分屏布局 · 快捷键 · @mention 自动补全" },
+        { "id": "frontend", "name": "cmd/gui/frontend/", "path": "cmd/gui/frontend/src/main.js", "loc": 1206, "detail": "main.js · fetch + WebSocket（无原生绑定）· xterm.js v5 + WebGL · marked markdown · Cmd+B/J/L 快捷键 · 由 makro-serve 在 / 提供 SPA" },
+        { "id": "ios", "name": "ios/Makro/", "path": "ios/Makro/Makro/APIClient.swift", "loc": 235, "detail": "SwiftUI · APIClient.swift (sessions/chat/tasks/artifacts/device-token) · Azure Speech 双向通话 · 锁屏控制 · 自签 TLS 信任" }
       ],
       "deps": ["services", "infra"]
     },
     {
       "id": "services",
-      "name": "GUI Services",
+      "name": "HTTP / WS Handlers",
       "tag": "Layer 3 / 6",
-      "desc": "Wails 服务层，Go 后端与 JS 前端的桥梁。TmuxService 封装 tmux CLI。TerminalService 管理 PTY 生命周期（tmux new-session -A + base64 编码推送）。ChatService 持有完整的 Orchestrator 实例，通过 Wails Events 流式推送 LLM 响应。",
+      "desc": "makro-serve 的 HTTP/WS 服务层 (cmd/gui)。Go server 把 /api/* JSON 端点、/ws/{xterm,snapshot,chat} WebSocket、以及 / 下的 Vue SPA 暴露给 Electron 渲染进程和 iOS。chat_service 持有完整的 Orchestrator 实例并发起流式 chat；terminal_service 提供 PTY 辅助函数喂 /ws/xterm；tmux_service 封装 tmux CLI。无 RPC 框架——纯 net/http + gorilla/websocket。",
       "components": [
-        { "id": "tmux-svc", "name": "TmuxService", "path": "cmd/gui/tmux_service.go", "loc": 89, "detail": "ListSessions · CreateSession · KillSession · CapturePane · 专用 socket ~/.makro/tmux.sock" },
-        { "id": "term-svc", "name": "TerminalService", "path": "cmd/gui/terminal_service.go", "loc": 219, "detail": "AttachSession (new-session -A) · WriteInput (base64) · ResizeTerminal · PTY 32KB buffer · ensureTerm (UTF-8)" },
-        { "id": "chat-svc", "name": "ChatService", "path": "cmd/gui/chat_service.go + chat_history.go", "loc": 467, "detail": "SendMessage · StartMonitor · LoadChatHistory · Events: chat:text/tool_call/done/error · Markdown 历史" }
+        { "id": "tmux-svc", "name": "tmux_service.go", "path": "cmd/gui/tmux_service.go", "loc": 99, "detail": "ListSessions · CreateSession · KillSession · CapturePane · 委托 internal/tmux.FindTmuxBin · 专用 socket ~/.makro/tmux.sock" },
+        { "id": "term-svc", "name": "terminal_service.go", "path": "cmd/gui/terminal_service.go", "loc": 94, "detail": "PTY 辅助函数 (terminalProcess/setWinsize/winsize/ensureTerm/detachStaleClients) · 喂 /ws/xterm 的 xterm.js 终端流（已移除旧 RPC 方法）" },
+        { "id": "chat-svc", "name": "chat_service.go + chat_history.go", "path": "cmd/gui/chat_service.go", "loc": 1234, "detail": "持有 Orchestrator 实例 · /api/chat/* + /ws/chat (SSE/WebSocket hub) · 确认/否认/语音呼叫模式 · 用量查询 · Markdown 历史" },
+        { "id": "artifact-svc", "name": "artifact_service.go", "path": "cmd/gui/artifact_service.go", "loc": 145, "detail": "中央 artifact 商店 ~/.makro/artifacts/<session>/ · /api/artifacts + /api/artifact · session 名校验防 path traversal" }
       ],
       "deps": ["agent", "infra"]
     },
@@ -39,12 +41,12 @@
       "id": "agent",
       "name": "Agent Orchestrator",
       "tag": "Layer 4 / 6",
-      "desc": "Makro 的核心，占代码库 70%。Orchestrator 管理无限工具调用循环：接收用户输入 → 构建 LLM 消息 → 流式调用 Provider → 解析工具调用 → 执行工具 → 回到 LLM。23 个工具覆盖 session 管理、文件操作、状态持久化、跨 agent 协调。Skill 系统支持从 ~/.makro/skills/ 加载可复用 prompt 模板。Hook 系统通过 Unix socket 与 Claude Code 集成。",
+      "desc": "Makro 的核心。Orchestrator 管理无限工具调用循环：接收用户输入 → 构建 LLM 消息 → 流式调用 Provider → 解析工具调用 → 执行工具 → 回到 LLM。19 个工具覆盖 session 管理、文件操作、状态持久化、跨 agent 协调。Skill 系统从 ~/.makro/skills/ 加载可复用 prompt 模板。Hook 系统通过 Unix socket 与 Claude Code 集成。Role 把 ~/.makro/roles.toml 作为 system-prompt 上下文注入。",
       "components": [
-        { "id": "orchestrator", "name": "orchestrator.go", "path": "internal/agent/orchestrator.go", "loc": 591, "detail": "ProcessInput → handleLLM (infinite loop) → handleToolCall → tool execution → back to LLM" },
-        { "id": "tools", "name": "tools/ (23)", "path": "internal/agent/tools/", "loc": 1887, "detail": "session: create/kill/switch/list · I/O: send/read/relay · file: read/write/list · state: set/get/save/restore · agent: wait_idle/assess/respond/alive" },
+        { "id": "orchestrator", "name": "orchestrator.go", "path": "internal/agent/orchestrator.go", "loc": 701, "detail": "ProcessInput → handleLLM (无限 for{} 循环，禁止加上限) → handleToolCall → 工具执行 → 回到 LLM · /slash → @mention → 自然语言路由" },
+        { "id": "tools", "name": "tools/ (19)", "path": "internal/agent/tools/", "loc": 3425, "detail": "session: create/switch/list/alive · I/O: send/send_to_session/read_session_output/relay · file: read/write/list_directory · state/context/structured_output · 确认: assess/respond" },
         { "id": "skills", "name": "skills/", "path": "internal/agent/skills/", "loc": 356, "detail": "SKILL.md 加载器 · YAML frontmatter · {{.Args}} 模板 · 工具白名单" },
-        { "id": "hooks", "name": "hooks + notifier", "path": "internal/agent/{hooks,notifier}.go", "loc": 613, "detail": "Unix socket ~/.makro/hooks.sock · before/after_tool_call · agent_stop · permission_request · 版本化等待" }
+        { "id": "hooks", "name": "hooks + notifier", "path": "internal/agent/{hooks,notifier}.go", "loc": 515, "detail": "Unix socket ~/.makro/hooks.sock · agent_start/stop · permission · capture · claude_session_start · OnCapture/OnAgentStop/OnPermission 回调" }
       ],
       "deps": ["infra"]
     },
@@ -52,12 +54,12 @@
       "id": "infra",
       "name": "Infrastructure",
       "tag": "Layer 5 / 6",
-      "desc": "四个独立的基础设施包，通过接口解耦。LLM 包抽象 Anthropic/OpenAI 的流式 API。Tmux 包通过直接 CLI 调用管理 tmux 会话（500ms 轮询）。Adapters 包抽象不同 coding agent CLI（Claude Code、Copilot）。Config 包从多源加载配置，优先级：env > config.json > .claude/settings > 默认值。",
+      "desc": "通过接口解耦的基础设施层。LLM 抽象 Anthropic/OpenAI 的流式 API。Tmux CLI 封装 + 状态镜像（500ms 轮询）。Notify (macOS + Bark) + APNs 推送 iOS。Role 把 roles.toml 渲染成 prompt 上下文。Usage SQLite 用量统计。Config 多源加载，优先级：env > config.json > .claude/settings > 默认值。",
       "components": [
-        { "id": "llm", "name": "internal/llm/", "path": "internal/llm/", "loc": 492, "detail": "interface: Provider (Stream, Complete) · anthropic.go · openai.go · Message/StreamEvent 类型" },
-        { "id": "tmux", "name": "internal/tmux/", "path": "internal/tmux/", "loc": 946, "detail": "interface: TmuxClient · Client (500ms poll) · StateMirror (thread-safe) · Parser (20+ notification types) · Commands builder" },
-        { "id": "adapters", "name": "internal/adapters/", "path": "internal/adapters/", "loc": 288, "detail": "interface: AgentAdapter · claude.go (--dangerously-skip-permissions) · copilot.go · output parsing (ready/working/completed/error)" },
-        { "id": "config", "name": "internal/config/", "path": "internal/config/", "loc": 290, "detail": "多源配置 · MAKRO_* env · ~/.makro/config.json · ~/.claude/settings.json · 自动 provider 检测" }
+        { "id": "llm", "name": "internal/llm/", "path": "internal/llm/", "loc": 787, "detail": "interface: Provider (Stream/Complete) · anthropic.go · openai.go · Message/StreamEvent 类型 · L2 完全不知道具体 provider" },
+        { "id": "tmux", "name": "internal/tmux/", "path": "internal/tmux/", "loc": 2022, "detail": "Client (CLI 封装 + 500ms 轮询) · StateMirror (线程安全) · Parser (20+ notification types) · FindTmuxBin/DefaultArgs (全仓单一真相源)" },
+        { "id": "notify", "name": "internal/notify/ + apns/", "path": "internal/notify/", "loc": 681, "detail": "notify: macOS 本地通知 + Bark 推送 · apns: ES256 + JWT，推 iOS device token（device_store.go 注册）" },
+        { "id": "config-role-usage", "name": "internal/config/ + role/ + usage/", "path": "internal/config/", "loc": 2487, "detail": "config: 多源 (MAKRO_* env · ~/.makro/config.json · ~/.claude/settings.json) · role: roles.toml → RenderRolesPrompt 注入 system prompt · usage: SQLite (claude/zcode 双源)" }
       ],
       "deps": ["external"]
     },
@@ -65,13 +67,14 @@
       "id": "external",
       "name": "External",
       "tag": "Layer 6 / 6",
-      "desc": "Makro 依赖的外部系统。tmux 是核心依赖，通过专用 socket 隔离。Anthropic 和 OpenAI 提供 LLM 能力。PTY 提供伪终端。Claude Code 的 settings.json 提供模型偏好和 API key 回退。",
+      "desc": "Makro 依赖的外部系统。tmux 是核心依赖，通过专用 socket 隔离。Anthropic 和 OpenAI 提供 LLM 能力。PTY 提供伪终端。Claude Code 的 settings.json 提供模型偏好和 API key 回退。APNs / Bark 提供到手机的推送通道。",
       "components": [
-        { "id": "ext-anthropic", "name": "Anthropic API", "path": "anthropic-sdk-go", "loc": 0, "detail": "streaming · tool use · claude-opus-4-7 / claude-sonnet-4-6" },
-        { "id": "ext-openai", "name": "OpenAI API", "path": "openai-go/v3", "loc": 0, "detail": "streaming · function calling · BigModel URL rewriting" },
-        { "id": "ext-tmux", "name": "tmux CLI", "path": "~/.makro/tmux.sock", "loc": 0, "detail": "new-session -A · capture-pane · 专用服务器隔离" },
-        { "id": "ext-pty", "name": "PTY", "path": "creack/pty", "loc": 0, "detail": "伪终端 · xterm-256color · LANG=en_US.UTF-8 · 32KB buffer" },
-        { "id": "ext-settings", "name": ".claude/settings.json", "path": "~/.claude/settings.json", "loc": 0, "detail": "模型偏好 · API key 回退 · 配置优先级链的最后一环" }
+        { "id": "ext-anthropic", "name": "Anthropic API", "path": "anthropic-sdk-go", "loc": 0, "detail": "streaming · tool use · Claude 模型族" },
+        { "id": "ext-openai", "name": "OpenAI API", "path": "openai-go/v3", "loc": 0, "detail": "streaming · function calling · 兼容 OpenAI 协议的 endpoint" },
+        { "id": "ext-tmux", "name": "tmux CLI", "path": "~/.makro/tmux.sock", "loc": 0, "detail": "new-session -A · capture-pane · 专用服务器隔离于用户 tmux" },
+        { "id": "ext-pty", "name": "PTY", "path": "creack/pty", "loc": 0, "detail": "伪终端 · xterm-256color · LANG=en_US.UTF-8 · 喂 /ws/xterm" },
+        { "id": "ext-settings", "name": ".claude/settings.json", "path": "~/.claude/settings.json", "loc": 0, "detail": "模型偏好 · API key 回退 · 配置优先级链的最后一环" },
+        { "id": "ext-apns", "name": "APNs / Bark", "path": "apple apns / api.day.app", "loc": 0, "detail": "agent 完成 / brain 提议时推送到手机 · APNs (iOS) + Bark (跨平台)" }
       ],
       "deps": []
     }
