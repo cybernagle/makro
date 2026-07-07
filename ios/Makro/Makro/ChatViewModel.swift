@@ -43,6 +43,7 @@ final class ChatViewModel: NSObject, ObservableObject {
     private var pingTimer: Timer?
     private var reconnectTask: Task<Void, Never>?
     private var reconnectDelay: TimeInterval = 1
+    private var streamingWatchdog: Task<Void, Never>?
     private let config: Config
     private let api: APIClient
     private let speech: AzureSpeechManager
@@ -147,6 +148,17 @@ final class ChatViewModel: NSObject, ObservableObject {
         connectionState = .disconnected
     }
 
+    deinit {
+        // Belt-and-suspenders cleanup. onDisappear calls disconnect(), but a
+        // stuck URLSession delegate or an in-flight reconnect sleep could
+        // otherwise extend this VM's lifetime. Stored-property access only —
+        // safe in a nonisolated deinit.
+        streamingWatchdog?.cancel()
+        reconnectTask?.cancel()
+        pingTimer?.invalidate()
+        task?.cancel(with: .goingAway, reason: nil)
+    }
+
     func reconnectIfNeeded() {
         guard connectionState == .connected else { return }
         stopPing()
@@ -176,19 +188,51 @@ final class ChatViewModel: NSObject, ObservableObject {
     func send(text: String, voice: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // Reentry guard: if a previous turn's `done` was lost (WS dropout,
+        // parse miss), isStreaming would still be true. Close it out before
+        // opening a new turn so the indicator can never get stuck.
+        if isStreaming { endStreaming() }
         messages.append(ChatMessage(role: .user, text: trimmed))
         isStreaming = true
+        startStreamingWatchdog()
         Task {
             do {
                 try await api.sendChat(text: trimmed, voice: voice)
             } catch {
                 messages.append(ChatMessage(role: .system, text: "[error: \(error.localizedDescription)]"))
-                isStreaming = false
+                endStreaming()
+            }
+        }
+    }
+
+    /// Central reset point. Every path that ends a turn goes through here so
+    /// the watchdog is always cancelled and isStreaming always flips together.
+    private func endStreaming() {
+        streamingWatchdog?.cancel()
+        streamingWatchdog = nil
+        isStreaming = false
+    }
+
+    /// Failsafe: if no `done`/`error` arrives within 60s (WS dropped the
+    /// broadcast, or a server path skipped it), force the turn closed so the
+    /// indicator never sticks. 60s is well past normal agent turn latency.
+    private func startStreamingWatchdog() {
+        streamingWatchdog?.cancel()
+        streamingWatchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.isStreaming else { return }
+                self.messages.append(ChatMessage(role: .system, text: "[响应超时,已自动结束]"))
+                self.endStreaming()
             }
         }
     }
 
     func cancel() {
+        // User-initiated stop: don't wait for the server's done (that may be
+        // exactly what's stuck). Reset locally right away.
+        endStreaming()
         Task { try? await api.cancelChat() }
     }
 
@@ -360,7 +404,7 @@ final class ChatViewModel: NSObject, ObservableObject {
             }
         case "done":
             thinkingText = nil
-            isStreaming = false
+            endStreaming()
             // Read aloud when this turn was triggered by voice, or whenever we
             // are in an active call (every reply is spoken in call mode).
             // Typed messages outside a call never set either flag → silent.
@@ -375,7 +419,7 @@ final class ChatViewModel: NSObject, ObservableObject {
         case "error":
             let msg = json["data"] as? String ?? "Unknown error"
             messages.append(ChatMessage(role: .system, text: "[error: \(msg)]"))
-            isStreaming = false
+            endStreaming()
         case "system":
             let msg = json["data"] as? String ?? ""
             messages.append(ChatMessage(role: .system, text: msg))
@@ -418,15 +462,23 @@ final class ChatViewModel: NSObject, ObservableObject {
         stopPing()
         task = nil
         connectionState = .disconnected
+        // WS dropped mid-turn: the backend's `done` broadcast has no buffer
+        // and no replay, so it's already lost. Close the turn now rather than
+        // leaving the indicator pinned until the watchdog times out.
+        if isStreaming {
+            messages.append(ChatMessage(role: .system, text: "[连接中断]"))
+            endStreaming()
+        }
         scheduleReconnect()
     }
 
     private func scheduleReconnect() {
         let delay = reconnectDelay
         reconnectDelay = min(reconnectDelay * 2, 60)
-        reconnectTask = Task {
+        reconnectTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
+            guard let self else { return }
             self.connectionState = .connecting
             self.openConnection()
         }
