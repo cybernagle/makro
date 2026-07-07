@@ -1,4 +1,4 @@
-// Makro GUI — fetch/WebSocket version (no Wails bindings)
+// Makro GUI — fetch/WebSocket client
 // Backends are configured dynamically via getConnectionInfo() IPC since preload
 // is sandboxed and can't probe the filesystem for certs.
 let BACKEND = 'http://127.0.0.1:7070';
