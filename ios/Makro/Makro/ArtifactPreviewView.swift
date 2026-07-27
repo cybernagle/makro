@@ -167,7 +167,10 @@ struct ShareQRView: View {
                         }
                         .buttonStyle(.bordered)
                         Button {
-                            presentShareSheet(items: [url])
+                            // MUST pass a URL object (not a String) — WeChat only
+                            // card-generates for URL share items; a String is treated
+                            // as plain text (no link preview).
+                            if let u = URL(string: url) { presentShareSheet(items: [u]) }
                         } label: {
                             Label("系统分享", systemImage: "square.and.arrow.up")
                                 .frame(maxWidth: .infinity)
