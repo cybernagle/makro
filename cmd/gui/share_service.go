@@ -138,10 +138,11 @@ func shareEnvOr(key, def string) string {
 
 // ShareService uploads artifacts to OSS and signs presigned share URLs.
 type ShareService struct {
-	cfg     ShareConfig
-	arts    *ArtifactService
-	bucket  *oss.Bucket
-	initErr error
+	cfg        ShareConfig
+	arts       *ArtifactService
+	bucket     *oss.Bucket
+	ogImageURL string // presigned URL of the brand OG card (assets/makro-og.png)
+	initErr    error
 }
 
 // NewShareService reads OSS env and connects. If AK/SK are unset the service is
@@ -164,6 +165,11 @@ func NewShareService(arts *ArtifactService) *ShareService {
 		return s
 	}
 	s.bucket = bucket
+	// Brand OG card image (long-lived presigned; reused across all artifacts for
+	// link-preview thumbnails — WeChat/Twitter cards).
+	if u, err := s.signURLExpiry("assets/makro-og.png", 10*365*24*time.Hour); err == nil {
+		s.ogImageURL = u
+	}
 	return s
 }
 
@@ -217,7 +223,7 @@ func (s *ShareService) Share(session, relPath string) (*ShareResult, error) {
 	// previews can attribute the report (fixes "recipient AI doesn't know where
 	// this came from"). Idempotent — refreshes the makro-meta block on re-upload.
 	fullMeta := readFullMetaMap(metaPath)
-	enriched := enrichHTMLForSharing(data, fullMeta)
+	enriched := enrichHTMLForSharing(data, fullMeta, s.ogImageURL)
 	if err := s.bucket.PutObject(key, bytes.NewReader(enriched), oss.ContentType("text/html; charset=utf-8")); err != nil {
 		return nil, fmt.Errorf("oss put: %w", err)
 	}
@@ -237,12 +243,16 @@ func (s *ShareService) Share(session, relPath string) (*ShareResult, error) {
 	return &ShareResult{URL: url, Hash: hash, Cached: false}, nil
 }
 
-// signURL signs a presigned GET for the key, then rewrites the host to the
-// ShareDomain (CNAME-bound to the bucket) and forces https (OSS V1 signature
-// is scheme-agnostic, and the LE cert is bound to the cname).
+// signURL signs a presigned GET (~1 year, for per-artifact share links).
 func (s *ShareService) signURL(key string) (string, error) {
-	expiry := int64((365 * 24 * time.Hour).Seconds()) // ~1 year
-	raw, err := s.bucket.SignURL(key, oss.HTTPGet, expiry)
+	return s.signURLExpiry(key, 365*24*time.Hour)
+}
+
+// signURLExpiry signs a presigned GET for a custom lifetime, then rewrites the
+// host to the ShareDomain (CNAME-bound to the bucket) and forces https (OSS V1
+// signature is scheme-agnostic, and the LE cert is bound to the cname).
+func (s *ShareService) signURLExpiry(key string, expiry time.Duration) (string, error) {
+	raw, err := s.bucket.SignURL(key, oss.HTTPGet, int64(expiry.Seconds()))
 	if err != nil {
 		return "", err
 	}
@@ -330,7 +340,7 @@ func readFullMetaMap(path string) map[string]any {
 // OpenGraph, JSON-LD TechArticle) into the HTML <head>, sourced from meta.json.
 // Idempotent via the makro-meta markers. This makes the published page
 // self-describing for AI tools / crawlers / link previews.
-func enrichHTMLForSharing(htmlBytes []byte, meta map[string]any) []byte {
+func enrichHTMLForSharing(htmlBytes []byte, meta map[string]any, ogImageURL string) []byte {
 	s := string(htmlBytes)
 	title, _ := meta["title"].(string)
 	if title == "" {
@@ -373,6 +383,13 @@ func enrichHTMLForSharing(htmlBytes []byte, meta map[string]any) []byte {
 	block += fmt.Sprintf(`<meta property="og:description" content="%s">`+"\n", e(desc))
 	block += `<meta property="og:type" content="article">` + "\n"
 	block += `<meta property="og:site_name" content="橘粒 Juli">` + "\n"
+	if ogImageURL != "" {
+		block += fmt.Sprintf(`<meta property="og:image" content="%s">`+"\n", e(ogImageURL))
+		block += `<meta property="og:image:width" content="1200">` + "\n"
+		block += `<meta property="og:image:height" content="630">` + "\n"
+		block += `<meta name="twitter:card" content="summary_large_image">` + "\n"
+		block += fmt.Sprintf(`<meta name="twitter:image" content="%s">`+"\n", e(ogImageURL))
+	}
 	if keywords != "" {
 		block += fmt.Sprintf(`<meta name="keywords" content="%s">`+"\n", e(keywords))
 	}
@@ -426,7 +443,7 @@ func (s *ShareService) ReenrichAll() (int, int, error) {
 			skipped++
 			return nil
 		}
-		enriched := enrichHTMLForSharing(data, full)
+		enriched := enrichHTMLForSharing(data, full, s.ogImageURL)
 		if err := s.bucket.PutObject(key, bytes.NewReader(enriched), oss.ContentType("text/html; charset=utf-8")); err != nil {
 			log.Printf("[reenrich] fail %s: %v", key, err)
 			skipped++
