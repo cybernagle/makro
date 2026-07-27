@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -43,12 +44,18 @@ type ShareConfig struct {
 	Bucket      string
 	Region      string
 	ShareDomain string // share.juliasia.cn (CNAME → bucket endpoint)
+	ShareHost   string // SSH host alias for the card-landing server (e.g. "julia")
+	SharePath   string // dir on ShareHost to drop landing pages (e.g. /home/juli/web/s)
+	CardDomain  string // public domain serving the landings (e.g. juliasia.cn)
 }
 
 func loadShareConfig() ShareConfig {
 	cfg := ShareConfig{
 		Bucket:      shareEnvOr("MAKRO_OSS_BUCKET", "juli-makro"),
 		ShareDomain: shareEnvOr("MAKRO_OSS_SHARE_DOMAIN", "share.juliasia.cn"),
+		ShareHost:   shareEnvOr("MAKRO_SHARE_HOST", "julia"),
+		SharePath:   shareEnvOr("MAKRO_SHARE_PATH", "/home/juli/web/s"),
+		CardDomain:  shareEnvOr("MAKRO_SHARE_CARD_DOMAIN", "juliasia.cn"),
 	}
 	// Credentials: env first, then fall back to the aliyun CLI profile so
 	// sharing works with zero extra setup (creds already in ~/.aliyun/config.json
@@ -199,13 +206,10 @@ func (s *ShareService) Share(session, relPath string) (*ShareResult, error) {
 	filename := filepath.Base(absPath)
 	metaPath := metaPathFor(absPath)
 
-	// Memoized + unchanged → reuse OSS key, just re-sign (cheap).
-	if meta, _ := readShareMeta(metaPath); meta.ShareKey != "" && meta.ShareMtime == mtime {
-		if url, err := s.signURL(meta.ShareKey); err == nil {
-			return &ShareResult{URL: url, Hash: meta.ShareHash, Cached: true}, nil
-		} else {
-			log.Printf("[share] re-sign failed (%v); re-uploading", err)
-		}
+	// Memoized + unchanged → return the stored share URL (clean card URL if the
+	// landing was published, else the long-lived presigned). No re-upload/re-sign.
+	if meta, _ := readShareMeta(metaPath); meta.ShareKey != "" && meta.ShareMtime == mtime && meta.ShareURL != "" {
+		return &ShareResult{URL: meta.ShareURL, Hash: meta.ShareHash, Cached: true}, nil
 	}
 
 	// New or changed → fresh hash + upload.
@@ -232,6 +236,17 @@ func (s *ShareService) Share(session, relPath string) (*ShareResult, error) {
 		return nil, fmt.Errorf("sign url: %w", err)
 	}
 
+	// Publish a clean card-landing page on the ECS (https://<CardDomain>/s/<hash>).
+	// Presigned OSS URLs don't get WeChat/link-preview cards; this clean URL does.
+	// Falls back to the presigned URL if the landing host is unreachable.
+	cardURL := fmt.Sprintf("https://%s/s/%s", s.cfg.CardDomain, hash)
+	landing := buildShareLanding(fullMeta, url, s.ogImageURL, cardURL)
+	if err := s.publishLanding(hash, landing); err != nil {
+		log.Printf("[share] landing publish failed (%v) — returning presigned URL (no card)", err)
+	} else {
+		url = cardURL
+	}
+
 	if err := writeShareMeta(metaPath, shareMeta{
 		ShareHash: hash, ShareKey: key, ShareMtime: mtime, ShareURL: url,
 		SharedAt: time.Now().UTC().Format(time.RFC3339),
@@ -243,9 +258,10 @@ func (s *ShareService) Share(session, relPath string) (*ShareResult, error) {
 	return &ShareResult{URL: url, Hash: hash, Cached: false}, nil
 }
 
-// signURL signs a presigned GET (~1 year, for per-artifact share links).
+// signURL signs a presigned GET for the artifact content. Long-lived (10y) so
+// the card-landing's redirect target (and the iOS fallback URL) stay valid.
 func (s *ShareService) signURL(key string) (string, error) {
-	return s.signURLExpiry(key, 365*24*time.Hour)
+	return s.signURLExpiry(key, 10*365*24*time.Hour)
 }
 
 // signURLExpiry signs a presigned GET for a custom lifetime, then rewrites the
@@ -268,6 +284,58 @@ func newShareHash() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// buildShareLanding renders the card-landing HTML served at https://<CardDomain>/s/<hash>.
+// It carries the provenance OG (so WeChat/link-preview crawlers card the CLEAN url)
+// and a meta-refresh redirect to the presigned content URL (humans get the report).
+func buildShareLanding(meta map[string]any, contentURL, ogImageURL, cardURL string) string {
+	title, _ := meta["title"].(string)
+	if title == "" {
+		title = "Makro Artifact"
+	}
+	desc, _ := meta["tldr"].(string)
+	e := html.EscapeString
+	var b strings.Builder
+	b.WriteString("<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\">\n")
+	b.WriteString("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n")
+	fmt.Fprintf(&b, "<title>%s · 橘粒 Juli</title>\n", e(title))
+	fmt.Fprintf(&b, "<meta name=\"description\" content=\"%s\">\n", e(desc))
+	b.WriteString("<meta name=\"author\" content=\"橘粒 Juli\">\n")
+	fmt.Fprintf(&b, "<meta property=\"og:title\" content=\"%s · 橘粒 Juli\">\n", e(title))
+	fmt.Fprintf(&b, "<meta property=\"og:description\" content=\"%s\">\n", e(desc))
+	b.WriteString("<meta property=\"og:type\" content=\"article\">\n")
+	b.WriteString("<meta property=\"og:site_name\" content=\"橘粒 Juli\">\n")
+	fmt.Fprintf(&b, "<meta property=\"og:url\" content=\"%s\">\n", e(cardURL))
+	if ogImageURL != "" {
+		fmt.Fprintf(&b, "<meta property=\"og:image\" content=\"%s\">\n", e(ogImageURL))
+		b.WriteString("<meta property=\"og:image:width\" content=\"1200\">\n<meta property=\"og:image:height\" content=\"630\">\n")
+		b.WriteString("<meta name=\"twitter:card\" content=\"summary_large_image\">\n")
+		fmt.Fprintf(&b, "<meta name=\"twitter:image\" content=\"%s\">\n", e(ogImageURL))
+	}
+	fmt.Fprintf(&b, "<meta http-equiv=\"refresh\" content=\"0; url=%s\">\n", e(contentURL))
+	b.WriteString("</head>\n<body style=\"margin:0;font-family:-apple-system,'PingFang SC',sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#FAFAF8;color:#5C5A54;text-align:center\">\n")
+	b.WriteString("<div><p style=\"font-size:15px\">正在打开报告…</p>")
+	fmt.Fprintf(&b, "<p style=\"margin-top:10px\"><a href=\"%s\" style=\"color:#D97C26;font-size:14px\">点击查看「%s」</a></p></div>\n", e(contentURL), e(title))
+	b.WriteString("</body></html>\n")
+	return b.String()
+}
+
+// publishLanding writes the card-landing HTML to <ShareHost>:<SharePath>/<hash>.html
+// over SSH (stdin → cat), chmod 644 so nginx can serve it. Idempotent (overwrites).
+func (s *ShareService) publishLanding(hash, landingHTML string) error {
+	if s.cfg.ShareHost == "" {
+		return fmt.Errorf("ShareHost empty (set MAKRO_SHARE_HOST)")
+	}
+	p := s.cfg.SharePath
+	cmd := exec.Command("ssh", s.cfg.ShareHost,
+		fmt.Sprintf("mkdir -p %s && cat > %s/%s.html && chmod 644 %s/%s.html", p, p, hash, p, hash))
+	cmd.Stdin = strings.NewReader(landingHTML)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ssh %s: %w: %s", s.cfg.ShareHost, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // ── meta.json (sibling file) memoize fields ──
