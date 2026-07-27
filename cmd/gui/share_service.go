@@ -207,12 +207,11 @@ func (s *ShareService) Share(session, relPath string) (*ShareResult, error) {
 	filename := filepath.Base(absPath)
 	metaPath := metaPathFor(absPath)
 
-	// Memoized + unchanged → return the CLEAN card URL (https://<CardDomain>/s/<hash>),
-	// reconstructed from share_hash. This upgrades OLD shares (whose stored
-	// share_url is a presigned share.juliasia.cn URL that WeChat won't card) to
-	// the clean card URL. The landing is published by Share()/ReenrichAll().
-	if meta, _ := readShareMeta(metaPath); meta.ShareKey != "" && meta.ShareMtime == mtime && meta.ShareHash != "" {
-		return &ShareResult{URL: fmt.Sprintf("https://%s/share-%s.html", s.cfg.CardDomain, meta.ShareHash), Hash: meta.ShareHash, Cached: true}, nil
+	// Memoized + unchanged → re-sign the presigned URL (cheap, no re-upload).
+	if meta, _ := readShareMeta(metaPath); meta.ShareKey != "" && meta.ShareMtime == mtime {
+		if url, err := s.signURL(meta.ShareKey); err == nil {
+			return &ShareResult{URL: url, Hash: meta.ShareHash, Cached: true}, nil
+		}
 	}
 
 	// New or changed → fresh hash + upload.
@@ -237,17 +236,6 @@ func (s *ShareService) Share(session, relPath string) (*ShareResult, error) {
 	url, err := s.signURL(key)
 	if err != nil {
 		return nil, fmt.Errorf("sign url: %w", err)
-	}
-
-	// Serve the FULL enriched report at the clean card URL (https://<CardDomain>/s/<hash>).
-	// WeChat doesn't card thin/redirect preview pages (anti-spam) — it cards RICH
-	// pages like the main site. So the card URL serves the report itself (with the
-	// provenance OG in <head>). ECS stores 1 copy (~tens of KB) per share.
-	cardURL := fmt.Sprintf("https://%s/share-%s.html", s.cfg.CardDomain, hash)
-	if err := s.publishLanding(hash, string(enriched)); err != nil {
-		log.Printf("[share] landing publish failed (%v) — returning presigned URL (no card)", err)
-	} else {
-		url = cardURL
 	}
 
 	if err := writeShareMeta(metaPath, shareMeta{
@@ -532,15 +520,6 @@ func (s *ShareService) ReenrichAll() (int, int, error) {
 			log.Printf("[reenrich] fail %s: %v", key, err)
 			skipped++
 			return nil
-		}
-		// also re-publish the card URL with the full enriched report (rich page →
-		// WeChat cards it; thin preview pages don't get carded)
-		hash := key
-		if i := strings.Index(key, "/"); i >= 0 {
-			hash = key[:i]
-		}
-		if err := s.publishLanding(hash, string(enriched)); err != nil {
-			log.Printf("[reenrich] landing %s: %v", hash, err)
 		}
 		updated++
 		log.Printf("[reenrich] ok %s", key)
