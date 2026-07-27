@@ -287,8 +287,9 @@ func newShareHash() (string, error) {
 }
 
 // buildShareLanding renders the card-landing HTML served at https://<CardDomain>/s/<hash>.
-// It carries the provenance OG (so WeChat/link-preview crawlers card the CLEAN url)
-// and a meta-refresh redirect to the presigned content URL (humans get the report).
+// Carries the provenance OG (so WeChat/link-preview crawlers card the CLEAN url) +
+// a "view report" button to the presigned content. NO auto-redirect (meta-refresh
+// makes WeChat follow/skip and not card the page) — the user taps the button.
 func buildShareLanding(meta map[string]any, contentURL, ogImageURL, cardURL string) string {
 	title, _ := meta["title"].(string)
 	if title == "" {
@@ -313,11 +314,14 @@ func buildShareLanding(meta map[string]any, contentURL, ogImageURL, cardURL stri
 		b.WriteString("<meta name=\"twitter:card\" content=\"summary_large_image\">\n")
 		fmt.Fprintf(&b, "<meta name=\"twitter:image\" content=\"%s\">\n", e(ogImageURL))
 	}
-	fmt.Fprintf(&b, "<meta http-equiv=\"refresh\" content=\"0; url=%s\">\n", e(contentURL))
-	b.WriteString("</head>\n<body style=\"margin:0;font-family:-apple-system,'PingFang SC',sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#FAFAF8;color:#5C5A54;text-align:center\">\n")
-	b.WriteString("<div><p style=\"font-size:15px\">正在打开报告…</p>")
-	fmt.Fprintf(&b, "<p style=\"margin-top:10px\"><a href=\"%s\" style=\"color:#D97C26;font-size:14px\">点击查看「%s」</a></p></div>\n", e(contentURL), e(title))
-	b.WriteString("</body></html>\n")
+	b.WriteString("<style>:root{--c:#D97C26;--c-deep:#B8681A;--ink:#1A1A1A;--body:#5C5A54;--dim:#8E8C84;--bg:#FAFAF8}*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,'PingFang SC',sans-serif;background:var(--bg);color:var(--ink);display:flex;align-items:center;justify-content:center;min-height:100vh;padding:32px}.c{max-width:520px;text-align:center}.k{font-family:'SF Mono',Menlo,monospace;font-size:11px;color:var(--c);letter-spacing:2px;margin-bottom:14px}h1{font-size:22px;font-weight:700;letter-spacing:-.4px;line-height:1.35;margin-bottom:14px}.d{font-size:14px;color:var(--body);line-height:1.7;margin-bottom:28px}.btn{display:inline-block;padding:13px 30px;background:var(--c);color:#fff;text-decoration:none;border-radius:8px;font-size:15px;font-weight:500;box-shadow:0 4px 14px -4px rgba(217,124,38,.4);transition:background .25s}.btn:hover{background:var(--c-deep)}.f{margin-top:28px;font-size:12px;color:var(--dim)}</style>\n")
+	b.WriteString("</head>\n<body><div class=\"c\">")
+	b.WriteString("<div class=\"k\">// MAKRO ARTIFACT</div>")
+	fmt.Fprintf(&b, "<h1>%s</h1>", e(title))
+	fmt.Fprintf(&b, "<p class=\"d\">%s</p>", e(desc))
+	fmt.Fprintf(&b, "<a class=\"btn\" href=\"%s\">查看完整报告 →</a>", e(contentURL))
+	b.WriteString("<div class=\"f\">橘粒 Juli · 由 Makro™ 生成</div>")
+	b.WriteString("</div></body></html>\n")
 	return b.String()
 }
 
@@ -516,6 +520,17 @@ func (s *ShareService) ReenrichAll() (int, int, error) {
 			log.Printf("[reenrich] fail %s: %v", key, err)
 			skipped++
 			return nil
+		}
+		// also re-publish the card landing (picks up buildShareLanding changes)
+		if presigned, err := s.signURL(key); err == nil {
+			hash := key
+			if i := strings.Index(key, "/"); i >= 0 {
+				hash = key[:i]
+			}
+			cardURL := fmt.Sprintf("https://%s/s/%s", s.cfg.CardDomain, hash)
+			if err := s.publishLanding(hash, buildShareLanding(full, presigned, s.ogImageURL, cardURL)); err != nil {
+				log.Printf("[reenrich] landing %s: %v", hash, err)
+			}
 		}
 		updated++
 		log.Printf("[reenrich] ok %s", key)
