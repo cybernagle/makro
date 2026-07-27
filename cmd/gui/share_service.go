@@ -238,12 +238,12 @@ func (s *ShareService) Share(session, relPath string) (*ShareResult, error) {
 		return nil, fmt.Errorf("sign url: %w", err)
 	}
 
-	// Publish a clean card-landing page on the ECS (https://<CardDomain>/s/<hash>).
-	// Presigned OSS URLs don't get WeChat/link-preview cards; this clean URL does.
-	// Falls back to the presigned URL if the landing host is unreachable.
+	// Serve the FULL enriched report at the clean card URL (https://<CardDomain>/s/<hash>).
+	// WeChat doesn't card thin/redirect preview pages (anti-spam) — it cards RICH
+	// pages like the main site. So the card URL serves the report itself (with the
+	// provenance OG in <head>). ECS stores 1 copy (~tens of KB) per share.
 	cardURL := fmt.Sprintf("https://%s/s/%s", s.cfg.CardDomain, hash)
-	landing := buildShareLanding(fullMeta, url, s.ogImageURL, cardURL)
-	if err := s.publishLanding(hash, landing); err != nil {
+	if err := s.publishLanding(hash, string(enriched)); err != nil {
 		log.Printf("[share] landing publish failed (%v) — returning presigned URL (no card)", err)
 	} else {
 		url = cardURL
@@ -523,16 +523,14 @@ func (s *ShareService) ReenrichAll() (int, int, error) {
 			skipped++
 			return nil
 		}
-		// also re-publish the card landing (picks up buildShareLanding changes)
-		if presigned, err := s.signURL(key); err == nil {
-			hash := key
-			if i := strings.Index(key, "/"); i >= 0 {
-				hash = key[:i]
-			}
-			cardURL := fmt.Sprintf("https://%s/s/%s", s.cfg.CardDomain, hash)
-			if err := s.publishLanding(hash, buildShareLanding(full, presigned, s.ogImageURL, cardURL)); err != nil {
-				log.Printf("[reenrich] landing %s: %v", hash, err)
-			}
+		// also re-publish the card URL with the full enriched report (rich page →
+		// WeChat cards it; thin preview pages don't get carded)
+		hash := key
+		if i := strings.Index(key, "/"); i >= 0 {
+			hash = key[:i]
+		}
+		if err := s.publishLanding(hash, string(enriched)); err != nil {
+			log.Printf("[reenrich] landing %s: %v", hash, err)
 		}
 		updated++
 		log.Printf("[reenrich] ok %s", key)
