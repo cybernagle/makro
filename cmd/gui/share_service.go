@@ -177,7 +177,7 @@ func NewShareService(arts *ArtifactService) *ShareService {
 	// WeChat's card crawler can't fetch a presigned / cross-domain og:image (it
 	// hits share.juliasia.cn without the signature → OSS AccessDenied → the whole
 	// card is rejected blank). Served publicly from julia ECS nginx.
-	s.ogImageURL = shareEnvOr("MAKRO_OG_IMAGE", "https://juliasia.cn/og/makro-og.png?v=2")
+	s.ogImageURL = shareEnvOr("MAKRO_OG_IMAGE", "https://juliasia.cn/og/makro-og.png?v=3")
 	return s
 }
 
