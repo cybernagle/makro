@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -414,9 +415,18 @@ func readFullMetaMap(path string) map[string]any {
 // OpenGraph, JSON-LD TechArticle) into the HTML <head>, sourced from meta.json.
 // Idempotent via the makro-meta markers. This makes the published page
 // self-describing for AI tools / crawlers / link previews.
+// titleTagRe extracts the page's <title> for artifacts whose meta.json lacks one.
+var titleTagRe = regexp.MustCompile(`(?i)<title>([^<]+)</title>`)
+
 func enrichHTMLForSharing(htmlBytes []byte, meta map[string]any, ogImageURL string) []byte {
 	s := string(htmlBytes)
 	title, _ := meta["title"].(string)
+	if title == "" {
+		// fall back to the page's <title> tag (old artifacts without a meta.json title)
+		if m := titleTagRe.FindStringSubmatch(s); len(m) > 1 {
+			title = strings.TrimSpace(m[1])
+		}
+	}
 	if title == "" {
 		title = "Makro Artifact · 橘粒 Juli"
 	}
