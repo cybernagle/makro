@@ -211,7 +211,7 @@ func (s *ShareService) Share(session, relPath string) (*ShareResult, error) {
 	// share_url is a presigned share.juliasia.cn URL that WeChat won't card) to
 	// the clean card URL. The landing is published by Share()/ReenrichAll().
 	if meta, _ := readShareMeta(metaPath); meta.ShareKey != "" && meta.ShareMtime == mtime && meta.ShareHash != "" {
-		return &ShareResult{URL: fmt.Sprintf("https://%s/s/%s", s.cfg.CardDomain, meta.ShareHash), Hash: meta.ShareHash, Cached: true}, nil
+		return &ShareResult{URL: fmt.Sprintf("https://%s/share-%s.html", s.cfg.CardDomain, meta.ShareHash), Hash: meta.ShareHash, Cached: true}, nil
 	}
 
 	// New or changed → fresh hash + upload.
@@ -242,7 +242,7 @@ func (s *ShareService) Share(session, relPath string) (*ShareResult, error) {
 	// WeChat doesn't card thin/redirect preview pages (anti-spam) — it cards RICH
 	// pages like the main site. So the card URL serves the report itself (with the
 	// provenance OG in <head>). ECS stores 1 copy (~tens of KB) per share.
-	cardURL := fmt.Sprintf("https://%s/s/%s", s.cfg.CardDomain, hash)
+	cardURL := fmt.Sprintf("https://%s/share-%s.html", s.cfg.CardDomain, hash)
 	if err := s.publishLanding(hash, string(enriched)); err != nil {
 		log.Printf("[share] landing publish failed (%v) — returning presigned URL (no card)", err)
 	} else {
