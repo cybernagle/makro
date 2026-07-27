@@ -206,10 +206,12 @@ func (s *ShareService) Share(session, relPath string) (*ShareResult, error) {
 	filename := filepath.Base(absPath)
 	metaPath := metaPathFor(absPath)
 
-	// Memoized + unchanged → return the stored share URL (clean card URL if the
-	// landing was published, else the long-lived presigned). No re-upload/re-sign.
-	if meta, _ := readShareMeta(metaPath); meta.ShareKey != "" && meta.ShareMtime == mtime && meta.ShareURL != "" {
-		return &ShareResult{URL: meta.ShareURL, Hash: meta.ShareHash, Cached: true}, nil
+	// Memoized + unchanged → return the CLEAN card URL (https://<CardDomain>/s/<hash>),
+	// reconstructed from share_hash. This upgrades OLD shares (whose stored
+	// share_url is a presigned share.juliasia.cn URL that WeChat won't card) to
+	// the clean card URL. The landing is published by Share()/ReenrichAll().
+	if meta, _ := readShareMeta(metaPath); meta.ShareKey != "" && meta.ShareMtime == mtime && meta.ShareHash != "" {
+		return &ShareResult{URL: fmt.Sprintf("https://%s/s/%s", s.cfg.CardDomain, meta.ShareHash), Hash: meta.ShareHash, Cached: true}, nil
 	}
 
 	// New or changed → fresh hash + upload.
