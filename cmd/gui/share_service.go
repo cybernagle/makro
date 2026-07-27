@@ -172,11 +172,11 @@ func NewShareService(arts *ArtifactService) *ShareService {
 		return s
 	}
 	s.bucket = bucket
-	// Brand OG card image (long-lived presigned; reused across all artifacts for
-	// link-preview thumbnails — WeChat/Twitter cards).
-	if u, err := s.signURLExpiry("assets/makro-og.png", 10*365*24*time.Hour); err == nil {
-		s.ogImageURL = u
-	}
+	// Brand OG card image. MUST be a clean, public, SAME-DOWNLOAD-DOMAIN URL —
+	// WeChat's card crawler can't fetch a presigned / cross-domain og:image (it
+	// hits share.juliasia.cn without the signature → OSS AccessDenied → the whole
+	// card is rejected blank). Served publicly from julia ECS nginx.
+	s.ogImageURL = shareEnvOr("MAKRO_OG_IMAGE", "https://juliasia.cn/og/makro-og.png")
 	return s
 }
 
