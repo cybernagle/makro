@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generates the 橘粒 Juli brand OG card (1200×630) used as og:image.
 
-Maximally bold for WeChat's small thumbnail: solid orange + HUGE "橘粒"
-(340px white) so it's legible even at ~100px thumbnail width.
+Bold design: solid orange + HUGE "橘粒" (340px white) for WeChat thumbnail
+legibility. Uses STHeiti (PingFang.ttc is unreadable by PIL on macOS SIP).
 
 Run: python3 cmd/gui/assets/gen-og-image.py → scp to julia:/home/juli/web/og/
 """
@@ -18,14 +18,20 @@ WHITE = "#FFFFFF"
 CREAM = "#FFF8F0"
 
 
-def font(size, path="/System/Library/Fonts/PingFang.ttc", idx=0):
-    try:
-        return ImageFont.truetype(path, size, index=idx)
-    except Exception:
+def font(size):
+    """Load a CJK-capable font. PingFang.ttc is blocked by macOS SIP for PIL;
+    STHeiti works. Try heavier weights first for bold visibility."""
+    for path in [
+        "/System/Library/Fonts/STHeiti Medium.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+    ]:
         try:
             return ImageFont.truetype(path, size)
         except Exception:
-            return ImageFont.load_default()
+            continue
+    return ImageFont.load_default()
 
 
 def text_size(draw, text, f):
@@ -38,11 +44,12 @@ def main():
     d = ImageDraw.Draw(img)
     d.rectangle([0, H - 8, W, H], fill=ORANGE_DEEP)
 
-    f_huge = font(340)  # 橘粒 — fills the card, legible at thumbnail size
-    f_sub = font(80)    # Juli
+    f_huge = font(340)
+    f_sub = font(80)
 
     brand = "橘粒"
     tw, th = text_size(d, brand, f_huge)
+    print(f"橘粒 textbbox: {tw}x{th}")
     d.text(((W - tw) // 2, (H - th) // 2 - 70), brand, font=f_huge, fill=WHITE)
 
     sub = "Juli"
