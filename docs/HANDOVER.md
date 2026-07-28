@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-07-28 · Artifact 分享功能收口（presigned + iOS URL fix）
+
+**状态：✅ 端到端跑通（Safari 已验，Makro 待 rebuild iOS）**
+
+整个分享功能经历了 ~15 个 commit、多轮 WeChat 空白卡排查，最终结论：**presigned share.juliasia.cn URL 本身没问题，root cause 是 iOS 传 String 而非 URL 对象**。修了 iOS（`635e0f8`）后，presigned 经 URL 对象分享 → 微信出卡。ECS card-URL 层（/s/ 落地页 + nginx 路由 + og:image 托管）最终确认不必要，已回退到纯 presigned（`9fa23f1`）。
+
+### 最终架构
+- 分享：上传 OSS（enriched，带 OG）→ 返回 presigned `share.juliasia.cn/<hash>/<file>?Signature=`
+- iOS：String→URL fix → 微信出卡（标题 + og:image）
+- og:image：`juliasia.cn/og/makro-og.png?v=4`（静态，ECS nginx）
+- ECS 只服务 og:image 一张图；artifact 内容全在 OSS presigned
+
+### 所有踩坑记录在 CLAUDE.md
+`## Makro Artifact 分享 — 踩坑记录` —— iOS / 微信卡片 / PIL 字体 / nginx / Terraform / OSS presigned / 诊断方法论，每条带根因 + 解法。
+
+### feat/artifact-sharing 分支（~15 commit，未 push）
+涵盖：OSS infra（julia/infra/makro.tf）、Go 后端（share_service.go）、iOS（APIClient + ArtifactPreviewView）、HTTPS（acme.sh）、og:image。
+
+---
+
 ## 2026-07-25 · share.juliasia.cn HTTPS(Let's Encrypt · 自动续签)
 
 **状态:✅ 上线 + 验证 + 自动续签闭环**
