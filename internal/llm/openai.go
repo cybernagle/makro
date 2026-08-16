@@ -47,6 +47,10 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message, opts Ge
 		var usage Usage
 		var stopReason string
 		var activeToolID string // OpenAI only sends ID on a tool call's first fragment
+		// Reasoning shells (<think>…</think>) sometimes leak into content
+		// depending on model config (normally reasoning arrives via
+		// reasoning_content); strip them before the deltas reach consumers.
+		var think thinkTagFilter
 
 		for stream.Next() {
 			evt := stream.Current()
@@ -61,11 +65,13 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message, opts Ge
 			delta := evt.Choices[0].Delta
 
 			if delta.Content != "" {
-				textCount++
-				select {
-				case ch <- StreamEvent{Type: EventTextDelta, Text: delta.Content}:
-				case <-ctx.Done():
-					return
+				if visible := think.Push(delta.Content); visible != "" {
+					textCount++
+					select {
+					case ch <- StreamEvent{Type: EventTextDelta, Text: visible}:
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
 
@@ -144,6 +150,14 @@ func (p *OpenAIProvider) Stream(ctx context.Context, messages []Message, opts Ge
 			case <-ctx.Done():
 			}
 		} else {
+			// A tag prefix held back as "maybe partial" never completed —
+			// it was plain text after all.
+			if held := think.Flush(); held != "" {
+				select {
+				case ch <- StreamEvent{Type: EventTextDelta, Text: held}:
+				case <-ctx.Done():
+				}
+			}
 			log.Printf("[llm/openai] stream done text_deltas=%d in=%d out=%d elapsed=%s", textCount, usage.InputTokens, usage.OutputTokens, time.Since(start).Round(time.Millisecond))
 			select {
 			case ch <- StreamEvent{Type: EventDone, StopReason: stopReason, Usage: usage}:
@@ -177,7 +191,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, opts 
 
 	choice := resp.Choices[0]
 	result := &CompleteResult{
-		Content:    choice.Message.Content,
+		Content:    stripThinkTags(choice.Message.Content),
 		StopReason: string(choice.FinishReason),
 	}
 	result.Usage = Usage{
