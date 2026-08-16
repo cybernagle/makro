@@ -602,6 +602,12 @@ final class AzureSpeechManager: NSObject, ObservableObject {
         // manual stop or trailing silence must not send un-committed text.
         // Silence-auto mode (闲聊) delivers on the timer like legacy mode.
         if (!commitMode || silenceAutoCommit), !text.isEmpty {
+            // Same ack as the phrase-commit path (deliverCommit): the silence
+            // auto-send is instantaneous and silent without it, so the user
+            // gets no audible cue that their turn was sent and Makro is
+            // thinking. One ack per delivered turn — the dedupe guard above
+            // keeps a late "recognized" result from re-delivering this text.
+            playCommitAck()
             lastDeliveredText = text
             lastDeliveredAt = Date()
             onRecognized?(text)
