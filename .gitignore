@@ -49,3 +49,4 @@ ios/**/*.xcworkspace
 **/.DS_Store
 .omc/
 **/.omc/
+.playwright-mcp/

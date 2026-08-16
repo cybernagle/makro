@@ -84,6 +84,16 @@ func main() {
 		return
 	case "serve":
 		// continue below
+	case "reenrich-shared":
+		// One-off backfill: re-upload provenance-enriched HTML to every already-
+		// shared artifact's existing OSS key, so old share URLs pick up the meta.
+		svc := NewShareService(&ArtifactService{})
+		updated, skipped, err := svc.ReenrichAll()
+		if err != nil {
+			log.Fatalf("[reenrich] %v", err)
+		}
+		log.Printf("[reenrich] done: updated=%d skipped=%d", updated, skipped)
+		return
 	default:
 		log.Fatal("makro-serve must be run with the 'serve' subcommand (launched by Electron)")
 	}

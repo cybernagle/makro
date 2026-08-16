@@ -25,7 +25,7 @@ struct CallView: View {
                         .padding(.top, 8)
                 }
                 Spacer()
-                hangUpButton
+                controlsRow
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 40)
@@ -44,23 +44,26 @@ struct CallView: View {
         }
         .onChange(of: phase) { newPhase in
             // Keep the lock-screen card in sync with the call phase.
-            if vm.isMuted {
-                NowPlayingManager.shared.updatePhase("已静音")
-            } else {
-                NowPlayingManager.shared.updatePhase(phaseLabel(for: newPhase))
-            }
+            NowPlayingManager.shared.updatePhase(nowPlayingPhaseLabel(for: newPhase))
         }
-        .onChange(of: vm.isMuted) { muted in
-            NowPlayingManager.shared.updatePhase(muted ? "已静音" : phaseLabel(for: phase))
+        .onChange(of: vm.isMuted) { _ in
+            NowPlayingManager.shared.updatePhase(nowPlayingPhaseLabel(for: phase))
         }
         .onChange(of: vm.pendingPlan) { _ in
             // A staged plan flips the lock-screen prompt to the confirm ask.
-            if vm.isMuted {
-                NowPlayingManager.shared.updatePhase("已静音")
-            } else {
-                NowPlayingManager.shared.updatePhase(phaseLabel)
-            }
+            NowPlayingManager.shared.updatePhase(nowPlayingPhaseLabel(for: phase))
         }
+    }
+
+    /// Lock-screen card label. Paused takes priority (the mic is fully off;
+    /// mute/phase are meaningless while on hold), then mute, then phase.
+    private func nowPlayingPhaseLabel(for p: Phase) -> String {
+        if vm.isCallPaused { return "已暂停" }
+        if vm.isMuted { return "已静音" }
+        // Mirror the in-app computed phaseLabel: a staged plan takes over the
+        // cue (lock screen should prompt 确认, not "正在聆听…").
+        if vm.pendingPlan != nil { return "待你确认 — 说『确认』或点按钮" }
+        return phaseLabel(for: p)
     }
 
     // MARK: - Header
@@ -104,13 +107,13 @@ struct CallView: View {
 
     private var statusOrb: some View {
         ZStack {
-            // Pulsing rings.
+            // Pulsing rings. Hidden while paused — the call is on hold.
             ForEach(0..<3, id: \.self) { i in
                 Circle()
                     .stroke(orbColor.opacity(0.18 - Double(i) * 0.05), lineWidth: 1.5)
                     .frame(width: 150 + CGFloat(i) * 40, height: 150 + CGFloat(i) * 40)
                     .scaleEffect(animateRings ? 1.08 : 0.92)
-                    .opacity(animateRings ? 0.7 : 0.3)
+                    .opacity(vm.isCallPaused ? 0 : (animateRings ? 0.7 : 0.3))
                     .animation(
                         .easeInOut(duration: pulseDuration)
                             .repeatForever(autoreverses: true)
@@ -237,7 +240,32 @@ struct CallView: View {
         }
     }
 
-    // MARK: - Hang up
+    // MARK: - Call controls
+
+    /// Pause (hold) + hang-up. Pause fully stops mic and TTS without dropping
+    /// the call context (plan/phase/server state survive), for when a human
+    /// conversation interrupts; resume rebuilds the recognizer in ~1-2s.
+    private var controlsRow: some View {
+        HStack(spacing: 48) {
+            Button {
+                vm.isCallPaused ? vm.resumeCall() : vm.pauseCall()
+            } label: {
+                VStack(spacing: 6) {
+                    Image(systemName: vm.isCallPaused ? "play.fill" : "pause.fill")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 64, height: 64)
+                        .background(.white.opacity(vm.isCallPaused ? 0.28 : 0.14))
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(.white.opacity(0.15), lineWidth: 0.5))
+                    Text(vm.isCallPaused ? "继续" : "暂停")
+                        .font(DS.micro(11, .semibold))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+            }
+            hangUpButton
+        }
+    }
 
     private var hangUpButton: some View {
         Button {
@@ -262,8 +290,9 @@ struct CallView: View {
 
     @State private var animateRings = false
 
-    private enum Phase: Equatable { case listening, thinking, speaking }
+    private enum Phase: Equatable { case paused, listening, thinking, speaking }
     private var phase: Phase {
+        if vm.isCallPaused { return .paused }
         if vm.isSpeaking { return .speaking }
         if vm.thinkingText != nil || vm.isStreaming { return .thinking }
         return .listening
@@ -278,7 +307,12 @@ struct CallView: View {
 
     private func phaseLabel(for p: Phase) -> String {
         switch p {
-        case .listening: return vm.isListening ? "正在聆听… 说『请发送』结束" : "准备中…"
+        case .paused: return "已暂停"
+        case .listening:
+            // 闲聊 auto-sends on pause — teaching the commit phrase there would
+            // be misleading. Other modes still need the explicit phrase.
+            if vm.callMode == .chat { return vm.isListening ? "正在聆听…" : "准备中…" }
+            return vm.isListening ? "正在聆听… 说『请发送』结束" : "准备中…"
         case .thinking: return "思考中…"
         case .speaking: return "正在回答…"
         }
@@ -286,6 +320,7 @@ struct CallView: View {
 
     private var pulseDuration: Double {
         switch phase {
+        case .paused: return 3.0
         case .speaking: return 0.9
         case .thinking: return 1.6
         case .listening: return 2.2
@@ -294,6 +329,7 @@ struct CallView: View {
 
     private var orbColor: Color {
         switch phase {
+        case .paused: return .white.opacity(0.45)
         case .listening: return DS.Ink.mint
         case .thinking: return DS.Ink.amber
         case .speaking: return DS.Canvas.phosphor
@@ -302,6 +338,7 @@ struct CallView: View {
 
     private var orbIcon: String {
         switch phase {
+        case .paused: return "pause.fill"
         case .listening: return "waveform"
         case .thinking: return "ellipsis"
         case .speaking: return "speaker.wave.2.fill"

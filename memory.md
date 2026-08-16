@@ -301,6 +301,48 @@ These differ from intuition — always check the SDK headers under
   Use `git commit -F - <<'EOF' ... EOF` (quoted delimiter) instead of
   `git commit -m "$(...)"`.
 
+## Makro Artifact 分享 — 踩坑记录 (2026-07)
+
+### 最大的教训：iOS 分享传 URL 对象，不是 String
+
+`UIActivityViewController(items: [url])` 里 url 必须是 `URL(string:)` 对象，不能是 String。微信只对 URL 对象生成链接卡片；String 当纯文本 → 无卡片。这是整个"微信空白卡"问题的 **root cause**，排查了很多轮才通过 Safari 对比定位。**当 Makro 分享不工作时，第一时间用 Safari 分享同一条 URL 隔离"链接问题"还是"分享机制问题"。**
+
+### iOS
+- `loadHTMLString(html, baseURL: nil)` → 所有外部资源失效（`<script src>` / `<link>` / 相对路径）。HTML 必须**全自包含**（inline CSS/JS）。
+- `xcodegen generate` 每次删共享 scheme → build 按钮灰。恢复 `Makro.xcscheme`（blueprint ID 稳定，见 makro-build skill）。
+
+### 微信卡片
+- **路径模式**：`/s/<32hex>`（子路径无后缀）微信当短链 → 不 card；根路径 `.html` → card。（最终发现 presigned 也能 card，此条非根因但 A/B 测试有价值。）
+- **og:image 要公开同域**：presigned/跨域 og:image → 微信图片抓取器取不到 → AccessDenied → 整卡拒绝。用静态公开 URL。
+- **og:image 要粗大**：细文字在微信缩略图（~100px）里看不清。用纯色底 + 巨大文字/图形。
+- **og:title 回退 `<title>`**：老 artifact 没 meta.json title → og:title 用页面 `<title>` 标签（不要通用默认）。
+- **微信缓存卡片 per-URL**：改了 OG 不刷新缓存。新 URL（新 hash）或加 `?v=N` 破缓存。
+
+### 图像生成（PIL）
+- **PingFang.ttc 被 macOS SIP 挡**：`ImageFont.truetype("/System/Library/Fonts/PingFang.ttc", size)` 静默失败 → 回退 `load_default()`（10×7px）→ 文字隐形。用 **STHeiti**（`/System/Library/Fonts/STHeiti Medium.ttc`）。
+
+### nginx
+- **location regex `{32}` 冲突**：nginx 把正则里的 `{` 当 block 开始 → 正则截断。用 `+` 或引号 `"regex"`。
+- **新目录权限**：`mkdir` 默认 750（umask）→ nginx worker 进不去 → 403。**chmod 755 目录 + 644 文件**。
+
+### Terraform（provider ~>1.220）
+- `alicloud_oss_bucket.acl` **已弃用** → 用 `alicloud_oss_bucket_acl` 独立资源。
+- `alicloud_cdn_domain` **已弃用** → 用 `alicloud_cdn_domain_new`（sources 是嵌套块不是 string set）。
+- `alicloud_oss_bucket_cname` 证书块字段是 **`certificate`** 不是 `cert_body`。
+- **WebFetch TF 文档给的 schema 是旧的** → 始终用 `terraform providers schema -json` 查真 schema。
+- `alicloud_oss_bucket_cname_token` **不导出 `.cname`** → CNAME 目标是桶 endpoint。
+
+### OSS presigned
+- OSS V1 签名是 over path+expires，**不含 host/scheme** → 安全改写 host + 强制 HTTPS。
+- `SignURL` 默认 HTTP → 手动改 HTTPS。
+- 账号「阻止公共访问」(Block Public Access) → public-read ACL 被拒。用 private 桶 + presigned。
+- 凭证 fallback：`MAKRO_OSS_*` env → `~/.aliyun/config.json`（aliyun CLI profile）。
+
+### 诊断方法论
+- **access log 区分爬虫**：微信用 `WeChatShareExtensionNew` + `facebookexternalhit`（OG 抓取）+ `NetworkingExtension`（iOS 图标/图）+ Tencent IP（43.x）；`curl/8.7.1` 是测试。按 UA + 时间窗口 + 抓图模式区分。
+- **Safari 对比测试**：Makro 不工作 → 先 Safari 分享同 URL → 隔离链接 vs 分享机制。
+- **A/B 路径隔离**：同内容不同路径（`/s/<hash>` vs `/test.html`）→ 区分路径 vs 内容问题。
+
 ## Known Bugs (unresolved)
 
 ### send_to_session Enter loss — two-step send unreliable (PARTIALLY FIXED)

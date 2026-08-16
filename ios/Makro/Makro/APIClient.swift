@@ -203,6 +203,20 @@ final class APIClient: NSObject {
         return data
     }
 
+    /// Shares an artifact: backend uploads it to OSS (if not already shared /
+    /// unchanged) and returns a public presigned URL on share.juliasia.cn.
+    /// POST /api/artifact/share?session=&path= → {url, hash, cached}.
+    func shareArtifact(session: String, path: String) async throws -> ShareResult {
+        let encSession = session.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? session
+        let encPath = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+        let url = URL(string: "\(config.httpBaseURL.absoluteString)/api/artifact/share?session=\(encSession)&path=\(encPath)")!
+        var request = authedRequest(url: url)
+        request.httpMethod = "POST"
+        let (data, response) = try await urlSession.data(for: request)
+        try checkAuth(response)
+        return try JSONDecoder().decode(ShareResult.self, from: data)
+    }
+
     private func checkAuth(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else { return }
         if http.statusCode == 401 {
@@ -212,6 +226,16 @@ final class APIClient: NSObject {
             throw APIClientError.badResponse
         }
     }
+}
+
+// MARK: - Share result
+
+/// Response from POST /api/artifact/share — the public presigned URL for the
+/// uploaded artifact, plus the hash and whether it was served from memoize.
+struct ShareResult: Codable {
+    let url: String
+    let hash: String
+    let cached: Bool
 }
 
 extension APIClient: URLSessionDelegate {

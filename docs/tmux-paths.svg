@@ -1,0 +1,237 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1240" font-family="-apple-system,'PingFang SC','Noto Sans CJK SC',system-ui,sans-serif">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e4e4e7"/></marker>
+    <marker id="ar-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f87171"/></marker>
+    <marker id="ar-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker>
+    <marker id="ar-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#34d399"/></marker>
+    <style>
+      .h { fill:#e4e4e7; font-size:26px; font-weight:700; }
+      .sub { fill:#a1a1aa; font-size:14px; }
+      .lane-t { font-size:16px; font-weight:700; }
+      .box { fill:#141417; stroke:#27272a; stroke-width:1.2; }
+      .lbl { fill:#e4e4e7; font-size:13px; }
+      .lblb { fill:#e4e4e7; font-size:13px; font-weight:600; }
+      .mono { font-family:'SF Mono',Menlo,monospace; font-size:12px; fill:#34d399; }
+      .dim { fill:#71717a; font-size:11px; }
+      .send { stroke-width:2.2; fill:none; }
+      .read { stroke-width:1.8; fill:none; stroke-dasharray:6 5; }
+    </style>
+  </defs>
+
+  <rect width="1500" height="1240" fill="#0c0c0e"/>
+
+  <!-- Title -->
+  <text x="40" y="48" class="h">Makro tmux 路径 + 发送链路全景</text>
+  <text x="40" y="72" class="sub">三条 tmux 触达通道 · 每条的 发送(实线)/读取(虚线) 链路 · 涉及组件 · unify 目标</text>
+
+  <!-- ============ LANE 1: PTY (unstable) ============ -->
+  <rect x="40" y="100" width="1420" height="180" rx="14" fill="rgba(248,113,113,0.06)" stroke="rgba(248,113,113,0.3)"/>
+  <text x="60" y="128" class="lane-t" fill="#f87171">① PTY 通道 — 不稳定(多 client / 强制 resize / 断连掉 tab)</text>
+  <text x="60" y="148" class="dim">每条 WS = 一个新 PTY + 一个 tmux attach client;attach 用 new-session -A -x -y 强制尺寸</text>
+
+  <!-- row1 boxes -->
+  <g>
+    <rect class="box" x="60" y="166" width="180" height="92" rx="10"/>
+    <text x="150" y="190" text-anchor="middle" class="lblb">桌面 xterm.js</text>
+    <text x="150" y="210" text-anchor="middle" class="mono">main.js addTab()</text>
+    <text x="150" y="228" text-anchor="middle" class="dim">term.onData / term.write</text>
+    <text x="150" y="246" text-anchor="middle" class="dim">(前端 Electron)</text>
+  </g>
+  <text x="250" y="212" class="lbl" fill="#f87171">⇆</text>
+  <g>
+    <rect class="box" x="270" y="166" width="190" height="92" rx="10" stroke="#f87171"/>
+    <text x="365" y="190" text-anchor="middle" class="lblb">/ws/xterm/&lt;name&gt;</text>
+    <text x="365" y="210" text-anchor="middle" class="mono">xtermWSHandler</text>
+    <text x="365" y="228" text-anchor="middle" class="dim">server.go:699</text>
+    <text x="365" y="246" text-anchor="middle" class="dim">WS⇄PTY 双向泵</text>
+  </g>
+  <text x="470" y="212" class="lbl" fill="#f87171">→</text>
+  <g>
+    <rect class="box" x="490" y="166" width="240" height="92" rx="10" stroke="#f87171"/>
+    <text x="610" y="190" text-anchor="middle" class="lblb">PTY (ptmx master)</text>
+    <text x="610" y="210" text-anchor="middle" class="mono">startPtySession :36</text>
+    <text x="610" y="228" text-anchor="middle" class="mono">terminal_service.go</text>
+    <text x="610" y="246" text-anchor="middle" class="dim">detachStaleClients / setWinsize</text>
+  </g>
+  <text x="740" y="212" class="lbl" fill="#f87171">→</text>
+  <g>
+    <rect class="box" x="760" y="166" width="260" height="92" rx="10" stroke="#f87171"/>
+    <text x="890" y="190" text-anchor="middle" class="lblb">tmux new-session -A</text>
+    <text x="890" y="210" text-anchor="middle" class="mono">pty.StartWithSize(cmd)</text>
+    <text x="890" y="228" text-anchor="middle" class="dim">= 一个 tmux attach client 进程</text>
+    <text x="890" y="246" text-anchor="middle" class="dim">跑在 PTY slave 里</text>
+  </g>
+  <!-- arrow down to tmux server (lane1) -->
+  <path class="send" stroke="#f87171" d="M890,258 L890,820" marker-end="url(#ar-r)"/>
+  <text x="900" y="470" class="dim" fill="#f87171">字节进 PTY → tmux client → server → pane</text>
+  <text x="900" y="486" class="dim" fill="#f87171">pane 输出 → 反向回 xterm</text>
+
+  <!-- ============ LANE 2: cmd/gui inline ============ -->
+  <rect x="40" y="300" width="1420" height="180" rx="14" fill="rgba(251,191,36,0.06)" stroke="rgba(251,191,36,0.3)"/>
+  <text x="60" y="328" class="lane-t" fill="#fbbf24">② cmd/gui inline 通道 — 稳定但与 ③ 重复(自己拼 tmux 字符串,不走 internal/tmux)</text>
+  <text x="60" y="348" class="dim">getTmuxBin() + tmuxArgs() + exec.Command —— capture-pane / list-sessions / new-session / send-keys 都是 inline 字符串</text>
+
+  <g>
+    <rect class="box" x="60" y="366" width="180" height="92" rx="10"/>
+    <text x="150" y="390" text-anchor="middle" class="lblb">iOS TerminalViewModel</text>
+    <text x="150" y="408" text-anchor="middle" class="lblb">+ 桌面 snapshot</text>
+    <text x="150" y="426" text-anchor="middle" class="mono">refresh() / connect()</text>
+    <text x="150" y="444" text-anchor="middle" class="dim">(读 显示)</text>
+  </g>
+  <text x="250" y="412" class="lbl" fill="#fbbf24">⇆</text>
+  <g>
+    <rect class="box" x="270" y="366" width="200" height="92" rx="10" stroke="#fbbf24"/>
+    <text x="370" y="390" text-anchor="middle" class="lblb">/ws/snapshot/&lt;name&gt;</text>
+    <text x="370" y="408" text-anchor="middle" class="lblb">/api/sessions/&lt;n&gt;/capture</text>
+    <text x="370" y="426" text-anchor="middle" class="mono">wsSnapshotHandler :776</text>
+    <text x="370" y="444" text-anchor="middle" class="mono">sessionCaptureHandler :413</text>
+  </g>
+  <text x="480" y="412" class="lbl" fill="#fbbf24">→</text>
+  <g>
+    <rect class="box" x="500" y="366" width="240" height="92" rx="10" stroke="#fbbf24"/>
+    <text x="620" y="390" text-anchor="middle" class="lblb">TmuxService (inline)</text>
+    <text x="620" y="408" text-anchor="middle" class="mono">tmux_service.go</text>
+    <text x="620" y="424" text-anchor="middle" class="mono">CapturePane / ListSessions</text>
+    <text x="620" y="442" text-anchor="middle" class="dim">exec.Command(getTmuxBin,tmuxArgs)</text>
+  </g>
+  <text x="750" y="412" class="lbl" fill="#fbbf24">→</text>
+  <g>
+    <rect class="box" x="770" y="366" width="250" height="92" rx="10" stroke="#fbbf24"/>
+    <text x="895" y="390" text-anchor="middle" class="lblb">tmux capture-pane -p</text>
+    <text x="895" y="408" text-anchor="middle" class="lblb">tmux list-sessions / new-session</text>
+    <text x="895" y="426" text-anchor="middle" class="dim">+ snapshot.go 恢复(Recover)</text>
+    <text x="895" y="444" text-anchor="middle" class="dim">+ sendToTmuxSession 兜底(legacy)</text>
+  </g>
+  <path class="read" stroke="#fbbf24" d="M895,458 L895,820" marker-end="url(#ar-a)"/>
+  <text x="905" y="600" class="dim" fill="#fbbf24">capture-pane 读 pane → WS/HTTP 回客户端</text>
+
+  <!-- ============ LANE 3: internal/tmux tools (canonical) ============ -->
+  <rect x="40" y="500" width="1420" height="180" rx="14" fill="rgba(52,211,153,0.06)" stroke="rgba(52,211,153,0.3)"/>
+  <text x="60" y="528" class="lane-t" fill="#34d399">③ internal/tmux + tools 通道 — 规范、稳定、已统一发送(目标层)</text>
+  <text x="60" y="548" class="dim">所有发送已收敛到 SendConfirmed;iOS/kanban/@mention/role-routing/voice 都走这条</text>
+
+  <g>
+    <rect class="box" x="60" y="566" width="180" height="92" rx="10"/>
+    <text x="150" y="590" text-anchor="middle" class="lblb">iOS 输入</text>
+    <text x="150" y="608" text-anchor="middle" class="lblb">Orchestrator LLM</text>
+    <text x="150" y="626" text-anchor="middle" class="lblb">kanban / @mention</text>
+    <text x="150" y="644" text-anchor="middle" class="dim">(发送方)</text>
+  </g>
+  <text x="250" y="612" class="lbl" fill="#34d399">→</text>
+  <g>
+    <rect class="box" x="270" y="566" width="220" height="92" rx="10" stroke="#34d399"/>
+    <text x="380" y="590" text-anchor="middle" class="lblb">/api/sessions/&lt;n&gt;/send</text>
+    <text x="380" y="608" text-anchor="middle" class="lblb">send_to_session 工具</text>
+    <text x="380" y="626" text-anchor="middle" class="mono">sessionSendHandler :438</text>
+    <text x="380" y="644" text-anchor="middle" class="mono">→ chatSvc.SendToSession</text>
+  </g>
+  <text x="500" y="612" class="lbl" fill="#34d399">→</text>
+  <g>
+    <rect class="box" x="520" y="566" width="240" height="92" rx="10" stroke="#34d399"/>
+    <text x="640" y="590" text-anchor="middle" class="lblb">tools.SendConfirmed</text>
+    <text x="640" y="608" text-anchor="middle" class="mono">send_to_session.go:128</text>
+    <text x="640" y="624" text-anchor="middle" class="mono">→ sendText (send.go)</text>
+    <text x="640" y="642" text-anchor="middle" class="dim">+ DirectSend(manual @session)</text>
+  </g>
+  <text x="770" y="612" class="lbl" fill="#34d399">→</text>
+  <g>
+    <rect class="box" x="790" y="566" width="230" height="92" rx="10" stroke="#34d399"/>
+    <text x="905" y="590" text-anchor="middle" class="lblb">internal/tmux.Client</text>
+    <text x="905" y="608" text-anchor="middle" class="mono">tc.Exec(</text>
+    <text x="905" y="624" text-anchor="middle" class="mono">SendKeysLiteralCmd;SendEnterCmd)</text>
+    <text x="905" y="642" text-anchor="middle" class="dim">+ read_session_output(capture-pane)</text>
+  </g>
+  <path class="send" stroke="#34d399" d="M905,658 L905,820" marker-end="url(#ar-g)"/>
+  <text x="915" y="730" class="dim" fill="#34d399">send-keys 原子发送 + read_session_output 读</text>
+
+  <!-- ============ tmux server (shared sink) ============ -->
+  <rect x="120" y="820" width="1260" height="90" rx="14" fill="#141417" stroke="#60a5fa" stroke-width="1.6"/>
+  <text x="750" y="852" text-anchor="middle" class="lblb" fill="#60a5fa">tmux server (default socket)</text>
+  <text x="750" y="876" text-anchor="middle" class="lbl">sessions → panes → coding agents(claude / codex / copilot)</text>
+  <text x="750" y="896" text-anchor="middle" class="dim">三条通道最终都汇到这里;区别只是"用什么方式到这一层"</text>
+
+  <!-- ============ Components legend (right side) ============ -->
+  <rect x="1040" y="100" width="420" height="580" rx="12" fill="rgba(255,255,255,0.03)" stroke="#27272a"/>
+  <text x="1060" y="128" class="lblb">涉及的组件(file / package)</text>
+
+  <text x="1060" y="158" class="lane-t" fill="#f87171">① PTY</text>
+  <text x="1060" y="178" class="mono">cmd/gui/server.go: xtermWSHandler, startPtySession, ptySession</text>
+  <text x="1060" y="196" class="mono">cmd/gui/terminal_service.go: startPtySession,</text>
+  <text x="1060" y="214" class="mono">  detachStaleClients, setWinsize, ensureTerm</text>
+  <text x="1060" y="232" class="mono">frontend/src/main.js: addTab, term.onData, ws.onclose</text>
+  <text x="1060" y="250" class="dim">外部依赖:creack/pty(ptmx)</text>
+
+  <text x="1060" y="284" class="lane-t" fill="#fbbf24">② cmd/gui inline</text>
+  <text x="1060" y="304" class="mono">cmd/gui/tmux_service.go: getTmuxBin, tmuxArgs,</text>
+  <text x="1060" y="322" class="mono">  TmuxService{CapturePane,ListSessions,Create,Delete}</text>
+  <text x="1060" y="340" class="mono">cmd/gui/server.go: wsSnapshotHandler,</text>
+  <text x="1060" y="358" class="mono">  sessionCaptureHandler, sendToTmuxSession(legacy)</text>
+  <text x="1060" y="376" class="mono">cmd/gui/snapshot.go: TakeSnapshot, RecoverFromSnapshot</text>
+  <text x="1060" y="394" class="mono">cmd/gui/artifact_service.go: sessionCwd (display-message)</text>
+
+  <text x="1060" y="428" class="lane-t" fill="#34d399">③ internal/tmux + tools</text>
+  <text x="1060" y="448" class="mono">internal/tmux/: Client.Exec, commands.go</text>
+  <text x="1060" y="466" class="mono">  (SendKeys/Literal/Enter/CapturePane/HasSession…)</text>
+  <text x="1060" y="484" class="mono">internal/agent/tools/: send.go(sendText),</text>
+  <text x="1060" y="502" class="mono">  send_to_session.go(SendConfirmed, DirectSend),</text>
+  <text x="1060" y="520" class="mono">  read_session_output.go, create/list/switch_session,</text>
+  <text x="1060" y="538" class="mono">  respond_confirmation, wait_until_idle …</text>
+  <text x="1060" y="556" class="mono">cmd/gui/chat_service.go: SendToSession(→SendConfirmed)</text>
+  <text x="1060" y="574" class="mono">internal/agent/orchestrator.go(工具调用方)</text>
+
+  <text x="1060" y="612" class="lblb">发送链路汇总(谁→哪条)</text>
+  <text x="1060" y="632" class="dim" fill="#f87171">桌面逐字符: ① PTY (ptmx)</text>
+  <text x="1060" y="650" class="dim" fill="#fbbf24">legacy 兜底: ② sendToTmuxSession(tc/notifier 缺失时)</text>
+  <text x="1060" y="668" class="dim" fill="#34d399">主路径: ③ SendConfirmed(iOS/kanban/@mention/role/voice)</text>
+
+  <!-- ============ Legend (arrows) ============ -->
+  <g transform="translate(60,930)">
+    <text x="0" y="0" class="lblb">箭头图例</text>
+    <line x1="0" y1="22" x2="60" y2="22" class="send" stroke="#e4e4e7"/><text x="70" y="26" class="lbl">实线 = 发送(send / 写入 pane)</text>
+    <line x1="280" y1="22" x2="340" y2="22" class="read" stroke="#e4e4e7"/><text x="350" y="26" class="lbl">虚线 = 读取(capture-pane / 显示)</text>
+    <rect x="610" y="14" width="14" height="14" rx="3" fill="rgba(248,113,113,0.4)"/><text x="632" y="26" class="lbl">① PTY 不稳定</text>
+    <rect x="760" y="14" width="14" height="14" rx="3" fill="rgba(251,191,36,0.4)"/><text x="782" y="26" class="lbl">② inline(稳,但重复)</text>
+    <rect x="950" y="14" width="14" height="14" rx="3" fill="rgba(52,211,153,0.4)"/><text x="972" y="26" class="lbl">③ internal/tmux(规范,目标)</text>
+  </g>
+
+  <!-- ============ Unify target ============ -->
+  <rect x="40" y="980" width="1420" height="230" rx="14" fill="rgba(96,165,250,0.05)" stroke="rgba(96,165,250,0.35)"/>
+  <text x="60" y="1010" class="lane-t" fill="#60a5fa">unify 目标:三条 → 一条(全走 ③)</text>
+
+  <g>
+    <rect class="box" x="60" y="1030" width="280" height="150" rx="10" stroke="#f87171"/>
+    <text x="200" y="1056" text-anchor="middle" class="lblb" fill="#f87171">删 ① PTY 整条</text>
+    <text x="200" y="1078" text-anchor="middle" class="lbl">xtermWSHandler / startPtySession</text>
+    <text x="200" y="1096" text-anchor="middle" class="lbl">ptySession / detachStaleClients</text>
+    <text x="200" y="1114" text-anchor="middle" class="lbl">setWinsize / frontend addTab 的 WS</text>
+    <text x="200" y="1138" text-anchor="middle" class="dim">→ 桌面改连 /ws/snapshot + POST /send</text>
+    <text x="200" y="1156" text-anchor="middle" class="dim">→ 保留 xterm.js 仅做渲染(喂 capture-pane 帧)</text>
+  </g>
+  <g>
+    <rect class="box" x="380" y="1030" width="320" height="150" rx="10" stroke="#fbbf24"/>
+    <text x="540" y="1056" text-anchor="middle" class="lblb" fill="#fbbf24">折叠 ② → ③</text>
+    <text x="540" y="1078" text-anchor="middle" class="lbl">wsSnapshotHandler 的 inline capture-pane</text>
+    <text x="540" y="1096" text-anchor="middle" class="lbl">→ 改用 internal/tmux.CapturePaneCmd</text>
+    <text x="540" y="1114" text-anchor="middle" class="lbl">snapshot.go 的 list/new-session inline</text>
+    <text x="540" y="1132" text-anchor="middle" class="lbl">→ 走 internal/tmux</text>
+    <text x="540" y="1156" text-anchor="middle" class="dim">删 sendToTmuxSession(legacy 兜底)</text>
+  </g>
+  <g>
+    <rect class="box" x="740" y="1030" width="320" height="150" rx="10" stroke="#34d399"/>
+    <text x="900" y="1056" text-anchor="middle" class="lblb" fill="#34d399">唯一发送:SendConfirmed</text>
+    <text x="900" y="1078" text-anchor="middle" class="lbl">所有发送(iOS/桌面/kanban/@/role/voice)</text>
+    <text x="900" y="1096" text-anchor="middle" class="lbl">→ tools.SendConfirmed → sendText</text>
+    <text x="900" y="1114" text-anchor="middle" class="lbl">→ tc.Exec(SendKeysLiteralCmd;Enter)</text>
+    <text x="900" y="1138" text-anchor="middle" class="dim">+ DirectSend 保留(manual @session)</text>
+    <text x="900" y="1156" text-anchor="middle" class="dim">+ read_session_output 保留(orchestrator)</text>
+  </g>
+  <g>
+    <rect class="box" x="1100" y="1030" width="340" height="150" rx="10" stroke="#60a5fa"/>
+    <text x="1270" y="1056" text-anchor="middle" class="lblb" fill="#60a5fa">唯一 tmux 层:internal/tmux</text>
+    <text x="1270" y="1078" text-anchor="middle" class="lbl">Client.Exec + commands.go</text>
+    <text x="1270" y="1096" text-anchor="middle" class="lbl">全仓库只此一处发 tmux 命令</text>
+    <text x="1270" y="1120" text-anchor="middle" class="dim">桌面显示:/ws/snapshot(复用 iOS)</text>
+    <text x="1270" y="1138" text-anchor="middle" class="dim">桌面输入:/api/sessions/&lt;n&gt;/send(复用 iOS)</text>
+    <text x="1270" y="1156" text-anchor="middle" class="dim">两客户端同协议、同 bug 修复</text>
+  </g>
+</svg>

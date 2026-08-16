@@ -202,6 +202,11 @@ func serve(addr string, tlsCert, tlsKey, password string) error {
 	mux.HandleFunc("/api/artifacts", artifactsListHandler(artifactSvc))
 	mux.HandleFunc("/api/artifact", artifactServeHandler(artifactSvc))
 
+	// Artifact sharing: upload to Aliyun OSS + return presigned share URL.
+	// Reads MAKRO_OSS_* env; if unset, the endpoint reports sharing-disabled.
+	shareSvc := NewShareService(artifactSvc)
+	mux.HandleFunc("/api/artifact/share", artifactShareHandler(shareSvc))
+
 	// Task API
 	taskStore, err := NewTaskStore()
 	if err != nil {
