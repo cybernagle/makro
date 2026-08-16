@@ -150,19 +150,20 @@ func StartSnapshotLoop(ctx context.Context, interval time.Duration) {
 }
 
 // isClaudeCommand returns true if the pane command looks like a running claude
-// instance. Matches "claude", "node /path/to/claude", etc.
+// instance. Matches "claude", "claude.exe" (some installs report the binary
+// with an extension), "node /path/to/claude", etc.
 func isClaudeCommand(cmd string) bool {
 	c := strings.ToLower(cmd)
 	if c == "claude" {
 		return true
 	}
-	// Some installs run claude via node — check the binary basename.
-	if strings.HasSuffix(c, "/claude") || strings.Contains(c, "claude") {
-		// Avoid matching "claude-code" wrappers falsely; require the token.
-		for _, token := range strings.Fields(c) {
-			if strings.HasSuffix(filepath.Base(token), "claude") {
-				return true
-			}
+	// Some installs run claude via node — check the binary basename, with any
+	// extension stripped so "claude.exe" matches too.
+	for _, token := range strings.Fields(c) {
+		base := filepath.Base(token)
+		base = strings.TrimSuffix(base, filepath.Ext(base))
+		if base == "claude" {
+			return true
 		}
 	}
 	return false
@@ -296,37 +297,76 @@ func encodeCwdForClaude(cwd string) string {
 	return r.Replace(cwd)
 }
 
-// RecoverFromSnapshot is called on server startup. If tmux has no socket
-// (crashed) and a snapshot exists, recreates each session and resumes claude
-// when possible. Returns the number of sessions recovered.
+// RecoverFromSnapshot is called on server startup. It reconciles live tmux
+// sessions against the snapshot: after a macOS reboot tmux is gone entirely,
+// and after a Makro restart the viewer's attach-or-create path may already
+// have recreated sessions as BARE SHELLS — either way, every snapshot session
+// that used to run a coding agent must get its agent back (resume the recorded
+// claude session when we captured one, else launch a fresh agent in the
+// recorded working dir). Returns the number of sessions that needed repair.
 func RecoverFromSnapshot() int {
-	sock := tmuxSocketPath()
-	if _, err := os.Stat(sock); err == nil {
-		// Socket exists — tmux is running. Check if sessions are alive.
-		out, _ := exec.Command(getTmuxBin(), tmuxArgs("list-sessions", "-F", "#{session_name}")...).CombinedOutput()
-		if !strings.Contains(string(out), "no server running") && !strings.Contains(string(out), "No such file") && strings.TrimSpace(string(out)) != "" {
-			return 0
-		}
-	}
-
 	snap, err := LoadSnapshot()
 	if err != nil || snap == nil || len(snap.Sessions) == 0 {
 		return 0
 	}
 
+	live := liveSessionSet()
 	recovered := 0
 	for _, ss := range snap.Sessions {
-		if recoverSession(ss) {
+		if !snapshotHadAgent(ss) {
+			continue // plain-shell sessions recover as plain shells — nothing to do
+		}
+		if live[ss.Name] && sessionPaneHasAgent(ss.Name) {
+			continue // healthy: session exists AND its agent is running
+		}
+		if !live[ss.Name] {
+			if recoverSession(ss) {
+				recovered++
+			}
+			continue
+		}
+		// Session exists but its agent is gone (bare shell after restart):
+		// relaunch the agent inside the existing session.
+		if launchAgentInSession(ss) {
 			recovered++
 		}
 	}
-	log.Printf("[snapshot] recovered %d/%d sessions from snapshot at %s", recovered, len(snap.Sessions), snap.SnapshotAt.Format(time.RFC3339))
+	if recovered > 0 {
+		log.Printf("[snapshot] recovered agents in %d session(s) from snapshot at %s", recovered, snap.SnapshotAt.Format(time.RFC3339))
+	}
 	return recovered
 }
 
-// recoverSession recreates a single tmux session from its snapshot.
-// Returns true if the session was created (claude resume failures still count
-// as created — the session shell is up, user can resume manually).
+// snapshotHadAgent reports whether the snapshotted session was running a
+// coding agent (we only know how to restore claude today).
+func snapshotHadAgent(ss SessionSnapshot) bool {
+	return isClaudeCommand(ss.Command) || ss.ClaudeSession != ""
+}
+
+// agentLaunchCommand returns the shell line that (re)starts the agent for a
+// snapshotted session, or "" when the snapshot says it ran no agent.
+// Preference: resume the exact recorded claude session (same transcript);
+// fall back to a fresh agent in the recorded working dir.
+func agentLaunchCommand(ss SessionSnapshot) string {
+	if !snapshotHadAgent(ss) {
+		return ""
+	}
+	if ss.ClaudeSession != "" && ss.ClaudeCwd != "" {
+		return fmt.Sprintf("cd %q && claude --resume %s", ss.ClaudeCwd, ss.ClaudeSession)
+	}
+	if ss.ClaudeCwd != "" {
+		return fmt.Sprintf("cd %q && claude", ss.ClaudeCwd)
+	}
+	if ss.WorkDir != "" {
+		return fmt.Sprintf("cd %q && claude", ss.WorkDir)
+	}
+	return "claude"
+}
+
+// recoverSession recreates a single tmux session from its snapshot, then
+// relaunches its agent if it had one. Returns true if the session was created
+// (agent-launch failures still count as created — the session shell is up,
+// user can start the agent manually).
 func recoverSession(ss SessionSnapshot) bool {
 	args := tmuxArgs("new-session", "-d", "-s", ss.Name)
 	if ss.WorkDir != "" {
@@ -338,12 +378,87 @@ func recoverSession(ss SessionSnapshot) bool {
 		log.Printf("[snapshot] recreate session %q failed: %v", ss.Name, err)
 		return false
 	}
+	return launchAgentInSession(ss)
+}
 
-	if ss.ClaudeSession != "" && ss.ClaudeCwd != "" {
-		resumeCmd := fmt.Sprintf("cd %q && claude --resume %s", ss.ClaudeCwd, ss.ClaudeSession)
-		exec.Command(getTmuxBin(), tmuxArgs("send-keys", "-t", ss.Name, resumeCmd)...).Run()
-		exec.Command(getTmuxBin(), tmuxArgs("send-keys", "-t", ss.Name, "Enter")...).Run()
-		log.Printf("[snapshot] session %q: resumed claude %s", ss.Name, ss.ClaudeSession)
+// launchAgentInSession types the agent start line into an EXISTING session's
+// pane. The freshly spawned shell needs a moment before it reads input, so we
+// wait for it to surface as the pane's foreground process first — typing into
+// a pane whose zsh is still mid-startup loses or garbles the keystrokes.
+func launchAgentInSession(ss SessionSnapshot) bool {
+	cmd := agentLaunchCommand(ss)
+	if cmd == "" {
+		return false
 	}
+	waitForPaneShell(ss.Name)
+	exec.Command(getTmuxBin(), tmuxArgs("send-keys", "-t", ss.Name, "-l", cmd)...).Run()
+	exec.Command(getTmuxBin(), tmuxArgs("send-keys", "-t", ss.Name, "Enter")...).Run()
+	log.Printf("[snapshot] session %q: launched agent (%s)", ss.Name, agentMode(ss))
 	return true
+}
+
+// agentMode describes the launch mode for logging.
+func agentMode(ss SessionSnapshot) string {
+	if ss.ClaudeSession != "" {
+		return "claude --resume " + ss.ClaudeSession
+	}
+	return "fresh claude"
+}
+
+// waitForPaneShell polls until the session's pane reports a known shell as its
+// foreground process (the shell finished starting and is reading input), up to
+// ~5s. Best-effort: on timeout we send anyway — send-keys input is buffered
+// by the pty and read once the shell is ready.
+func waitForPaneShell(name string) {
+	for i := 0; i < 50; i++ {
+		out, err := exec.Command(getTmuxBin(), tmuxArgs("display-message", "-p", "-t", name, "#{pane_current_command}")...).Output()
+		if err == nil {
+			if isShellProcessName(strings.TrimSpace(string(out))) {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// shellProcessNames mirrors the agent tools' shell list: a pane whose
+// foreground is one of these holds no coding agent.
+var shellProcessNames = map[string]bool{
+	"bash": true, "zsh": true, "sh": true, "fish": true, "dash": true,
+}
+
+func isShellProcessName(cmd string) bool {
+	return shellProcessNames[filepath.Base(strings.TrimSpace(cmd))]
+}
+
+// sessionPaneHasAgent reports whether the live session's pane foreground looks
+// like a coding agent (anything that isn't a shell — claude, node wrappers,
+// copilot, codex). Empty/unknown counts as agent-present to stay
+// conservative: we never type into a pane that might be doing something.
+func sessionPaneHasAgent(name string) bool {
+	out, err := exec.Command(getTmuxBin(), tmuxArgs("display-message", "-p", "-t", name, "#{pane_current_command}")...).Output()
+	if err != nil {
+		return true // can't inspect — don't touch
+	}
+	cmd := strings.TrimSpace(string(out))
+	if cmd == "" {
+		return true // pane not ready — don't touch
+	}
+	return !isShellProcessName(cmd)
+}
+
+// liveSessionSet returns the set of existing tmux session names (empty map if
+// no server is running).
+func liveSessionSet() map[string]bool {
+	out, err := exec.Command(getTmuxBin(), tmuxArgs("list-sessions", "-F", "#{session_name}")...).CombinedOutput()
+	live := map[string]bool{}
+	if err != nil {
+		return live
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			live[line] = true
+		}
+	}
+	return live
 }

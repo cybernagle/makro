@@ -350,20 +350,24 @@ func TestSendToSessionCopilotSkipsConfirm(t *testing.T) {
 	assert.Contains(t, res, "Sent to")
 }
 
-// TestSendToSessionInvisibleAgentFallback: checkAgentAlive false-negatives when
-// the agent PID is invisible to ps (shell foreground), but the pane shows the
-// agent at its input prompt ⇒ the pane-prompt fallback lets the send through.
-func TestSendToSessionInvisibleAgentFallback(t *testing.T) {
+// TestSendToSessionShellForegroundRefused: a zsh foreground with claude-looking
+// scrollback (welcome banner remnant + "❯") must be REFUSED. The pane-prompt
+// fallback used to let this through — but a shell foreground means no agent
+// holds the pane (post-reboot recovery leaves exactly this state), and
+// starship prompts render the same "❯" the agent input uses, so task text
+// landed in the shell. The invisible-PID rescue now requires a non-shell
+// foreground (node/nvm wrapper) — see TestValidateSendTargetPanePromptFallbackStillRescues.
+func TestSendToSessionShellForegroundRefused(t *testing.T) {
 	mc := newMockTmuxClient()
-	mc.results[tmux.PaneCurrentCommandCmd("inv")] = "zsh"                                  // process scan won't find claude
-	mc.results[tmux.CapturePaneRangeCmd("inv", 5, 0)] = "✻ Welcome to Claude Code!\n\n❯ "  // paneEndsAtAgentPrompt
-	mc.results[tmux.CapturePaneRangeCmd("inv", 30, 0)] = "✻ Welcome to Claude Code!\n\n❯ " // agentReadyToSend
+	mc.results[tmux.PaneCurrentCommandCmd("inv")] = "zsh"                                  // shell foreground: no agent
+	mc.results[tmux.CapturePaneRangeCmd("inv", 5, 0)] = "✻ Welcome to Claude Code!\n\n❯ "  // looks like the agent…
+	mc.results[tmux.CapturePaneRangeCmd("inv", 30, 0)] = "✻ Welcome to Claude Code!\n\n❯ " // …but the foreground decides
 	tool := NewSendToSessionTool(mc, nil)
-	res, err := tool.Execute(context.Background(), map[string]any{
+	_, err := tool.Execute(context.Background(), map[string]any{
 		"name": "inv", "message": "do the thing",
 	})
-	require.NoError(t, err)
-	assert.Contains(t, res, "Sent to")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bare shell")
 }
 
 // TestSendTextLongIsAtomic: the long (bracketed-paste) path must also type its

@@ -20,11 +20,20 @@ import (
 // The pane-prompt fallback (paneEndsAtAgentPrompt) rescues the case where
 // checkAgentAlive's process-tree scan false-negatives because the agent PID is
 // invisible to ps (macOS SIP, nvm/asdf/launchd wrappers): if the pane shows the
-// agent at its input prompt, trust the pane over the process scan.
+// agent at its input prompt, trust the pane over the process scan. It must NOT
+// rescue a bare shell, though: a freshly recovered post-reboot tmux session
+// runs plain zsh, and starship-style prompts render the same "❯" the agent
+// input uses — without the shell check below, task text gets typed into the
+// shell and echoed/executed as garbage.
 func validateSendTarget(tc TmuxClient, session string) (string, error) {
 	status := checkAgentAlive(tc, session)
-	if !status.Alive && !paneEndsAtAgentPrompt(tc, session) {
-		return "", fmt.Errorf("cannot send to %q: no coding agent (claude/copilot/codex) is running (%s); start the agent in that pane first", session, status.Reason)
+	if !status.Alive {
+		if paneForegroundIsShell(tc, session) {
+			return "", fmt.Errorf("cannot send to %q: the pane is a bare shell with no coding agent (claude/copilot/codex) running — likely lost across a restart; start the agent in that pane first", session)
+		}
+		if !paneEndsAtAgentPrompt(tc, session) {
+			return "", fmt.Errorf("cannot send to %q: no coding agent (claude/copilot/codex) is running (%s); start the agent in that pane first", session, status.Reason)
+		}
 	}
 	if ready, reason := agentReadyToSend(tc, session); !ready {
 		return status.Agent, fmt.Errorf("cannot send to %q: %s", session, reason)

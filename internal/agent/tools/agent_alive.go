@@ -54,6 +54,19 @@ func checkAgentAlive(tc TmuxClient, sessionName string) AgentStatus {
 	return checkProcessTree(tc, sessionName)
 }
 
+// paneForegroundIsShell reports whether the pane's foreground process is a
+// known shell — i.e. no coding agent holds the pane. When the foreground IS a
+// shell, the agent has exited (or never started): a bare zsh at its prompt
+// must not be mistaken for an agent at its input box, because starship-style
+// shell prompts render the same "❯" Claude Code uses.
+func paneForegroundIsShell(tc TmuxClient, sessionName string) bool {
+	cmd, err := tc.Exec(tmux.PaneCurrentCommandCmd(sessionName))
+	if err != nil {
+		return false
+	}
+	return knownShells[filepath.Base(strings.TrimSpace(cmd))]
+}
+
 // checkProcessTree walks the process tree under the pane's PID.
 func checkProcessTree(tc TmuxClient, sessionName string) AgentStatus {
 	pidStr, err := tc.Exec(tmux.PanePIDCmd(sessionName))
