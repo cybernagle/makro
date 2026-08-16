@@ -21,6 +21,10 @@ final class ChatViewModel: NSObject, ObservableObject {
     // Call mode (phone-call style): continuous listening + auto TTS loop.
     @Published var isInCall = false
     @Published var isMuted = false
+    /// User-paused (hold): mic + TTS fully stopped, but the call context
+    /// (pendingPlan, callPhase, server callActive, Now Playing card) survives,
+    /// so resume continues the same conversation instead of a fresh start.
+    @Published var isCallPaused = false
 
     // Voice-call phase (discuss → proposed → dispatched). pendingPlan is
     // non-nil while a plan is awaiting the user's confirmation; CallView shows
@@ -124,13 +128,20 @@ final class ChatViewModel: NSObject, ObservableObject {
             self.messages.append(ChatMessage(role: .system, text: msg))
             self.expectSpokenReply = false
             self.isInCall = false
+            self.isCallPaused = false
             self.stopListening()
             self.stopSpeaking()
         }
         // Commit-mode nudge when the user has spoken a long time without a
         // commit phrase. Surfaces on the lock-screen Now Playing card.
-        speech.onMaxDurationHint = {
-            NowPlayingManager.shared.updatePhase("说话有点久 — 说『请发送』结束")
+        speech.onMaxDurationHint = { [weak self] in
+            let phase: String
+            if self?.callMode == .chat {
+                phase = "说话有点久 — 停顿一下即自动发送"
+            } else {
+                phase = "说话有点久 — 说『请发送』结束"
+            }
+            NowPlayingManager.shared.updatePhase(phase)
         }
     }
 
@@ -273,6 +284,9 @@ final class ChatViewModel: NSObject, ObservableObject {
         callPhase = "discuss"
         if isInCall {
             Task { await api.setCallActive(true, mode: mode) }
+            // Hot-switch the recognizer's turn-delivery policy without a
+            // restart: 闲聊 = silence auto-sends, 查询/落实 = commit phrase only.
+            speech.setSilenceAutoCommit(mode == .chat)
         }
     }
 
@@ -328,9 +342,14 @@ final class ChatViewModel: NSObject, ObservableObject {
         Task { await api.setCallActive(true, mode: callMode) }
         // Arm spoken replies for the whole call; the done→TTS path checks isInCall.
         stopSpeaking()
+        // Defensive: a stale suspendAutoRestart from an earlier call (endCall
+        // normally clears it) must not mute the fresh recognizer.
+        speech.suspendAutoRestart = false
         // Commit mode (VAD-gated push stream) is gated by the VAD setting; when
-        // off, call mode falls back to the legacy always-on recognizer.
-        speech.startListening(continuous: true, commit: config.vadEnabled)
+        // off, call mode falls back to the legacy always-on recognizer. 闲聊
+        // additionally arms the trailing-silence fallback so a plain pause also
+        // sends — no commit phrase needed (saying one still commits instantly).
+        speech.startListening(continuous: true, commit: config.vadEnabled, silenceAuto: callMode == .chat)
         // Wire lock-screen controls.
         NowPlayingManager.shared.onHangUp = { [weak self] in
             Task { @MainActor in self?.endCall() }
@@ -345,6 +364,7 @@ final class ChatViewModel: NSObject, ObservableObject {
     func endCall() {
         isInCall = false
         isMuted = false
+        isCallPaused = false
         expectSpokenReply = false
         pendingPlan = nil
         callPhase = "discuss"
@@ -354,13 +374,48 @@ final class ChatViewModel: NSObject, ObservableObject {
         // Siri "hang up") isn't immediately undone when the audio interruption
         // from Siri itself ends.
         speech.suppressAudioResume()
+        speech.suspendAutoRestart = false
         stopListening()
         stopSpeaking()
     }
 
+    /// Pause (hold) the call without tearing down its context — for when a
+    /// human conversation interrupts. Fully stops the mic + TTS (so nothing is
+    /// transcribed or billed while paused) but keeps pendingPlan, callPhase,
+    /// the server-side callActive state, and the Now Playing card, unlike
+    /// endCall(). Reply messages still arrive and land in the transcript; they
+    /// are just not spoken until resume.
+    func pauseCall() {
+        guard isInCall, !isCallPaused else { return }
+        isCallPaused = true
+        // Interruptions / route changes while paused must not auto-restart
+        // the recognizer (that would resurrect the mic against the user's
+        // intent). Cleared again in resumeCall().
+        speech.suspendAutoRestart = true
+        stopListening()
+        stopSpeaking()
+        NowPlayingManager.shared.updatePhase("已暂停")
+    }
+
+    /// Resume a paused call: rebuild the recognizer (~1-2s) and continue the
+    /// same conversation — context was never dropped, so nothing to restore.
+    func resumeCall() {
+        guard isInCall, isCallPaused else { return }
+        isCallPaused = false
+        speech.suspendAutoRestart = false
+        stopSpeaking()
+        speech.startListening(continuous: true, commit: config.vadEnabled, silenceAuto: callMode == .chat)
+        // startListening clears the suspended flag; re-apply mute or the mic
+        // would go live while the UI / lock screen still say 已静音.
+        if isMuted { speech.suspendListening() }
+        NowPlayingManager.shared.updatePhase(isMuted ? "已静音" : "正在聆听…")
+    }
+
     /// Mute/unmute the mic during a call (mapped to the lock-screen play/pause button).
+    /// Ignored while paused — the mic is already fully off, and flipping isMuted
+    /// would overwrite the "已暂停" lock-screen card state.
     func toggleMute() {
-        guard isInCall else { return }
+        guard isInCall, !isCallPaused else { return }
         isMuted.toggle()
         if isMuted {
             speech.suspendListening()
@@ -422,8 +477,10 @@ final class ChatViewModel: NSObject, ObservableObject {
             markTurnEnd()
             // Read aloud when this turn was triggered by voice, or whenever we
             // are in an active call (every reply is spoken in call mode).
-            // Typed messages outside a call never set either flag → silent.
-            if (expectSpokenReply || isInCall),
+            // Typed messages outside a call never set either flag → silent,
+            // and a paused call stays silent too (the reply still lands in the
+            // transcript; it just isn't spoken until the user resumes).
+            if (expectSpokenReply || isInCall), !isCallPaused,
                let last = messages.last,
                last.role == .assistant {
                 // Strip the ```plan block (if any) so TTS reads only the

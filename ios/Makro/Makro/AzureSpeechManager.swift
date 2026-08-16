@@ -274,6 +274,11 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     private var pushStream: SPXPushAudioInputStream?
     private var pushedByteCount: Int64 = 0
     private var commitMode = false
+    /// Silence auto-commit (闲聊 mode): the VAD push stream and commit-phrase
+    /// detector stay armed (a spoken phrase still commits instantly), but the
+    /// trailing-silence timer ALSO delivers the turn. Pure commit mode (查询/
+    /// 落实) only ever sends on the phrase.
+    private var silenceAutoCommit = false
     private var commitDetector: CommitPhraseDetector?
     private var maxDurationTimer: Timer?
     private let maxDuration: TimeInterval = 60
@@ -285,7 +290,15 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     // so an interruption that fires *during* "hang up" can't restart a call the
     // user just ended.
     private var resumeAfterInterruption = false
-    private var resumeCommitMode = false
+    // Dedupe guard: a final "recognized" result can land AFTER the trailing-
+    // silence timer already delivered the same utterance (network jitter);
+    // without this 闲聊 would send the sentence twice.
+    private var lastDeliveredText = ""
+    private var lastDeliveredAt: Date?
+    /// True while the call is user-paused: audio interruptions / route changes
+    /// must not auto-restart the recognizer (that would resurrect a call the
+    /// user deliberately silenced). Managed by ChatViewModel pause/resume.
+    var suspendAutoRestart = false
     private var audioObservers: [NSObjectProtocol] = []
 
     // TTS state
@@ -331,7 +344,6 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             // voice outside a call is left for the user to re-tap.
             if isListening && isContinuous {
                 resumeAfterInterruption = true
-                resumeCommitMode = commitMode
             }
         case .ended:
             guard resumeAfterInterruption else { return }
@@ -361,9 +373,19 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     /// flows again after an interruption / route change. Tears down WITHOUT
     /// delivering the interrupted partial (no half-utterance sent).
     private func restartRecognition() {
-        let commit = resumeCommitMode
+        guard !suspendAutoRestart else { return }
+        // Capture the LIVE mode flags before the tear-down resets them. A
+        // route change can arrive with no prior interruption, so mirrors
+        // captured at interruption-.began would be stale (or still false) and
+        // would silently downgrade a commit-mode call to legacy mode.
+        let commit = commitMode
+        let silenceAuto = silenceAutoCommit
+        // startListening clears the suspended flag; re-apply it or a restart
+        // while muted (or while TTS plays) would let results through.
+        let wasSuspended = isListeningSuspended
         fullyStopRecognizer()
-        startListening(continuous: true, commit: commit)
+        startListening(continuous: true, commit: commit, silenceAuto: silenceAuto)
+        if wasSuspended { isListeningSuspended = true }
     }
 
     /// Called on a deliberate call end (button / Siri "hang up" / quota) so a
@@ -381,13 +403,14 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     /// Begin listening. In `continuous` mode (phone-call style) the recognizer
     /// keeps running across turns: each silence/recognized cycle delivers text
     /// via onRecognized but does NOT stop the mic. Use stopListening() to end.
-    func startListening(continuous: Bool = false, commit: Bool = false) {
+    func startListening(continuous: Bool = false, commit: Bool = false, silenceAuto: Bool = false) {
         guard !isListening else { return }
         guard isConfigured else {
             listenState = .error("请先在设置里填写 Azure Speech key 和 region")
             return
         }
         self.commitMode = commit
+        self.silenceAutoCommit = commit && silenceAuto
         // Best-effort reserve check: assume a turn is ~30s. If even that can't
         // fit, refuse up front rather than cutting off mid-sentence.
         guard quota.canConsumeSTT(seconds: 30) else {
@@ -460,12 +483,24 @@ final class AzureSpeechManager: NSObject, ObservableObject {
                         // mode silence never sends, so there's nothing else to do.
                         return
                     }
+                    // A late final result for an utterance the silence timer
+                    // already delivered would re-accumulate and re-send the
+                    // same sentence. Skip it while it's just the tail of what
+                    // went out moments ago.
+                    if let lastAt = self.lastDeliveredAt,
+                       Date().timeIntervalSince(lastAt) < 1.5,
+                       self.lastDeliveredText.hasSuffix(text) {
+                        return
+                    }
                     if self.commitMode, let detector = self.commitDetector {
-                        // Commit mode: the commit phrase (not silence) ends a turn.
+                        // Commit mode: a spoken commit phrase ends a turn. In
+                        // silence-auto mode (闲聊) the trailing-silence timer is
+                        // ALSO armed, so plain speech commits after a pause.
                         switch detector.ingest(text) {
                         case .accumulate(let transcript):
                             self.accumulatedText = transcript
                             self.listenState = .listening(partial: transcript)
+                            self.resetSilenceTimer()
                         case .commit(let payload):
                             self.accumulatedText = ""
                             if payload.isEmpty {
@@ -546,15 +581,29 @@ final class AzureSpeechManager: NSObject, ObservableObject {
         var text = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty, let partial = currentPartialText() {
             text = partial.trimmingCharacters(in: .whitespacesAndNewlines)
+            // The partial never went through the detector, so a spoken commit
+            // phrase can still ride along (e.g. "…请发送" then tapping 暂停
+            // before the final result lands). Strip it the same way ingest
+            // would, so what we send matches what a commit would have sent.
+            if silenceAutoCommit, !text.isEmpty,
+               case .commit(let payload) = CommitPhraseDetector(phrases: config.commitPhraseList).ingest(text) {
+                text = payload
+            }
         }
         accumulatedText = ""
+        // The detector keeps its own running transcript; clear it whenever we
+        // clear ours or the next ingest would resurrect already-sent text.
+        commitDetector?.reset()
         if isContinuous {
             // Keep the live partial display; a new turn will overwrite it.
             listenState = .listening(partial: "")
         }
-        // In commit mode the commit phrase is the ONLY send trigger — a manual
-        // stop or trailing silence must not send un-committed text.
-        if !commitMode, !text.isEmpty {
+        // In pure commit mode the commit phrase is the ONLY send trigger — a
+        // manual stop or trailing silence must not send un-committed text.
+        // Silence-auto mode (闲聊) delivers on the timer like legacy mode.
+        if (!commitMode || silenceAutoCommit), !text.isEmpty {
+            lastDeliveredText = text
+            lastDeliveredAt = Date()
             onRecognized?(text)
         }
     }
@@ -595,6 +644,7 @@ final class AzureSpeechManager: NSObject, ObservableObject {
             maxDurationTimer?.invalidate()
             maxDurationTimer = nil
             commitMode = false
+            silenceAutoCommit = false
         } else if let start = recognitionStart {
             let seconds = Int(Date().timeIntervalSince(start))
             quota.consumeSTT(seconds: max(1, seconds))
@@ -612,8 +662,9 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     }
 
     private func resetSilenceTimer() {
-        // Commit mode drives sends off the commit phrase, not trailing silence.
-        if commitMode { return }
+        // Pure commit mode drives sends off the commit phrase, not trailing
+        // silence. Silence-auto mode (闲聊) keeps the timer armed as fallback.
+        if commitMode && !silenceAutoCommit { return }
         silenceTimer?.invalidate()
         silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceInterval, repeats: false) { [weak self] _ in
             Task { @MainActor in
@@ -743,7 +794,10 @@ final class AzureSpeechManager: NSObject, ObservableObject {
                 guard let self else { return }
                 self.onMaxDurationHint?()
                 if !self.accumulatedText.isEmpty {
-                    self.listenState = .listening(partial: self.accumulatedText + "\n(说『请发送』结束)")
+                    // In silence-auto mode a pause already sends, so teaching the
+                    // commit phrase here would be misleading — just show the text.
+                    let hint = self.silenceAutoCommit ? "" : "\n(说『请发送』结束)"
+                    self.listenState = .listening(partial: self.accumulatedText + hint)
                 }
             }
         }
@@ -758,6 +812,21 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     }
 
     // MARK: Call-mode mic suspension
+
+    /// Hot-switch silence auto-commit mid-call (mode switch 闲聊 ↔ 查询/落实)
+    /// without restarting the recognizer. The commit-phrase detector stays
+    /// armed either way; this only arms/disarms the trailing-silence fallback.
+    /// No-op unless currently listening in commit mode.
+    func setSilenceAutoCommit(_ on: Bool) {
+        silenceAutoCommit = on && commitMode
+        guard isListening, !isListeningSuspended else { return }
+        if silenceAutoCommit {
+            resetSilenceTimer()
+        } else {
+            silenceTimer?.invalidate()
+            silenceTimer = nil
+        }
+    }
 
     /// Suspend listening while TTS plays (call mode), to avoid capturing the
     /// assistant's own voice. No-op if not currently listening.
@@ -774,6 +843,12 @@ final class AzureSpeechManager: NSObject, ObservableObject {
     func resumeListening() {
         guard isListening, isListeningSuspended else { return }
         isListeningSuspended = false
+        // Clear the manager mirror but KEEP the detector's transcript: the
+        // next .accumulate re-syncs accumulatedText from the detector, so
+        // un-committed speech survives the suspend/resume cycle. (In commit
+        // mode the detector only ever holds text that was NOT yet delivered —
+        // ingest flushes itself on commit, and deliverCurrentTurn resets it —
+        // so there is nothing stale to resurrect.)
         accumulatedText = ""
         listenState = .listening(partial: "")
         resetSilenceTimer()
