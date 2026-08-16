@@ -136,7 +136,7 @@ func TestSendToSessionTool(t *testing.T) {
 	mc := newMockTmuxClient()
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "target")] = "claude"
 
-	tool := NewSendToSessionTool(mc, nil)
+	tool := NewSendToSessionTool(mc, nil, nil)
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"name":    "target",
 		"message": "echo hello",
@@ -154,7 +154,7 @@ func TestSendToSessionRefusesBareShell(t *testing.T) {
 	// Foreground process is a shell: agent never started, or has exited.
 	mc.results[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "fresh")] = "zsh"
 
-	tool := NewSendToSessionTool(mc, nil)
+	tool := NewSendToSessionTool(mc, nil, nil)
 	_, err := tool.Execute(context.Background(), map[string]any{
 		"name":    "fresh",
 		"message": "please refactor the auth module and add tests",
@@ -175,7 +175,7 @@ func TestSendToSessionNotFound(t *testing.T) {
 	mc := newMockTmuxClient()
 	mc.errors[fmt.Sprintf("list-panes -t %s -F #{pane_current_command}", "ghost")] = fmt.Errorf("can't find session: ghost")
 
-	tool := NewSendToSessionTool(mc, nil)
+	tool := NewSendToSessionTool(mc, nil, nil)
 	_, err := tool.Execute(context.Background(), map[string]any{
 		"name":    "ghost",
 		"message": "hi",
@@ -241,7 +241,7 @@ func TestSendToSessionReadyGate(t *testing.T) {
 			if tt.pane != "" {
 				mc.results[tmux.CapturePaneRangeCmd("s", 30, 0)] = tt.pane
 			}
-			tool := NewSendToSessionTool(mc, nil)
+			tool := NewSendToSessionTool(mc, nil, nil)
 			res, err := tool.Execute(context.Background(), map[string]any{
 				"name": "s", "message": "do the thing",
 			})
@@ -300,7 +300,7 @@ func TestSendToSessionConfirmsSubmitted(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		n.Notify("agent_start")
 	}()
-	tool := NewSendToSessionTool(mc, n)
+	tool := NewSendToSessionTool(mc, n, nil)
 	res, err := tool.Execute(context.Background(), map[string]any{
 		"name": "s", "message": "do the thing",
 	})
@@ -326,7 +326,7 @@ func TestSendToSessionDetectsUnsubmittedHang(t *testing.T) {
 	mc.results[tmux.CapturePaneRangeCmd("s", 5, 0)] = "✻ Welcome to Claude Code!\n\n❯ "
 	n := newMockNotifier() // never fires agent_start
 
-	tool := NewSendToSessionTool(mc, n)
+	tool := NewSendToSessionTool(mc, n, nil)
 	_, err := tool.Execute(context.Background(), map[string]any{
 		"name": "s", "message": "do the thing",
 	})
@@ -342,7 +342,7 @@ func TestSendToSessionCopilotSkipsConfirm(t *testing.T) {
 	mc.results[tmux.PaneCurrentCommandCmd("cop")] = "copilot"
 	mc.results[tmux.CapturePaneRangeCmd("cop", 30, 0)] = "✻ Copilot\n\n❯ "
 	n := newMockNotifier() // never fires — copilot has no hook
-	tool := NewSendToSessionTool(mc, n)
+	tool := NewSendToSessionTool(mc, n, nil)
 	res, err := tool.Execute(context.Background(), map[string]any{
 		"name": "cop", "message": "do the thing",
 	})
@@ -362,7 +362,7 @@ func TestSendToSessionShellForegroundRefused(t *testing.T) {
 	mc.results[tmux.PaneCurrentCommandCmd("inv")] = "zsh"                                  // shell foreground: no agent
 	mc.results[tmux.CapturePaneRangeCmd("inv", 5, 0)] = "✻ Welcome to Claude Code!\n\n❯ "  // looks like the agent…
 	mc.results[tmux.CapturePaneRangeCmd("inv", 30, 0)] = "✻ Welcome to Claude Code!\n\n❯ " // …but the foreground decides
-	tool := NewSendToSessionTool(mc, nil)
+	tool := NewSendToSessionTool(mc, nil, nil)
 	_, err := tool.Execute(context.Background(), map[string]any{
 		"name": "inv", "message": "do the thing",
 	})
@@ -384,7 +384,7 @@ func TestSendTextLongIsAtomic(t *testing.T) {
 
 func TestSendToSessionMissingArgs(t *testing.T) {
 	mc := newMockTmuxClient()
-	tool := NewSendToSessionTool(mc, nil)
+	tool := NewSendToSessionTool(mc, nil, nil)
 	_, err := tool.Execute(context.Background(), map[string]any{"name": "x"})
 	assert.Error(t, err)
 }
@@ -454,7 +454,7 @@ func TestReadSessionOutputEmpty(t *testing.T) {
 
 func TestAllToolsCount(t *testing.T) {
 	mc := newMockTmuxClient()
-	ts := AllTools(mc, nil, "/tmp", nil)
+	ts := AllTools(mc, nil, "/tmp", nil, nil)
 	assert.Len(t, ts, 17)
 }
 

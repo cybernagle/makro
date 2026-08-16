@@ -77,7 +77,7 @@ func NewSaveContextTool(tc TmuxClient) Tool {
 	}
 }
 
-func NewRestoreContextTool(tc TmuxClient) Tool {
+func NewRestoreContextTool(tc TmuxClient, healer SessionHealer) Tool {
 	return Tool{
 		Name:        "restore_context",
 		Description: "Restore a saved context snapshot and send it to a target session",
@@ -133,7 +133,7 @@ func NewRestoreContextTool(tc TmuxClient) Tool {
 				return "", fmt.Errorf("parse snapshot: %w", err)
 			}
 
-			if _, err := validateSendTarget(tc, name); err != nil {
+			if err := ensureSendable(ctx, tc, healer, name); err != nil {
 				return "", err
 			}
 			msg := formatRestoreMessage(sourceSession, snapshotFile, label, &out)

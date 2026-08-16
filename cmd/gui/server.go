@@ -169,6 +169,14 @@ func serve(addr string, tlsCert, tlsKey, password string) error {
 	defer cancel()
 	StartSnapshotLoop(ctx, 5*time.Minute)
 
+	// Keep agent sessions healthy while the server runs: an agent that dies
+	// mid-day is relaunched from the snapshot within a minute, programmatically
+	// — session recovery is the system's job, not the orchestrator's or the
+	// user's. (Snapshot loop refreshes the data this reconciles against.)
+	StartReconcileLoop(ctx, time.Minute, func(n int) {
+		hub.Emit("system", fmt.Sprintf("Auto-recovered %d session agent(s)", n))
+	})
+
 	mux := http.NewServeMux()
 
 	var handler http.Handler = mux

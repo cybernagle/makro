@@ -163,7 +163,10 @@ func main() {
 	// Create hook notifier for agent stop notifications.
 	notifier := agent.NewAgentNotifier()
 
-	orch := agent.NewOrchestrator(provider, tc, hm, tools.AllTools(tc, assessor, cwd, notifier))
+	// Root-package TUI: no healer wired (cmd/gui's SnapshotHealer isn't
+	// importable across main packages) — the GUI server is the production
+	// path and heals there; the TUI keeps refuse-only gates.
+	orch := agent.NewOrchestrator(provider, tc, hm, tools.AllTools(tc, assessor, cwd, notifier, nil))
 	cmdRegistry := agent.NewCommandRegistry(tc)
 	orch.SetCommandRegistry(cmdRegistry)
 	homeDir, _ := os.UserHomeDir()

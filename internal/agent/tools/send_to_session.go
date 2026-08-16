@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -10,6 +11,41 @@ import (
 	"github.com/naglezhang/makro/internal/tmux"
 	"github.com/naglezhang/makro/internal/util"
 )
+
+// ErrBareShell marks a send refused because the pane's foreground is a plain
+// shell — the coding agent is gone (typical after a restart). It is the signal
+// for the self-healing send paths to relaunch the agent programmatically
+// instead of surfacing the failure to an LLM that has no tool to fix it.
+var ErrBareShell = errors.New("bare shell, no coding agent running")
+
+// SessionHealer programmatically restores the coding agent in a session whose
+// agent died. Recovery is the program's job: when a send finds a bare shell,
+// the system heals the session itself (from its snapshot of what ran there)
+// rather than erroring out for the orchestrator or the user to fix by hand.
+type SessionHealer interface {
+	HealSession(session string) error
+}
+
+// WaitForAgent polls a session until a coding agent is ready to receive input
+// (used after HealSession launched one — agents take a few seconds to boot).
+func WaitForAgent(ctx context.Context, tc TmuxClient, session string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		status := checkAgentAlive(tc, session)
+		ready := status.Alive || (!paneForegroundIsShell(tc, session) && paneEndsAtAgentPrompt(tc, session))
+		if ready {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("agent in %q did not become ready within %s (last: %s)", session, timeout, status.Reason)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
 
 // validateSendTarget runs the pre-send gates shared by every autonomous send
 // path (send_to_session, relay_message, restore_context): the agent must be
@@ -29,7 +65,7 @@ func validateSendTarget(tc TmuxClient, session string) (string, error) {
 	status := checkAgentAlive(tc, session)
 	if !status.Alive {
 		if paneForegroundIsShell(tc, session) {
-			return "", fmt.Errorf("cannot send to %q: the pane is a bare shell with no coding agent (claude/copilot/codex) running — likely lost across a restart; start the agent in that pane first", session)
+			return "", fmt.Errorf("cannot send to %q: %w — likely lost across a restart; the session will be auto-recovered if its agent is known, or start the agent in that pane first", session, ErrBareShell)
 		}
 		if !paneEndsAtAgentPrompt(tc, session) {
 			return "", fmt.Errorf("cannot send to %q: no coding agent (claude/copilot/codex) is running (%s); start the agent in that pane first", session, status.Reason)
@@ -41,10 +77,10 @@ func validateSendTarget(tc TmuxClient, session string) (string, error) {
 	return status.Agent, nil
 }
 
-func NewSendToSessionTool(tc TmuxClient, notifier Notifier) Tool {
+func NewSendToSessionTool(tc TmuxClient, notifier Notifier, healer SessionHealer) Tool {
 	return Tool{
 		Name:        "send_to_session",
-		Description: "Send a command or message to a tmux session. Only works when a known coding agent (claude, copilot, codex) is alive. Destructive shell commands (rm -rf, curl|sh, etc.) are blocked. Follow with wait_until_idle to handle any confirmation prompts.",
+		Description: "Send a command or message to a tmux session. Only works when a known coding agent (claude, copilot, codex) is alive; a session whose agent died is auto-recovered from its snapshot before sending. Destructive shell commands (rm -rf, curl|sh, etc.) are blocked. Follow with wait_until_idle to handle any confirmation prompts.",
 		Parameters: []Param{
 			{Name: "name", Type: "string", Description: "Session name", Required: true},
 			{Name: "message", Type: "string", Description: "Text to send to the session", Required: true},
@@ -59,8 +95,10 @@ func NewSendToSessionTool(tc TmuxClient, notifier Notifier) Tool {
 			// Pre-send gates: agent alive (or at its input prompt) and not
 			// showing a Yes/No dialog. Shared with relay_message and
 			// restore_context via validateSendTarget so every autonomous send
-			// path gets the same protection.
-			if _, err := validateSendTarget(tc, name); err != nil {
+			// path gets the same protection. A bare shell triggers program-
+			// matic recovery (relaunch the agent, wait for it) — recovery is
+			// the system's job, not something to hand back to the caller.
+			if err := ensureSendable(ctx, tc, healer, name); err != nil {
 				return "", err
 			}
 
@@ -257,6 +295,41 @@ func DirectSend(tc TmuxClient, sessionName, text string) error {
 		return fmt.Errorf("session %q not found", sessionName)
 	}
 	return sendText(tc, sessionName, text)
+}
+
+// ensureSendable runs the pre-send gates and, on a bare-shell refusal with a
+// healer wired in, recovers the session programmatically (relaunch the agent,
+// wait for readiness, re-gate). Shared by every gate-then-send tool
+// (send_to_session, relay_message, restore_context) and the direct dispatch
+// paths (SafeSendWithHealer) so self-healing is uniform.
+func ensureSendable(ctx context.Context, tc TmuxClient, healer SessionHealer, session string) error {
+	if _, err := validateSendTarget(tc, session); err != nil {
+		if !errors.Is(err, ErrBareShell) || healer == nil {
+			return err
+		}
+		if herr := healer.HealSession(session); herr != nil {
+			return fmt.Errorf("auto-recover session %q failed: %v (original: %v)", session, herr, err)
+		}
+		if werr := WaitForAgent(ctx, tc, session, 30*time.Second); werr != nil {
+			return werr
+		}
+		if _, err := validateSendTarget(tc, session); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SafeSendWithHealer is the gated send for program-initiated dispatches
+// (voice-plan confirm, kanban): it runs the same pre-send gates as the
+// send_to_session tool, and on a bare shell it heals the session first
+// (relaunch the agent from the snapshot, wait for readiness) instead of
+// failing — session recovery is the program's job, never the caller's.
+func SafeSendWithHealer(ctx context.Context, tc TmuxClient, notifier Notifier, healer SessionHealer, session, message string) error {
+	if err := ensureSendable(ctx, tc, healer, session); err != nil {
+		return err
+	}
+	return SendConfirmed(ctx, tc, notifier, session, message)
 }
 
 // Ensure unused import is not needed.

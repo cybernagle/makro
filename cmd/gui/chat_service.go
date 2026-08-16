@@ -73,10 +73,15 @@ type ChatService struct {
 	// is false or inbox open failed. Powers /brain wake + /inbox commands.
 	brain      *brain.Brain
 	brainInbox *brain.InboxStore
+
+	// healer programmatically restores a session's agent when a gated send
+	// finds a bare shell (agent lost across a restart). Session recovery is
+	// the system's job — sends self-heal instead of failing.
+	healer tools.SessionHealer
 }
 
 func NewChatService() *ChatService {
-	s := &ChatService{monitors: make(map[string]context.CancelFunc), callMode: ModePlan}
+	s := &ChatService{monitors: make(map[string]context.CancelFunc), callMode: ModePlan, healer: NewSnapshotHealer()}
 	// Initialize chat history immediately (doesn't need orchestrator).
 	s.initHistory()
 	return s
@@ -235,7 +240,7 @@ func (s *ChatService) init() {
 	cwd, _ := os.Getwd()
 	notifier := agent.NewAgentNotifier()
 
-	orch := agent.NewOrchestrator(provider, tc, hm, tools.AllTools(tc, assessor, cwd, notifier))
+	orch := agent.NewOrchestrator(provider, tc, hm, tools.AllTools(tc, assessor, cwd, notifier, s.healer))
 	cmdRegistry := agent.NewCommandRegistry(tc)
 	orch.SetCommandRegistry(cmdRegistry)
 	homeDir, _ := os.UserHomeDir()
@@ -775,12 +780,13 @@ func (s *ChatService) ConfirmPlan() {
 		s.emit("chat:error", "派发失败: 后端未就绪")
 		return
 	}
-	// Deterministic dispatch with first-send Enter-loss recovery: if claude
-	// just rendered its welcome screen and swallowed the Enter, SendConfirmed
-	// detects the missed submit and resends Enter once.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Deterministic dispatch with the same gates + self-healing as the
+	// send_to_session tool: if the session's agent died (bare shell after a
+	// restart), it is relaunched from the snapshot and the send waits for it.
+	// SendConfirmed underneath still covers first-send Enter-loss recovery.
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	if err := tools.SendConfirmed(ctx, s.tc, s.notifier, plan.Session, plan.Brief); err != nil {
+	if err := tools.SafeSendWithHealer(ctx, s.tc, s.notifier, s.healer, plan.Session, plan.Brief); err != nil {
 		s.emit("chat:error", "派发失败: "+err.Error())
 		return
 	}
@@ -812,9 +818,11 @@ func (s *ChatService) SendToSession(session, text string) error {
 	if s.tc == nil || s.notifier == nil {
 		return sendToTmuxSession(session, text)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	return tools.SendConfirmed(ctx, s.tc, s.notifier, session, text)
+	// Gated + self-healing like every other program-initiated send: a session
+	// whose agent died gets it back before the text goes anywhere near a shell.
+	return tools.SafeSendWithHealer(ctx, s.tc, s.notifier, s.healer, session, text)
 }
 
 // SetCallActive toggles voice-call mode and sets the interaction mode (called by

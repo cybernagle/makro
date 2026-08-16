@@ -8,7 +8,7 @@ import (
 	"github.com/naglezhang/makro/internal/util"
 )
 
-func NewRelayMessageTool(tc TmuxClient) Tool {
+func NewRelayMessageTool(tc TmuxClient, healer SessionHealer) Tool {
 	return Tool{
 		Name:        "relay_message",
 		Description: "Relay a structured message between sessions. Follow with wait_until_idle to handle confirmation prompts on the target.",
@@ -33,7 +33,7 @@ func NewRelayMessageTool(tc TmuxClient) Tool {
 				return "", err
 			}
 
-			if _, err := validateSendTarget(tc, toSession); err != nil {
+			if err := ensureSendable(ctx, tc, healer, toSession); err != nil {
 				return "", err
 			}
 			msg := formatRelayMessage(fromSession, messageType, content, srcOutput)

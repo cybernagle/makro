@@ -38,7 +38,20 @@ func snapshotPath() string {
 // TakeSnapshot inspects all tmux sessions and writes a Snapshot to disk.
 // Returns the snapshot and nil on success. Errors are logged but non-fatal —
 // snapshot failures should not crash the server.
+//
+// Agent identity is MERGE-PRESERVED: if a session's agent has died since the
+// last snapshot (pane shows a shell), the last-known ClaudeSession/ClaudeCwd
+// are carried forward instead of being overwritten by the bare-shell reading —
+// otherwise the 5-minute loop would erase exactly the data recovery needs.
+// Sessions that vanished from tmux entirely (crash/reboot) are also kept, so
+// post-reboot recovery still knows what ran where.
 func TakeSnapshot() (*Snapshot, error) {
+	prev, _ := LoadSnapshot()
+	prevByName := map[string]SessionSnapshot{}
+	for _, ss := range prev.Sessions {
+		prevByName[ss.Name] = ss
+	}
+
 	out, err := exec.Command(getTmuxBin(), tmuxArgs(
 		"list-sessions",
 		"-F", "#{session_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}\t#{session_attached}",
@@ -47,16 +60,21 @@ func TakeSnapshot() (*Snapshot, error) {
 		s := string(out)
 		if strings.Contains(s, "no server running") || strings.Contains(s, "no sessions") ||
 			strings.Contains(s, "No such file") || strings.Contains(s, "connect failed") {
-			// tmux not running or no sessions — still save an empty snapshot so
-			// recovery code has something to compare against.
-			snap := &Snapshot{SnapshotAt: time.Now(), Sessions: []SessionSnapshot{}}
-			_ = saveSnapshot(snap)
-			return snap, nil
+			// tmux not running or no sessions — still save the previous
+			// sessions (stale) so recovery code has something to compare
+			// against, rather than erasing the recovery data.
+			stale := &Snapshot{SnapshotAt: time.Now()}
+			if prev != nil {
+				stale.Sessions = prev.Sessions
+			}
+			_ = saveSnapshot(stale)
+			return stale, nil
 		}
 		return nil, fmt.Errorf("list-sessions: %s: %w", strings.TrimSpace(s), err)
 	}
 
 	snap := &Snapshot{SnapshotAt: time.Now(), Sessions: []SessionSnapshot{}}
+	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {
 			continue
@@ -70,6 +88,7 @@ func TakeSnapshot() (*Snapshot, error) {
 		cmd := parts[2]
 		var panePID int
 		fmt.Sscanf(parts[3], "%d", &panePID)
+		seen[name] = true
 
 		ss := SessionSnapshot{
 			Name:     name,
@@ -83,9 +102,23 @@ func TakeSnapshot() (*Snapshot, error) {
 			sessionID, claudeCwd := findClaudeSession(panePID)
 			ss.ClaudeSession = sessionID
 			ss.ClaudeCwd = claudeCwd
+		} else if p, ok := prevByName[name]; ok && snapshotHadAgent(p) {
+			// Agent died since the last snapshot — keep the last-known agent
+			// identity so recovery (and the healer) can restore it.
+			ss.ClaudeSession = p.ClaudeSession
+			ss.ClaudeCwd = p.ClaudeCwd
+			ss.Command = p.Command
 		}
 
 		snap.Sessions = append(snap.Sessions, ss)
+	}
+
+	// Sessions no longer in tmux (server crashed / machine rebooted) stay in
+	// the snapshot with their last-known state until tmux comes back.
+	for name, p := range prevByName {
+		if !seen[name] {
+			snap.Sessions = append(snap.Sessions, p)
+		}
 	}
 
 	if err := saveSnapshot(snap); err != nil {
@@ -309,7 +342,14 @@ func RecoverFromSnapshot() int {
 	if err != nil || snap == nil || len(snap.Sessions) == 0 {
 		return 0
 	}
+	return reconcileSnapshot(snap)
+}
 
+// reconcileSnapshot brings every snapshotted agent session back to health:
+// missing session → recreate + launch agent; existing session with a bare
+// shell → launch agent into it. Sessions already running an agent are left
+// alone. Returns the number of sessions repaired.
+func reconcileSnapshot(snap *Snapshot) int {
 	live := liveSessionSet()
 	recovered := 0
 	for _, ss := range snap.Sessions {
@@ -335,6 +375,72 @@ func RecoverFromSnapshot() int {
 		log.Printf("[snapshot] recovered agents in %d session(s) from snapshot at %s", recovered, snap.SnapshotAt.Format(time.RFC3339))
 	}
 	return recovered
+}
+
+// StartReconcileLoop keeps snapshotted agent sessions healthy while the server
+// runs: an agent that crashes mid-day is relaunched within one interval,
+// programmatically — session recovery is the system's job, not something an
+// orchestrating LLM (which has no tool to start an agent) or the user should
+// be responsible for. onRecovered, when non-nil, is called after any pass that
+// repaired something (e.g. to notify the UI).
+func StartReconcileLoop(ctx context.Context, interval time.Duration, onRecovered func(n int)) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				snap, err := LoadSnapshot()
+				if err != nil || snap == nil {
+					continue
+				}
+				if n := reconcileSnapshot(snap); n > 0 && onRecovered != nil {
+					onRecovered(n)
+				}
+			}
+		}
+	}()
+}
+
+// SnapshotHealer implements tools.SessionHealer: on demand (a gated send just
+// found a bare shell), it relaunches the session's agent from the last-known
+// snapshot state. Readiness waiting is the caller's job (tools.WaitForAgent).
+type SnapshotHealer struct{}
+
+func NewSnapshotHealer() *SnapshotHealer { return &SnapshotHealer{} }
+
+// HealSession relaunches the coding agent recorded for `session`. Errors when
+// the session has no recorded agent (nothing to restore) or the launch line
+// couldn't be delivered.
+func (h *SnapshotHealer) HealSession(session string) error {
+	snap, err := LoadSnapshot()
+	if err != nil || snap == nil {
+		return fmt.Errorf("no session snapshot available for recovery")
+	}
+	for _, ss := range snap.Sessions {
+		if ss.Name != session {
+			continue
+		}
+		if !snapshotHadAgent(ss) {
+			return fmt.Errorf("session %q has no recorded agent to restore", session)
+		}
+		if !launchAgentInSession(ss) {
+			return fmt.Errorf("session %q: agent launch failed", session)
+		}
+		// Brief foreground wait so back-to-back heals can't double-launch:
+		// once the agent takes the pane, a concurrent heal sees it healthy.
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if sessionPaneHasAgent(session) {
+				return nil
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		return nil
+	}
+	return fmt.Errorf("session %q not in snapshot", session)
 }
 
 // snapshotHadAgent reports whether the snapshotted session was running a
